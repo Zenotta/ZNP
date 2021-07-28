@@ -2,6 +2,7 @@
 use crate::hash_block;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
+use crate::unicorn::{deserialize_big_int, serialize_big_int, Unicorn};
 use bytes::Bytes;
 use naom::crypto::sign_ed25519::PublicKey;
 use naom::primitives::asset::Asset;
@@ -11,6 +12,7 @@ use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::TxIn;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::utils::transaction_utils::construct_tx_in_signable_hash;
+use rug::Integer;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -101,11 +103,19 @@ pub struct CommonBlockInfo {
 }
 
 /// Additional info specific to one of the mined block that form a complete block.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct MinedBlockExtraInfo {
     pub nonce: Vec<u8>,
     pub mining_tx: (String, Transaction),
     pub shutdown: bool,
+    pub d_value: u8,
+    pub p_value: u8,
+    pub unicorn: Unicorn,
+    #[serde(
+        deserialize_with = "deserialize_big_int",
+        serialize_with = "serialize_big_int"
+    )]
+    pub witness: Integer,
 }
 
 /// Stored block info needed to generate next block
@@ -131,6 +141,14 @@ pub struct ProofOfWork {
 pub struct ProofOfWorkBlock {
     pub nonce: Vec<u8>,
     pub block: Block,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WinningPoWInfo {
+    pub nonce: Vec<u8>,
+    pub coinbase: Transaction,
+    pub p_value: u8,
+    pub d_value: u8,
 }
 
 impl Default for ProofOfWorkBlock {

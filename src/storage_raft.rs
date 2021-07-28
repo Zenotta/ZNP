@@ -200,7 +200,7 @@ impl StorageRaft {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
             RaftCommitData::Proposed(data, context) => {
-                self.received_commit_poposal(data, context).await
+                self.received_commit_proposal(data, context).await
             }
             RaftCommitData::Snapshot(data) => self.apply_snapshot(data),
             RaftCommitData::NewLeader => {
@@ -234,17 +234,17 @@ impl StorageRaft {
     ///
     /// * `raft_data` - Data for the commit
     /// * `raft_ctx`  - Context for the commit
-    async fn received_commit_poposal(
+    async fn received_commit_proposal(
         &mut self,
         raft_data: RaftData,
         raft_ctx: RaftData,
     ) -> Option<CommittedItem> {
         let (key, item, _) = self
             .proposed_in_flight
-            .received_commit_poposal(&raft_data, &raft_ctx)
+            .received_commit_proposal(&raft_data, &raft_ctx)
             .await?;
 
-        trace!("received_commit_poposal {:?} -> {:?}", key, item);
+        trace!("received_commit_proposal {:?} -> {:?}", key, item);
         match item {
             StorageRaftItem::PartBlock(block) => {
                 if self

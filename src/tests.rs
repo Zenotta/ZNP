@@ -14,6 +14,7 @@ use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{
     get_test_tls_spec, node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig, NodeType,
 };
+use crate::unicorn::Unicorn;
 use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
@@ -299,6 +300,11 @@ async fn full_flow_no_tls(network_config: NetworkConfig) {
     full_flow_common(network_config, CfgNum::All, Vec::new()).await;
 }
 
+async fn get_current_unicorn(network: &mut Network, name: &str) -> Unicorn {
+    let c = network.compute(name).unwrap().lock().await;
+    c.get_current_unicorn().clone()
+}
+
 async fn full_flow_tls(
     mut network_config: NetworkConfig,
     cfg_num: CfgNum,
@@ -321,6 +327,7 @@ async fn full_flow_common(
     let mut network = Network::create_from_config(&network_config).await;
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let miner_nodes = &network_config.nodes[&NodeType::Miner];
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
     let initial_utxo_txs = network.collect_initial_uxto_txs();
     let mining_reward = network.mining_reward();
     let transactions = valid_transactions(true);
@@ -373,6 +380,14 @@ async fn full_flow_common(
             expected_block0_db_count + expected_block1_db_count
         )
     );
+
+    // UNiCORN test
+    if compute_nodes.len() > 1 {
+        let first_uni = get_current_unicorn(&mut network, &compute_nodes[0]).await;
+        let second_uni = get_current_unicorn(&mut network, &compute_nodes[1]).await;
+
+        assert_eq!(first_uni, second_uni);
+    }
 
     let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
     let expected_w0 =
@@ -543,10 +558,10 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let initial_utxo_txs = network.collect_initial_uxto_txs();
     let c_mined = &node_select(compute_nodes, cfg_num);
-    let (expected0, block_info0) = complete_first_block(&initial_utxo_txs, c_mined.len()).await;
+    let (expected0, _block_info) = complete_first_block(&initial_utxo_txs, c_mined.len()).await;
 
     create_first_block_act(&mut network).await;
-    compute_all_mining_block_mined(&mut network, c_mined, &block_info0).await;
+    compute_all_mining_block_mined(&mut network, c_mined).await;
 
     //
     // Act
@@ -736,7 +751,7 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     remove_keys(&mut left_init_utxo, valid_txs_in().keys());
 
     create_first_block_act(&mut network).await;
-    compute_all_mining_block_mined(&mut network, compute_nodes, &block_info0).await;
+    compute_all_mining_block_mined(&mut network, compute_nodes).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     add_transactions_act(&mut network, &transactions).await;
 
@@ -901,8 +916,8 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
 
     info!("Test Step Miner block Proof of Work: partition-> rand num -> num pow -> pre-block -> block pow");
     if cfg == Cfg::IgnoreMiner {
-        let (_, block_info) = complete_first_block(&BTreeMap::new(), c_mined.len()).await;
-        compute_all_mining_block_mined(network, c_mined, &block_info).await;
+        let (_, _block_info) = complete_first_block(&BTreeMap::new(), c_mined.len()).await;
+        compute_all_mining_block_mined(network, c_mined).await;
         return;
     }
 
@@ -1136,7 +1151,7 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     send_block_to_storage_act(&mut network, CfgNum::All).await;
 
     compute_all_set_mining_block(&mut network, c_mined, &block_info1).await;
-    compute_all_mining_block_mined(&mut network, c_mined, &block_info1).await;
+    compute_all_mining_block_mined(&mut network, c_mined).await;
 
     let initial_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
@@ -3165,25 +3180,14 @@ async fn compute_all_send_block_to_storage(network: &mut Network, compute_group:
     }
 }
 
-async fn compute_mining_block_mined(
-    network: &mut Network,
-    compute: &str,
-    block_info: &CompleteBlock,
-) {
-    let id = network.get_position(compute).unwrap() as u64 + 1;
+async fn compute_mining_block_mined(network: &mut Network, compute: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    let mined = block_info.per_node.get(&id).unwrap();
-
-    c.mining_block_mined(mined.nonce.clone(), mined.mining_tx.clone());
+    c.set_current_mining_block();
 }
 
-async fn compute_all_mining_block_mined(
-    network: &mut Network,
-    compute_group: &[String],
-    block_info: &CompleteBlock,
-) {
+async fn compute_all_mining_block_mined(network: &mut Network, compute_group: &[String]) {
     for compute in compute_group {
-        compute_mining_block_mined(network, compute, block_info).await;
+        compute_mining_block_mined(network, compute).await;
     }
 }
 
@@ -3234,17 +3238,10 @@ async fn storage_inject_send_block_to_storage(
     let mined = block_info.per_node.get(&id).unwrap();
     let block = block_info.common.block.clone();
     let block_txs = block_info.common.block_txs.clone();
-    let nonce = mined.nonce.clone();
-    let mining_tx = mined.mining_tx.clone();
-    let shutdown = false;
 
     let request = StorageRequest::SendBlock {
         common: CommonBlockInfo { block, block_txs },
-        mined_info: MinedBlockExtraInfo {
-            nonce,
-            mining_tx,
-            shutdown,
-        },
+        mined_info: mined.clone(),
     };
 
     storage_inject_next_event(network, compute, storage, request).await;
@@ -3346,6 +3343,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
                 nonce: nonce.clone(),
                 mining_tx: (tx_hash.clone(), stored_tx),
                 shutdown: false,
+                ..Default::default()
             },
         );
     }
@@ -3905,6 +3903,7 @@ async fn construct_mining_extra_info(
         nonce: generate_pow_for_block(&block.clone(), hash.clone()).await,
         mining_tx: (hash, tx),
         shutdown: false,
+        ..Default::default()
     }
 }
 

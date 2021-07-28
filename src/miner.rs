@@ -56,7 +56,7 @@ pub type CurrentBlockWithMutex = Arc<Mutex<Option<BlockPoWReceived>>>;
 pub struct BlockPoWInfo {
     peer: SocketAddr,
     start_time: SystemTime,
-    unicorn: String,
+    prev_hash: String,
     hash_to_mine: String,
     coinbase: (String, Transaction),
     b_num: u64,
@@ -834,14 +834,14 @@ impl MinerNode {
         self.mining_block_task = {
             let merkle_hash = &new_block.hash_block.merkle_hash;
             let hash_to_mine = concat_merkle_coinbase(merkle_hash, &mining_tx_hash).await;
-            let unicorn = new_block.hash_block.unicorn.clone();
+            let prev_hash = new_block.hash_block.prev_hash.clone();
             let coinbase = (mining_tx_hash, mining_tx);
             let nonce = Vec::new();
             let start_time = SystemTime::now();
             RunningTaskOrResult::Running(Self::generate_pow_for_block(BlockPoWInfo {
                 peer,
                 start_time,
-                unicorn,
+                prev_hash,
                 hash_to_mine,
                 coinbase,
                 b_num,
@@ -862,7 +862,7 @@ impl MinerNode {
         task::spawn_blocking(move || {
             // Mine Block with mining transaction
             info.nonce = generate_pow_nonce();
-            while !validate_pow_block(&info.unicorn, &info.hash_to_mine, &info.nonce) {
+            while !validate_pow_block(&info.prev_hash, &info.hash_to_mine, &info.nonce) {
                 info.nonce = generate_pow_nonce();
             }
 

@@ -2,8 +2,28 @@ pub use naom::constants::*;
 
 /*------- BLOCK CONSTANTS --------*/
 
-// Bit shifting value for reward issuance
+/// Bit shifting value for reward issuance
 pub const REWARD_ISSUANCE_VAL: u8 = 25;
+
+/// UNiCORN modulus number
+pub const UNICORN_MOD: &str = "6864797660130609714981900799081393217269435300143305409394463459185543183397656052122559640661454554977296311391480858037121987999716643812574028291115057151";
+
+/// UNiCORN iterations
+pub const UNICORN_ITER: u64 = 1_000;
+
+/// UNiCORN security level
+pub const UNICORN_SECURITY: u32 = 1;
+
+/// Max number of miners allowed to participate in a round
+pub const MAX_MINERS_PER_ROUND: u64 = 4096;
+
+/*------- CSPRNG USAGE NUMS -------*/
+
+/// CSPRNG usage number for winning miner selection
+pub const WINNING_MINER_UN: u128 = 3;
+
+/// Usage number for participating miner selection
+pub const MINER_PARTICIPATION_UN: u128 = 2;
 
 /*------- STORAGE CONSTANTS -------*/
 

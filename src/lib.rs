@@ -5,6 +5,7 @@
 
 mod active_raft;
 mod api;
+mod block_pipeline;
 mod comms_handler;
 mod compute;
 mod compute_raft;

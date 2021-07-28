@@ -7,11 +7,12 @@ use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
     ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlockExtraInfo, NodeType,
-    ProofOfWork, Response, StorageRequest, UserRequest, UtxoFetchType, UtxoSet,
+    ProofOfWork, Response, StorageRequest, UserRequest, UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
 use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
+use crate::unicorn::Unicorn;
 use crate::utils::{
     concat_merkle_coinbase, create_receipt_asset_tx_from_sig, format_parition_pow_address,
     generate_pow_random_num, get_partition_entry_key, serialize_hashblock_for_pow, to_api_keys,
@@ -108,11 +109,10 @@ impl From<task::JoinError> for ComputeError {
 /// Druid pool structure for checking and holding participants
 #[derive(Debug, Clone)]
 pub struct MinedBlock {
-    pub nonce: Vec<u8>,
     pub block: Block,
     pub block_tx: BTreeMap<String, Transaction>,
-    pub mining_transaction: (String, Transaction),
     pub shutdown: bool,
+    pub extra_info: MinedBlockExtraInfo,
 }
 
 #[derive(Debug)]
@@ -134,7 +134,7 @@ pub struct ComputeNode {
     storage_addr: SocketAddr,
     sanction_list: Vec<String>,
     user_notification_list: BTreeSet<SocketAddr>,
-    coordiated_shudown: u64,
+    coordinated_shutdown: u64,
     shutdown_group: BTreeSet<SocketAddr>,
     fetched_utxo_set: Option<(SocketAddr, UtxoSet)>,
     api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, Node),
@@ -193,7 +193,7 @@ impl ComputeNode {
             partition_key: None,
             storage_addr,
             user_notification_list: Default::default(),
-            coordiated_shudown: u64::MAX,
+            coordinated_shutdown: u64::MAX,
             shutdown_group,
             api_info,
             fetched_utxo_set: None,
@@ -209,6 +209,11 @@ impl ComputeNode {
     /// Get the node's mined block if any
     pub fn get_current_mined_block(&self) -> &Option<MinedBlock> {
         &self.current_mined_block
+    }
+
+    /// Get the current UNiCORN
+    pub fn get_current_unicorn(&self) -> &Unicorn {
+        self.node_raft.get_current_unicorn()
     }
 
     /// Injects a new event into compute node
@@ -378,9 +383,27 @@ impl ComputeNode {
         }
     }
 
-    ///Returns the mining block from the node_raft
+    /// Returns the mining block from the node_raft
     pub fn get_mining_block(&self) -> &Option<Block> {
         self.node_raft.get_mining_block()
+    }
+
+    /// Sends a winning PoW from miners to the RAFT
+    async fn send_winning_pow_to_raft(
+        &mut self,
+        addr: SocketAddr,
+        nonce: Vec<u8>,
+        coinbase: Transaction,
+    ) {
+        // D and P will change with keccak prime intro
+        let pow_info = WinningPoWInfo {
+            nonce,
+            coinbase,
+            d_value: 0,
+            p_value: 0,
+        };
+
+        self.node_raft.propose_winning_pow((addr, pow_info)).await;
     }
 
     ///Returns last generated block number from the node_raft
@@ -440,24 +463,35 @@ impl ComputeNode {
 
     /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
+        self.set_current_mining_block();
+
         let mined_block = self.current_mined_block.clone().unwrap();
+
         let block = mined_block.block;
         let block_txs = mined_block.block_tx;
-        let nonce = mined_block.nonce;
-        let mining_tx = mined_block.mining_transaction;
-        let shutdown = mined_block.shutdown;
+        let extra_info = mined_block.extra_info;
 
         let request = StorageRequest::SendBlock {
             common: CommonBlockInfo { block, block_txs },
-            mined_info: MinedBlockExtraInfo {
-                nonce,
-                mining_tx,
-                shutdown,
-            },
+            mined_info: extra_info,
         };
         self.node.send(self.storage_addr, request).await?;
 
         Ok(())
+    }
+
+    /// Sets the current mining block
+    pub fn set_current_mining_block(&mut self) {
+        let (block, block_tx) = self.node_raft.take_mining_block();
+        let shutdown = self.coordinated_shutdown <= block.header.b_num;
+        let extra_info = self.node_raft.get_mined_block_extra_info();
+
+        self.current_mined_block = Some(MinedBlock {
+            block,
+            block_tx,
+            shutdown,
+            extra_info,
+        });
     }
 
     /// Floods all peers with a PoW for UnicornShard creation
@@ -541,6 +575,10 @@ impl ComputeNode {
             Ok(Response {
                 success: true,
                 reason: "Received PoW successfully",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Mining round closed",
             }) => {
                 info!("Send Block to storage");
                 debug!("CURRENT MINED BLOCK: {:?}", self.current_mined_block);
@@ -689,7 +727,7 @@ impl ComputeNode {
         }
     }
 
-    ///Handle commit data
+    /// Handle commit data
     ///
     /// ### Arguments
     ///
@@ -733,6 +771,14 @@ impl ComputeNode {
                     reason: "Transactions committed",
                 }))
             }
+            Some(CommittedItem::ParticipantIntakeClosed) => Some(Ok(Response {
+                success: true,
+                reason: "Partition list is full",
+            })),
+            Some(CommittedItem::WinningPoWIntakeClosed) => Some(Ok(Response {
+                success: true,
+                reason: "Mining round closed",
+            })),
             None => None,
         }
     }
@@ -749,7 +795,7 @@ impl ComputeNode {
                 reason,
             }),
             LocalEvent::CoordinatedShutdown(shutdown) => {
-                self.coordiated_shudown = shutdown;
+                self.coordinated_shutdown = shutdown;
                 Some(Response {
                     success: true,
                     reason: "Start Coordianted shutdown",
@@ -816,7 +862,7 @@ impl ComputeNode {
                 coinbase,
             } => Some(self.receive_pow(peer, block_num, nonce, coinbase).await),
             SendPartitionEntry { partition_entry } => {
-                Some(self.receive_partition_entry(peer, partition_entry))
+                Some(self.receive_partition_entry(peer, partition_entry).await)
             }
             SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
             SendUserBlockNotificationRequest => {
@@ -946,7 +992,7 @@ impl ComputeNode {
     ///
     /// * `peer` - Sending peer's socket address
     /// * 'partition_entry' - ProofOfWork object for the partition entry being recieved.
-    fn receive_partition_entry(
+    async fn receive_partition_entry(
         &mut self,
         peer: SocketAddr,
         partition_entry: ProofOfWork,
@@ -971,6 +1017,9 @@ impl ComputeNode {
         }
 
         if self.partition_list.0.len() < self.partition_full_size {
+            // Add to RAFT for mining
+            self.node_raft.propose_mining_participant(peer).await;
+
             return Response {
                 success: true,
                 reason: "Partition PoW received successfully",
@@ -1050,9 +1099,18 @@ impl ComputeNode {
         let block = serialize_hashblock_for_pow(&hashblock);
         let reward = self.node_raft.get_current_reward();
 
+        // Filter out allowed participants
+        let allowed_partition = self.node_raft.get_mining_participants();
+        let partition_to_send = self
+            .partition_list
+            .1
+            .iter()
+            .filter(|addr| allowed_partition.iter().any(|v| &v == addr))
+            .copied();
+
         self.node
             .send_to_all(
-                self.partition_list.1.iter().copied(),
+                partition_to_send,
                 MineRequest::SendBlock {
                     block,
                     reward: *reward,
@@ -1109,28 +1167,6 @@ impl ComputeNode {
             .await
             .unwrap();
         Ok(())
-    }
-
-    /// Logs the winner of the block and changes the current block to a new block to be mined
-    /// ### Arguments
-    ///
-    /// * `nonce` - Sequence number in a Vec<u8>
-    /// * `mining_transaction` - String and transaction to be put into a BTreeMap
-    pub fn mining_block_mined(
-        &mut self,
-        nonce: Vec<u8>,
-        mining_transaction: (String, Transaction),
-    ) {
-        // Take mining block info: no more mining for it.
-        let (block, block_tx) = self.node_raft.take_mining_block();
-        let shutdown = self.coordiated_shudown <= block.header.b_num;
-        self.current_mined_block = Some(MinedBlock {
-            nonce,
-            block,
-            block_tx,
-            mining_transaction,
-            shutdown,
-        });
     }
 
     /// Reset the mining block processing to allow a new block.
@@ -1219,7 +1255,7 @@ impl ComputeNode {
             let header = &mining_block.header;
             HashBlock {
                 merkle_hash: header.merkle_root_hash.clone(),
-                unicorn: header.previous_hash.clone().unwrap_or_default(),
+                prev_hash: header.previous_hash.clone().unwrap_or_default(),
                 nonce: nonce.clone(),
                 b_num: header.b_num,
             }
@@ -1244,14 +1280,15 @@ impl ComputeNode {
         let coinbase_hash = construct_tx_hash(&coinbase);
         let merkle_for_pow =
             concat_merkle_coinbase(&block_to_check.merkle_hash, &coinbase_hash).await;
-        if !validate_pow_block(&block_to_check.unicorn, &merkle_for_pow, &nonce) {
+        if !validate_pow_block(&block_to_check.prev_hash, &merkle_for_pow, &nonce) {
             return Response {
                 success: false,
                 reason: "Invalid PoW for block",
             };
         }
 
-        self.mining_block_mined(nonce, (coinbase_hash, coinbase));
+        self.send_winning_pow_to_raft(address, nonce.clone(), coinbase.clone())
+            .await;
 
         Response {
             success: true,

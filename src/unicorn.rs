@@ -20,8 +20,66 @@ use crate::constants::MR_PRIME_ITERS;
 use bincode::serialize;
 use rug::integer::IsPrime;
 use rug::Integer;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha3::{Digest, Sha3_256};
+use std::collections::BTreeSet;
+use std::net::SocketAddr;
 use tracing::error;
+
+/// Serialisation function for big ints
+pub fn serialize_big_int<S>(x: &Integer, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    s.serialize_str(&x.to_string_radix(16))
+}
+
+/// Deserialisation function for big ints
+pub fn deserialize_big_int<'de, D>(d: D) -> Result<Integer, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let buf = String::deserialize(d)?;
+    Ok(Integer::from_str_radix(&buf, 16).unwrap())
+}
+
+/// Constructs the seed for a new, ZNP-specific Unicorn
+///
+/// ### Arguments
+///
+/// * `tx_inputs` - Input transactions
+/// * `participant_list` - List of miners participating in block round
+/// * `last_winning_hashes` - The hashes of the winning PoWs from 2 blocks ago
+pub fn construct_seed(
+    tx_inputs: &[String],
+    participant_list: &Vec<SocketAddr>,
+    last_winning_hashes: &BTreeSet<String>,
+) -> Integer {
+    // Transaction inputs (sOot)
+    let soot = hex::encode(Sha3_256::digest(&serialize(tx_inputs).unwrap()));
+    // Miner participation applications (sOma)
+    let soma = hex::encode(Sha3_256::digest(&serialize(participant_list).unwrap()));
+    // Winning PoWs from 2 blocks ago
+    let soms = hex::encode(Sha3_256::digest(&serialize(last_winning_hashes).unwrap()));
+
+    let final_seed = hex::encode(Sha3_256::digest(
+        &serialize(&vec![soot, soma, soms]).unwrap(),
+    ));
+
+    Integer::from_str_radix(&final_seed, 16).unwrap()
+}
+
+/// UNiCORN-relevant info for use on a RAFT
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct UnicornInfo {
+    pub unicorn: Unicorn,
+    pub g_value: String,
+    #[serde(
+        deserialize_with = "deserialize_big_int",
+        serialize_with = "serialize_big_int"
+    )]
+    pub witness: Integer,
+}
 
 /// UNiCORN struct, with the following fields:
 ///
@@ -30,13 +88,25 @@ use tracing::error;
 /// - seed (`s`)
 /// - witness (`w`)
 /// - security_level (`k`)
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Unicorn {
-    pub modulus: Integer,
     pub iterations: u64,
-    pub seed: Integer,
-    pub witness: Integer,
     pub security_level: u32,
+    #[serde(
+        deserialize_with = "deserialize_big_int",
+        serialize_with = "serialize_big_int"
+    )]
+    pub seed: Integer,
+    #[serde(
+        deserialize_with = "deserialize_big_int",
+        serialize_with = "serialize_big_int"
+    )]
+    pub modulus: Integer,
+    #[serde(
+        deserialize_with = "deserialize_big_int",
+        serialize_with = "serialize_big_int"
+    )]
+    pub witness: Integer,
 }
 
 impl Unicorn {

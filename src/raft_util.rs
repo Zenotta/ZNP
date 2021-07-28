@@ -44,7 +44,7 @@ impl RaftInFlightProposals {
     ///
     /// * `raft_data` - Data for the commit
     /// * `raft_ctx`  - Context for the commit
-    pub async fn received_commit_poposal<'a, Item: Deserialize<'a>>(
+    pub async fn received_commit_proposal<'a, Item: Deserialize<'a>>(
         &mut self,
         raft_data: &'a [u8],
         raft_ctx: &'a [u8],
