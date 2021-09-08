@@ -260,7 +260,7 @@ impl MinerNode {
     /// Send initial requests:
     /// - partition request
     pub async fn send_startup_requests(&mut self) -> Result<()> {
-        info!("Send startup requets: partition");
+        info!("Send startup requests: partition");
         self.send_partition_request().await
     }
 

@@ -52,7 +52,7 @@ where
 /// * `last_winning_hashes` - The hashes of the winning PoWs from 2 blocks ago
 pub fn construct_seed(
     tx_inputs: &[String],
-    participant_list: &Vec<SocketAddr>,
+    participant_list: &[SocketAddr],
     last_winning_hashes: &BTreeSet<String>,
 ) -> Integer {
     // Transaction inputs (sOot)

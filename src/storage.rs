@@ -7,7 +7,7 @@ use crate::constants::{
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, CommonBlockInfo, ComputeRequest, Contract,
-    MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageInterface,
+    MineRequest, MinedBlock, NodeType, ProofOfWork, Response, StorageInterface,
     StorageRequest, StoredSerializingBlock,
 };
 use crate::raft::RaftCommit;
@@ -159,7 +159,7 @@ impl StorageNode {
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
         let catchup_fetch = {
-            let timeout_duration = node_raft.propose_block_timeout_duration();
+            let timeout_duration = node_raft.propose_catchup_timeout_duration();
             StorageFetch::new(addr, &config.storage_nodes, timeout_duration)
         };
 
@@ -407,13 +407,6 @@ impl StorageNode {
                         };
 
                 }
-                Some(_) = self.node_raft.timeout_propose_block(), if ready => {
-                    trace!("handle_next_event timeout block");
-                    if !self.node_raft.propose_block_at_timeout().await {
-                        self.node_raft.re_propose_uncommitted_current_b_num().await;
-                        self.resend_trigger_message().await;
-                    }
-                }
                 Some(()) = self.catchup_fetch.timeout_fetch_blockchain_item(), if ready => {
                     trace!("handle_next_event timeout fetch blockchain item");
                     if self.catchup_fetch.set_retry_timeout() {
@@ -555,8 +548,12 @@ impl StorageNode {
             } => Some(self.get_history(&start_time, &end_time)),
             GetUnicornTable { n_last_items } => Some(self.get_unicorn_table(n_last_items)),
             SendPow { pow } => Some(self.receive_pow(pow)),
-            SendBlock { common, mined_info } => self.receive_block(peer, common, mined_info).await,
+            SendBlock { mined_block } => self.receive_block(mined_block).await,
             Store { incoming_contract } => Some(self.receive_contracts(incoming_contract)),
+            RequestRetrigger => {
+                self.resend_trigger_message().await;
+                None
+            }
             Closing => self.receive_closing(peer),
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
@@ -604,23 +601,25 @@ impl StorageNode {
         trace!("Store complete block: {:?}", complete);
 
         let ((stored_block, all_block_txs), (block_num, merkle_hash, nonce, shutdown)) = {
-            let CompleteBlock { common, per_node } = complete;
+            let CompleteBlock { common, extra_info } = complete;
 
             let header = common.block.header.clone();
             let block_num = header.b_num;
             let merkle_hash = header.merkle_root_hash;
             let nonce = header.nonce;
-            let shutdown = per_node.values().all(|v| v.shutdown);
+            let shutdown = extra_info.shutdown;
+            let mut mining_tx_hash_and_nonces = BTreeMap::new();
+            mining_tx_hash_and_nonces.insert(
+                1,
+                (extra_info.mining_tx.0.clone(), extra_info.nonce.clone()),
+            );
             let stored_block = StoredSerializingBlock {
                 block: common.block,
-                mining_tx_hash_and_nonces: per_node
-                    .iter()
-                    .map(|(idx, v)| (*idx, (v.mining_tx.0.clone(), v.nonce.clone())))
-                    .collect(),
+                mining_tx_hash_and_nonces,
             };
 
             let mut all_block_txs = common.block_txs;
-            all_block_txs.extend(per_node.into_iter().map(|(_, v)| v.mining_tx));
+            all_block_txs.insert(extra_info.mining_tx.0, extra_info.mining_tx.1);
 
             let to_store = (stored_block, all_block_txs);
             let store_extra_info = (block_num, merkle_hash, nonce, shutdown);
@@ -654,7 +653,7 @@ impl StorageNode {
             "Store complete block summary: b_num={}, txs={}, mining={}, hash={}",
             block_num,
             stored_block.block.transactions.len(),
-            last_block_stored_info.mining_transactions.len(),
+            last_block_stored_info.mining_transactions.len(), /* Should always be 1 */
             block_hash
         );
 
@@ -815,11 +814,11 @@ impl StorageNode {
     /// Sends the latest block to storage
     pub async fn send_stored_block(&mut self) -> Result<()> {
         // Only the first call will send to storage.
-        let block = self.get_last_block_stored().as_ref().unwrap().clone();
-
-        self.node
-            .send(self.compute_addr, ComputeRequest::SendBlockStored(block))
-            .await?;
+        if let Some(block) = self.get_last_block_stored().clone() {
+            self.node
+                .send(self.compute_addr, ComputeRequest::SendBlockStored(block))
+                .await?;
+        }
 
         Ok(())
     }
@@ -831,6 +830,9 @@ impl StorageNode {
             if let Err(e) = self.send_stored_block().await {
                 error!("Resend block stored failed {:?}", e);
             }
+        } else {
+            info!("Re-propose uncommitted items for current block");
+            self.node_raft.re_propose_uncommitted_current_b_num().await;
         }
     }
 
@@ -882,19 +884,21 @@ impl StorageNode {
         })
     }
 
-    /// Receives the new block from the miner with permissions to write
+    /// Receives a mined block from compute
     ///
     /// ### Arguments
     ///
-    /// * `peer`       - Peer that the block is received from
-    /// * `common`     - The block to be stored and checked
-    /// * `mined_info` - The mining info for the block
-    async fn receive_block(
-        &mut self,
-        peer: SocketAddr,
-        common: CommonBlockInfo,
-        mined_info: MinedBlockExtraInfo,
-    ) -> Option<Response> {
+    /// * `peer`            - Peer that the block is received from
+    /// * `mined_block`     - The mined block
+    async fn receive_block(&mut self, mined_block: MinedBlock) -> Option<Response> {
+        let MinedBlock {
+            block,
+            block_txs,
+            extra_info,
+        } = mined_block;
+
+        let common = CommonBlockInfo { block, block_txs };
+
         let valid = {
             let prev_hash = {
                 let prev_hash = &common.block.header.previous_hash;
@@ -902,10 +906,10 @@ impl StorageNode {
             };
             let merkle_for_pow = {
                 let merkle_root = &common.block.header.merkle_root_hash;
-                let (mining_tx, _) = &mined_info.mining_tx;
+                let (mining_tx, _) = &extra_info.mining_tx;
                 concat_merkle_coinbase(merkle_root, mining_tx).await
             };
-            let nonce = &mined_info.nonce;
+            let nonce = &extra_info.nonce;
 
             validate_pow_block(prev_hash, &merkle_for_pow, nonce)
         };
@@ -917,11 +921,11 @@ impl StorageNode {
             });
         }
 
-        if !self
-            .node_raft
-            .propose_received_part_block(peer, common, mined_info)
-            .await
-        {
+        let complete_block = CompleteBlock { common, extra_info };
+
+        if !self.node_raft.propose_block(complete_block).await {
+            self.node_raft.re_propose_uncommitted_current_b_num().await;
+            self.resend_trigger_message().await;
             return None;
         }
 

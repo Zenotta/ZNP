@@ -49,7 +49,7 @@ const STORAGE_DB_V0_2_0_INDEXES: &[&str] = &[
     "nIndexedTxHashKey_0000000000000002_00000002",
 ];
 const STORAGE_DB_V0_2_0_BLOCK_LEN: &[u32] = &[5, 3, 4];
-const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
+const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(10000);
 
 const STORAGE_DB_V0_2_0_JSON: &[&str] = &[
     "{\"inputs\":[{\"previous_out\":null,\"script_signature\":{\"stack\":[{\"Bytes\":\"+ (39) No person shall be seized or imprisoned, or stripped of their rights or possessions, or outlawed or exiled, or deprived of their standing in any way, nor will we proceed with force against them, or send others to do so, except by the lawful judgment of their equals or by the law of the land.\"}]}}],\"outputs\":[{\"value\":{\"Token\":2},\"amount\":2,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"be570a79d3066e78714600f5eb0e9b91\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"1e47c0a4a718ad926d8d4cf0c2070344\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"ef8cee427395f08788b7b7ffb94326ea\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"8767ae43bc20271fe841ccd4bce36d5d\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}",
@@ -475,8 +475,15 @@ async fn upgrade_restart_network_common(
         }
 
         let raft_len = upgrade_cfg.raft_len;
+        let multiplier = {
+            if raft_len == 1 {
+                miner_nodes.len() + 1
+            } else {
+                miner_nodes.len()
+            }
+        };
         let expected_count =
-            tests_last_version_db::STORAGE_DB_V0_2_0.len() + extra_blocks * (miner_nodes.len() + 1);
+            tests_last_version_db::STORAGE_DB_V0_2_0.len() + extra_blocks * multiplier;
         assert_eq!(actual_count, vec![expected_count; raft_len]);
         assert_eq!(actual_last_bnum, vec![Some(expected_block_num); raft_len]);
     }

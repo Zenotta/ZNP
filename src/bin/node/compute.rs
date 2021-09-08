@@ -205,6 +205,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .set_default("compute_transaction_timeout", 100)
         .unwrap();
+    settings
+        .set_default("compute_mining_event_timeout", 2000)
+        .unwrap();
 
     settings
         .merge(config::File::with_name(setting_file))

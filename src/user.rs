@@ -408,7 +408,7 @@ impl UserNode {
     /// - block notification request (if active)
     pub async fn send_startup_requests(&mut self) -> Result<()> {
         if self.is_test_auto_gen_tx_active() {
-            info!("Send startup requets: block notification");
+            info!("Send startup requests: block notification");
             return self.send_block_notification_request().await;
         }
         Ok(())

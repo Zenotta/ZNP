@@ -1064,7 +1064,7 @@ async fn init_storage(
         storage_api_port: 3001,
         storage_api_use_tls: true,
         storage_raft_tick_timeout: 200 / config.test_duration_divider,
-        storage_block_timeout: 1000 / config.test_duration_divider,
+        storage_catchup_duration: 2000 / config.test_duration_divider,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Storage {}", info);
@@ -1109,6 +1109,7 @@ async fn init_compute(
         sanction_list: Vec::new(),
         compute_api_port: 3002,
         compute_api_use_tls: true,
+        compute_mining_event_timeout: 2000 / config.test_duration_divider,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Compute {}", info);

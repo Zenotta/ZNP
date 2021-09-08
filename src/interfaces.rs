@@ -89,6 +89,7 @@ pub struct Response {
 }
 
 /// Mined block as stored in DB.
+//TODO: In the future, only one mining tx will be saved
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct StoredSerializingBlock {
     pub block: Block,
@@ -100,6 +101,14 @@ pub struct StoredSerializingBlock {
 pub struct CommonBlockInfo {
     pub block: Block,
     pub block_txs: BTreeMap<String, Transaction>,
+}
+
+/// Mined block structure
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MinedBlock {
+    pub block: Block,
+    pub block_txs: BTreeMap<String, Transaction>,
+    pub extra_info: MinedBlockExtraInfo,
 }
 
 /// Additional info specific to one of the mined block that form a complete block.
@@ -115,10 +124,11 @@ pub struct MinedBlockExtraInfo {
         deserialize_with = "deserialize_big_int",
         serialize_with = "serialize_big_int"
     )]
-    pub witness: Integer,
+    pub m_witness: Integer,
 }
 
 /// Stored block info needed to generate next block
+//TODO: In the future, only a single mining tx will be stored
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct BlockStoredInfo {
     pub block_hash: String,
@@ -143,6 +153,7 @@ pub struct ProofOfWorkBlock {
     pub block: Block,
 }
 
+/// Winning PoW structure
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WinningPoWInfo {
     pub nonce: Vec<u8>,
@@ -313,30 +324,14 @@ pub enum CommMessage {
 #[allow(clippy::large_enum_variant)]
 #[derive(Deserialize, Serialize, Clone)]
 pub enum StorageRequest {
-    GetBlockchainItem {
-        key: String,
-    },
-    SendBlockchainItem {
-        key: String,
-        item: BlockchainItem,
-    },
-    GetHistory {
-        start_time: u64,
-        end_time: u64,
-    },
-    GetUnicornTable {
-        n_last_items: Option<u64>,
-    },
-    SendPow {
-        pow: ProofOfWork,
-    },
-    SendBlock {
-        common: CommonBlockInfo,
-        mined_info: MinedBlockExtraInfo,
-    },
-    Store {
-        incoming_contract: Contract,
-    },
+    GetBlockchainItem { key: String },
+    SendBlockchainItem { key: String, item: BlockchainItem },
+    GetHistory { start_time: u64, end_time: u64 },
+    GetUnicornTable { n_last_items: Option<u64> },
+    SendPow { pow: ProofOfWork },
+    SendBlock { mined_block: MinedBlock },
+    Store { incoming_contract: Contract },
+    RequestRetrigger,
     Closing,
     SendRaftCmd(RaftMessageWrapper),
 }
@@ -354,10 +349,8 @@ impl fmt::Debug for StorageRequest {
             } => write!(f, "GetHistory"),
             GetUnicornTable { ref n_last_items } => write!(f, "GetUnicornTable"),
             SendPow { ref pow } => write!(f, "SendPoW"),
-            SendBlock {
-                ref common,
-                ref mined_info,
-            } => write!(f, "SendBlock"),
+            SendBlock { ref mined_block } => write!(f, "SendBlock"),
+            RequestRetrigger => write!(f, "RequestRetrigger"),
             Store {
                 ref incoming_contract,
             } => write!(f, "Store"),

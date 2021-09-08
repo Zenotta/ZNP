@@ -105,7 +105,9 @@ pub struct ComputeNodeConfig {
     pub compute_api_use_tls: bool,
     /// Timeout for ticking raft
     pub compute_raft_tick_timeout: usize,
-    /// Index of the current node in compute_nodes
+    /// Timeout duration between mining event pipelines
+    pub compute_mining_event_timeout: usize,
+    /// Timeout duration between committing transactions
     pub compute_transaction_timeout: usize,
     /// Transaction hash and TxOut info to use to seed utxo
     pub compute_seed_utxo: UtxoSetSpec,
@@ -146,8 +148,8 @@ pub struct StorageNodeConfig {
     pub storage_api_use_tls: bool,
     /// Timeout for ticking raft
     pub storage_raft_tick_timeout: usize,
-    /// Timeout for generating a new block
-    pub storage_block_timeout: usize,
+    /// Timeout for fetch catchup
+    pub storage_catchup_duration: usize,
 }
 
 /// Configuration option for a storage node
