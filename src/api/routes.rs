@@ -288,17 +288,6 @@ pub fn change_passphrase(
         .with(post_cors())
 }
 
-// POST signable transaction
-pub fn signable_transactions(
-    dp: &mut DbgPaths,
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    warp_path(dp, "signable_transactions")
-        .and(warp::post())
-        .and(warp::body::json())
-        .and_then(handlers::post_signable_transactions)
-        .with(post_cors())
-}
-
 // POST create transactions
 pub fn create_transactions(
     dp: &mut DbgPaths,

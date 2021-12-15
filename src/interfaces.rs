@@ -10,6 +10,7 @@ use naom::primitives::block::Block;
 use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::TxIn;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
+use naom::utils::transaction_utils::construct_tx_in_signable_hash;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -18,8 +19,28 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::{error, fmt};
 
-/// Simple BTreeMap structure used to hold `(OutPoint, Asset)` pairs with respect to a public key address
-pub type AddressesWithOutPoints = BTreeMap<String, Vec<(OutPoint, Asset)>>;
+/// Struct used for simplifying JSON deserialization on the client
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OutPointData {
+    out_point: OutPoint,
+    value: Asset,
+    signable_data: String,
+}
+
+impl OutPointData {
+    pub fn new(out_point: OutPoint, value: Asset) -> Self {
+        let signable_data = construct_tx_in_signable_hash(&out_point);
+        OutPointData {
+            out_point,
+            value,
+            signable_data,
+        }
+    }
+}
+
+/// Simple BTreeMap structure used to hold `(OutPoint, Asset, String/Data to Sign)` pairs
+/// with respect to a public key address
+pub type AddressesWithOutPoints = BTreeMap<String, Vec<OutPointData>>;
 
 /// UTXO set type
 pub type UtxoSet = BTreeMap<OutPoint, TxOut>;

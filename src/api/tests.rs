@@ -531,7 +531,7 @@ async fn test_get_wallet_info() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address\":[[{\"t_hash\":\"tx_hash\",\"n\":0},{\"Token\":11}]]}}");
+    assert_eq!(res.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":11},\"signable_data\":\"070000000000000074785f6861736800000000\"}]}}");
 }
 
 /// Test GET new payment address
@@ -938,7 +938,7 @@ async fn test_post_fetch_balance() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"total\":{\"tokens\":25200,\"receipts\":0},\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[[{\"t_hash\":\"tx_hash\",\"n\":0},{\"Token\":25200}]]}}"
+        "{\"total\":{\"tokens\":25200,\"receipts\":0},\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":25200},\"signable_data\":\"070000000000000074785f6861736800000000\"}]}}"
     );
 }
 
@@ -1022,45 +1022,6 @@ async fn test_post_update_running_total() {
 
 /// Test POST create receipt asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
-async fn test_post_signable_transactions() {
-    let _ = tracing_log_try_init();
-
-    //
-    // Arrange
-    //
-    let json_body = vec![CreateTransaction {
-        inputs: vec![CreateTxIn {
-            previous_out: Some(OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0)),
-            script_signature: None,
-        }],
-        outputs: vec![],
-        version: 1,
-        druid_info: None,
-    }];
-
-    let request = warp::test::request()
-        .method("POST")
-        .path("/signable_transactions")
-        .header("Content-Type", "application/json")
-        .json(&json_body.clone());
-
-    //
-    // Act
-    //
-    let filter = routes::signable_transactions(&mut dp());
-    let res = request.reply(&filter).await;
-
-    //
-    // Assert
-    //
-    assert_eq!(
-        ((res.status(), res.headers().clone()), from_utf8(res.body())),
-        (success_json(), "[{\"inputs\":[{\"previous_out\":{\"t_hash\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"n\":0},\"script_signature\":{\"Pay2PkH\":{\"signed_data\":\"2000000000000000313362643333353162373862656232643064616466323035386463633932366300000000\",\"signature\":\"\",\"public_key\":\"\",\"address_version\":null}}}],\"outputs\":[],\"version\":1,\"druid_info\":null}]")
-    );
-}
-
-/// Test POST create receipt asset on compute node successfully
-#[tokio::test(flavor = "current_thread")]
 async fn test_post_create_transactions() {
     test_post_create_transactions_common(None).await;
 }
@@ -1086,9 +1047,9 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     let (mut self_node, self_socket) = new_self_node(NodeType::Compute).await;
 
     let previous_out = OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0);
-    let signed_data = construct_tx_in_signable_hash(&previous_out);
+    let signable_data = construct_tx_in_signable_hash(&previous_out);
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
-    let raw_signature = sign::sign_detached(signed_data.as_bytes(), &secret_key);
+    let raw_signature = sign::sign_detached(signable_data.as_bytes(), &secret_key);
     let signature = hex::encode(raw_signature.as_ref());
     let public_key = COMMON_PUB_KEY.to_owned();
 
@@ -1096,7 +1057,7 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
         inputs: vec![CreateTxIn {
             previous_out: Some(previous_out.clone()),
             script_signature: Some(CreateTxInScript::Pay2PkH {
-                signed_data,
+                signable_data,
                 signature,
                 public_key,
                 address_version,
