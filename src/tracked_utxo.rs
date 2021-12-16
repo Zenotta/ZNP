@@ -1,4 +1,4 @@
-use crate::interfaces::{AddressesWithOutPoints, UtxoSet};
+use crate::interfaces::{AddressesWithOutPoints, OutPointData, UtxoSet};
 use crate::utils::{get_pk_with_out_point_cloned, get_pk_with_out_point_from_utxo_set_cloned};
 use crate::wallet::AssetValues;
 use naom::primitives::transaction::{OutPoint, Transaction};
@@ -69,7 +69,7 @@ impl TrackedUtxoSet {
                     address_list
                         .entry(address.clone())
                         .or_insert_with(Vec::new)
-                        .push((op.clone(), t_out.value.clone()));
+                        .push(OutPointData::new(op.clone(), t_out.value.clone()));
                     total.update_add(&t_out.value);
                 }
             }
