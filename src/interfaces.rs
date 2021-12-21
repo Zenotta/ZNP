@@ -24,17 +24,11 @@ use std::{error, fmt};
 pub struct OutPointData {
     out_point: OutPoint,
     value: Asset,
-    signable_data: String,
 }
 
 impl OutPointData {
     pub fn new(out_point: OutPoint, value: Asset) -> Self {
-        let signable_data = construct_tx_in_signable_hash(&out_point);
-        OutPointData {
-            out_point,
-            value,
-            signable_data,
-        }
+        OutPointData { out_point, value }
     }
 }
 
