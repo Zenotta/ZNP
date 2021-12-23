@@ -19,7 +19,7 @@ use crate::user::{
     make_rb_payment_receipt_tx_and_response, make_rb_payment_send_transaction,
     make_rb_payment_send_tx_and_request,
 };
-use crate::utils::{decode_pub_key, decode_secret_key, tracing_log_try_init};
+use crate::utils::{decode_pub_key, decode_secret_key, to_api_keys, tracing_log_try_init};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
@@ -261,6 +261,20 @@ fn success_json() -> (StatusCode, HeaderMap) {
     (StatusCode::from_u16(200).unwrap(), headers)
 }
 
+fn fail_plain(code: u16) -> (StatusCode, HeaderMap) {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+
+    (StatusCode::from_u16(code).unwrap(), headers)
+}
+
+pub async fn ok_reply() -> Result<impl warp::Reply, warp::Rejection> {
+    Ok(warp::reply::json(&0))
+}
+
 fn user_api_request_as_frame(request: UserApiRequest) -> Option<Vec<u8>> {
     let sent_request = UserRequest::UserApi(request);
     Some(serialize(&sent_request).unwrap())
@@ -360,24 +374,30 @@ async fn test_get_user_debug_data() {
     // Arrange
     //
     let db = get_wallet_db("");
+    let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13000).await;
     self_node.connect_to(c_socket).await.unwrap();
 
-    let request = warp::test::request().method("GET").path("/debug_data");
+    let request = || warp::test::request().method("GET").path("/debug_data");
+    let request_x_api = || request().header("x-api-key", "key");
 
     //
     // Act
     //
-    let filter = routes::user_node_routes(db, self_node.clone());
-    let res = request.reply(&filter).await;
+    let filter = routes::user_node_routes(ks, db, self_node.clone());
+    let res_a = request_x_api().reply(&filter).await;
+    let res_m = request().reply(&filter).await;
 
     //
     // Assert
     //
     let expected_string = "{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"new_payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13000\",\"127.0.0.1:13000\",\"Compute\"]]}";
-    assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), &expected_string);
+    assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
+    assert_eq!(res_a.body(), expected_string);
+
+    assert_eq!((res_m.status(), res_m.headers().clone()), fail_plain(400));
+    assert_eq!(res_m.body(), "Missing request header \"x-api-key\"");
 }
 
 /// Test get storage debug data
@@ -389,24 +409,30 @@ async fn test_get_storage_debug_data() {
     // Arrange
     //
     let db = get_db_with_block();
+    let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::Storage).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13010).await;
     self_node.connect_to(c_socket).await.unwrap();
 
-    let request = warp::test::request().method("GET").path("/debug_data");
+    let request = || warp::test::request().method("GET").path("/debug_data");
+    let request_x_api = || request().header("x-api-key", "key");
 
     //
     // Act
     //
-    let filter = routes::storage_node_routes(db, self_node.clone());
-    let res = request.reply(&filter).await;
+    let filter = routes::storage_node_routes(ks, db, self_node.clone());
+    let res_a = request_x_api().reply(&filter).await;
+    let res_m = request().reply(&filter).await;
 
     //
     // Assert
     //
     let expected_string = "{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"latest_block\",\"blockchain_entry_by_key\",\"block_by_tx_hashes\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13010\",\"127.0.0.1:13010\",\"Compute\"]]}";
-    assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_string);
+    assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
+    assert_eq!(res_a.body(), expected_string);
+
+    assert_eq!((res_m.status(), res_m.headers().clone()), fail_plain(400));
+    assert_eq!(res_m.body(), "Missing request header \"x-api-key\"");
 }
 
 /// Test get compute debug data
@@ -418,23 +444,31 @@ async fn test_get_compute_debug_data() {
     // Arrange
     //
     let compute = ComputeTest::new(vec![]);
+    let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::Compute).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13020).await;
     self_node.connect_to(c_socket).await.unwrap();
 
-    let request = warp::test::request().method("GET").path("/debug_data");
+    let request = || warp::test::request().method("GET").path("/debug_data");
+    let request_x_api = || request().header("x-api-key", "key");
+
     //
     // Act
     //
-    let filter = routes::compute_node_routes(compute.threaded_calls.tx.clone(), self_node.clone());
-    let res = request.reply(&filter).await;
+    let tx = compute.threaded_calls.tx.clone();
+    let filter = routes::compute_node_routes(ks, tx, self_node.clone());
+    let res_a = request_x_api().reply(&filter).await;
+    let res_m = request().reply(&filter).await;
 
     //
     // Assert
     //
     let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"fetch_pending\",\"create_receipt_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]]}";
-    assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_string);
+    assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
+    assert_eq!(res_a.body(), expected_string);
+
+    assert_eq!((res_m.status(), res_m.headers().clone()), fail_plain(400));
+    assert_eq!(res_m.body(), "Missing request header \"x-api-key\"");
 }
 
 /// Test get miner debug data
@@ -447,23 +481,30 @@ async fn test_get_miner_debug_data() {
     //
     let db = get_wallet_db("");
     let current_block = Default::default();
+    let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13030).await;
     self_node.connect_to(c_socket).await.unwrap();
 
-    let request = warp::test::request().method("GET").path("/debug_data");
+    let request = || warp::test::request().method("GET").path("/debug_data");
+    let request_x_api = || request().header("x-api-key", "key");
+
     //
     // Act
     //
-    let filter = routes::miner_node_routes(current_block, db, self_node.clone());
-    let res = request.reply(&filter).await;
+    let filter = routes::miner_node_routes(ks, current_block, db, self_node.clone());
+    let res_a = request_x_api().reply(&filter).await;
+    let res_m = request().reply(&filter).await;
 
     //
     // Assert
     //
     let expected_string = "{\"node_type\":\"Miner\",\"node_api\":[\"wallet_info\",\"export_keypairs\",\"import_keypairs\",\"new_payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13030\",\"127.0.0.1:13030\",\"Compute\"]]}";
-    assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_string);
+    assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
+    assert_eq!(res_a.body(), expected_string);
+
+    assert_eq!((res_m.status(), res_m.headers().clone()), fail_plain(400));
+    assert_eq!(res_m.body(), "Missing request header \"x-api-key\"");
 }
 
 /// Test get miner with user debug data
@@ -476,6 +517,7 @@ async fn test_get_miner_with_user_debug_data() {
     //
     let db = get_wallet_db("");
     let current_block = Default::default();
+    let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
     let (mut self_node_u, _self_socket_u) = new_self_node(NodeType::User).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13040).await;
@@ -483,19 +525,66 @@ async fn test_get_miner_with_user_debug_data() {
     self_node.connect_to(c_socket).await.unwrap();
     self_node_u.connect_to(s_socket).await.unwrap();
 
-    let request = warp::test::request().method("GET").path("/debug_data");
+    let request = || warp::test::request().method("GET").path("/debug_data");
+    let request_x_api = || request().header("x-api-key", "key");
+
     //
     // Act
     //
-    let filter = routes::miner_node_with_user_routes(current_block, db, self_node, self_node_u);
-    let res = request.reply(&filter).await;
+    let filter = routes::miner_node_with_user_routes(ks, current_block, db, self_node, self_node_u);
+    let res_a = request_x_api().reply(&filter).await;
+    let res_m = request().reply(&filter).await;
 
     //
     // Assert
     //
     let expected_string = "{\"node_type\":\"Miner/User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"new_payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13040\",\"127.0.0.1:13040\",\"Compute\"],[\"127.0.0.1:13041\",\"127.0.0.1:13041\",\"Storage\"]]}";
-    assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_string);
+    assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
+    assert_eq!(res_a.body(), expected_string);
+
+    assert_eq!((res_m.status(), res_m.headers().clone()), fail_plain(400));
+    assert_eq!(res_m.body(), "Missing request header \"x-api-key\"");
+}
+
+/// Test get miner with user debug data
+#[tokio::test(flavor = "current_thread")]
+async fn test_x_api_key() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let api_keys = to_api_keys(vec!["key".to_owned()]);
+    let api_keys_a = to_api_keys(vec!["any_key".to_owned()]);
+    let request = || warp::test::request().method("GET").path("/debug_data");
+    let request_x_api = |k: &str| request().header("x-api-key", k);
+
+    //
+    // Act
+    //
+    use warp::Filter;
+    let filter_x = routes::x_api_key(api_keys).and_then(ok_reply);
+    let r_x_a = request_x_api("key").reply(&filter_x).await;
+    let r_x_w = request_x_api("ke").reply(&filter_x).await;
+    let r_x_m = request().reply(&filter_x).await;
+
+    let filter_a = routes::x_api_key(api_keys_a).and_then(ok_reply);
+    let r_a_m = request().reply(&filter_a).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((r_x_a.status(), r_x_a.headers().clone()), success_json());
+    assert_eq!(r_x_a.body(), "0");
+
+    assert_eq!((r_x_w.status(), r_x_w.headers().clone()), fail_plain(500));
+    assert_eq!(r_x_w.body(), "Unhandled rejection: Unauthorized");
+
+    assert_eq!((r_x_m.status(), r_x_m.headers().clone()), fail_plain(400));
+    assert_eq!(r_x_m.body(), "Missing request header \"x-api-key\"");
+
+    assert_eq!((r_a_m.status(), r_a_m.headers().clone()), success_json());
+    assert_eq!(r_a_m.body(), "0");
 }
 
 /// Test GET wallet info
@@ -669,15 +758,7 @@ async fn test_post_blockchain_entry_by_key_failure() {
         .reply(&filter)
         .await;
 
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "content-type",
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-
-    assert_eq!(res.status(), 500);
-    assert_eq!(res.headers(), &headers);
+    assert_eq!((res.status(), res.headers().clone()), fail_plain(500));
     assert_eq!(res.body(), "Unhandled rejection: ErrorNoDataFoundForKey");
 }
 
@@ -1240,15 +1321,7 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     //
     // Assert
     //
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "content-type",
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-
-    assert_eq!(res.status(), 500);
-    assert_eq!(res.headers(), &headers);
+    assert_eq!((res.status(), res.headers().clone()), fail_plain(500));
     assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidJSONStructure");
 }
 
@@ -1286,15 +1359,7 @@ async fn test_post_create_receipt_asset_tx_user_failure() {
     //
     // Assert
     //
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "content-type",
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-
-    assert_eq!(res.status(), 500);
-    assert_eq!(res.headers(), &headers);
+    assert_eq!((res.status(), res.headers().clone()), fail_plain(500));
     assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidJSONStructure");
 }
 
@@ -1371,20 +1436,12 @@ async fn test_post_change_passphrase_failure() {
     //
     // Assert
     //
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "content-type",
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-
     assert!(
         matches!(actual, Err(WalletDbError::PassphraseError)),
         "{:?}",
         actual
     );
-    assert_eq!(res.status(), 500);
-    assert_eq!(res.headers(), &headers);
+    assert_eq!((res.status(), res.headers().clone()), fail_plain(500));
     assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidPassphrase");
 }
 

@@ -52,7 +52,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     // Warp API
     let warp_handle = tokio::spawn({
-        let (api_addr, api_tls, peer) = api_inputs;
+        let (api_addr, api_tls, api_keys, peer) = api_inputs;
         let threaded_calls_tx = threaded_calls_tx;
 
         println!("Warp API started on port {:?}", api_addr.port());
@@ -62,7 +62,11 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         bind_address.set_port(api_addr.port());
 
         async move {
-            let serve = warp::serve(routes::compute_node_routes(threaded_calls_tx, peer));
+            let serve = warp::serve(routes::compute_node_routes(
+                api_keys,
+                threaded_calls_tx,
+                peer,
+            ));
             if let Some(api_tls) = api_tls {
                 serve
                     .tls()
@@ -129,6 +133,12 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("api_config")
+                .long("api_config")
+                .help("Use file to provide api configuration options.")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("api_port")
                 .long("api_port")
                 .help("The port to run the http API from")
@@ -174,9 +184,15 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     let tls_setting_file = matches
         .value_of("tls_config")
         .unwrap_or("src/bin/tls_certificates.json");
+    let api_setting_file = matches
+        .value_of("api_config")
+        .unwrap_or("src/bin/api_config.json");
 
     settings
         .set_default("sanction_list", Vec::<String>::new())
+        .unwrap();
+    settings
+        .set_default("api_keys", Vec::<String>::new())
         .unwrap();
     settings.set_default("compute_api_port", 3002).unwrap();
     settings.set_default("compute_api_use_tls", true).unwrap();
@@ -198,6 +214,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .unwrap();
     settings
         .merge(config::File::with_name(tls_setting_file))
+        .unwrap();
+    settings
+        .merge(config::File::with_name(api_setting_file))
         .unwrap();
 
     if let Some(port) = matches.value_of("api_port") {

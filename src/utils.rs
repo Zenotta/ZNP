@@ -22,19 +22,21 @@ use naom::utils::transaction_utils::{
 };
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio::time::Instant;
 use tracing::{trace, warn};
 
+pub type ApiKeys = Arc<Mutex<HashSet<String>>>;
 pub type LocalEventSender = MpscTracingSender<LocalEvent>;
 pub type LocalEventReceiver = mpsc::Receiver<LocalEvent>;
 
@@ -987,4 +989,9 @@ pub fn create_receipt_asset_tx_from_sig(
     };
 
     Ok(construct_tx_core(vec![tx_in], vec![tx_out]))
+}
+
+/// Confert to ApiKeys data structure
+pub fn to_api_keys(api_keys: Vec<String>) -> ApiKeys {
+    Arc::new(Mutex::new(api_keys.into_iter().collect()))
 }

@@ -14,8 +14,8 @@ use crate::raft::RaftCommit;
 use crate::storage_fetch::{FetchStatus, FetchedBlockChain, StorageFetch};
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::{
-    concat_merkle_coinbase, get_genesis_tx_in_display, validate_pow_block, LocalEvent,
-    LocalEventChannel, LocalEventSender, ResponseResult,
+    concat_merkle_coinbase, get_genesis_tx_in_display, to_api_keys, validate_pow_block, ApiKeys,
+    LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -123,7 +123,7 @@ pub struct StorageNode {
     db: Arc<Mutex<SimpleDb>>,
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
-    api_info: (SocketAddr, Option<TlsPrivateInfo>),
+    api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys),
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
     blockchain_item_fetched: Option<(String, BlockchainItem, SocketAddr)>,
@@ -154,6 +154,7 @@ impl StorageNode {
         let api_tls_info = config
             .storage_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
+        let api_keys = to_api_keys(config.api_keys.clone());
 
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
@@ -178,7 +179,7 @@ impl StorageNode {
             node_raft,
             catchup_fetch,
             db,
-            api_info: (api_addr, api_tls_info),
+            api_info: (api_addr, api_tls_info, api_keys),
             local_events: Default::default(),
             compute_addr,
             whitelisted: Default::default(),
@@ -194,9 +195,16 @@ impl StorageNode {
     }
 
     /// Returns the storage node's API info
-    pub fn api_inputs(&self) -> (Arc<Mutex<SimpleDb>>, SocketAddr, Option<TlsPrivateInfo>) {
-        let (api_addr, api_tls) = self.api_info.clone();
-        (self.db.clone(), api_addr, api_tls)
+    pub fn api_inputs(
+        &self,
+    ) -> (
+        Arc<Mutex<SimpleDb>>,
+        SocketAddr,
+        Option<TlsPrivateInfo>,
+        ApiKeys,
+    ) {
+        let (api_addr, api_tls, api_keys) = self.api_info.clone();
+        (self.db.clone(), api_addr, api_tls, api_keys)
     }
 
     ///Adds a uses data as the payload to create a frame, from the peer address, in the node object of this class.

@@ -1342,6 +1342,7 @@ mod test {
             compute_node_idx: 0,
             compute_db_mode: DbMode::InMemory,
             tls_config: Default::default(),
+            api_keys: Default::default(),
             compute_nodes: vec![compute_node],
             storage_nodes: vec![],
             user_nodes: vec![],
