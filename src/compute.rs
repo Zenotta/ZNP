@@ -14,9 +14,9 @@ use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
     concat_merkle_coinbase, create_receipt_asset_tx_from_sig, format_parition_pow_address,
-    generate_pow_random_num, get_partition_entry_key, serialize_hashblock_for_pow,
-    validate_pow_block, validate_pow_for_address, LocalEvent, LocalEventChannel, LocalEventSender,
-    ResponseResult,
+    generate_pow_random_num, get_partition_entry_key, serialize_hashblock_for_pow, to_api_keys,
+    validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
+    LocalEventSender, ResponseResult,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
@@ -137,7 +137,7 @@ pub struct ComputeNode {
     coordiated_shudown: u64,
     shutdown_group: BTreeSet<SocketAddr>,
     fetched_utxo_set: Option<(SocketAddr, UtxoSet)>,
-    api_info: (SocketAddr, Option<TlsPrivateInfo>, Node),
+    api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, Node),
 }
 
 impl ComputeNode {
@@ -172,7 +172,8 @@ impl ComputeNode {
             raft_peers.chain(storage).collect()
         };
 
-        let api_info = (api_addr, api_tls_info, node.clone());
+        let api_keys = to_api_keys(config.api_keys.clone());
+        let api_info = (api_addr, api_tls_info, api_keys, node.clone());
 
         Ok(ComputeNode {
             node,
@@ -295,7 +296,7 @@ impl ComputeNode {
     }
 
     /// Info needed to run the API point.
-    pub fn api_inputs(&self) -> (SocketAddr, Option<TlsPrivateInfo>, Node) {
+    pub fn api_inputs(&self) -> (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, Node) {
         self.api_info.clone()
     }
 

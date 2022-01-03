@@ -67,3 +67,8 @@ impl warp::reject::Reject for ErrorNoDataFoundForKey {}
 #[derive(Debug)]
 pub struct InternalError;
 impl warp::reject::Reject for InternalError {}
+
+/// API error for Unauthorized requests.
+#[derive(Debug)]
+pub struct Unauthorized;
+impl warp::reject::Reject for Unauthorized {}

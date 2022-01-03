@@ -8,7 +8,7 @@ use crate::interfaces::{
 };
 use crate::utils::{
     self, concat_merkle_coinbase, format_parition_pow_address, generate_pow_nonce,
-    get_paiments_for_wallet, get_partition_entry_key, validate_pow_block,
+    get_paiments_for_wallet, get_partition_entry_key, to_api_keys, validate_pow_block, ApiKeys,
     DeserializedBlockchainItem, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
     RunningTaskOrResult,
 };
@@ -136,7 +136,7 @@ pub struct MinerNode {
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, SocketAddr)>,
     mining_block_task: RunningTaskOrResult<BlockPoWInfo>,
     blockchain_item_received: Option<(String, BlockchainItem, SocketAddr)>,
-    api_info: (SocketAddr, Option<TlsPrivateInfo>),
+    api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys),
 }
 
 impl MinerNode {
@@ -173,6 +173,7 @@ impl MinerNode {
         let api_tls_info = config
             .miner_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
+        let api_keys = to_api_keys(config.api_keys.clone());
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Miner).await?;
 
         Ok(MinerNode {
@@ -191,7 +192,7 @@ impl MinerNode {
             mining_partition_task: Default::default(),
             mining_block_task: Default::default(),
             blockchain_item_received: Default::default(),
-            api_info: (api_addr, api_tls_info),
+            api_info: (api_addr, api_tls_info, api_keys),
         }
         .load_local_db()
         .await?)
@@ -205,14 +206,16 @@ impl MinerNode {
         Node,
         SocketAddr,
         Option<TlsPrivateInfo>,
+        ApiKeys,
         CurrentBlockWithMutex,
     ) {
-        let (api_addr, api_tls_info) = self.api_info.clone();
+        let (api_addr, api_tls_info, api_keys) = self.api_info.clone();
         (
             self.wallet_db.clone(),
             self.node.clone(),
             api_addr,
             api_tls_info,
+            api_keys,
             self.current_block.clone(),
         )
     }

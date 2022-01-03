@@ -130,8 +130,10 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
             // User / Miner combined warp API
             let warp_handle = tokio::spawn({
-                let ((db, user_node, api_addr, api_tls), (_, miner_node, _, _, current_block)) =
-                    api_inputs;
+                let (
+                    (db, user_node, api_addr, api_tls, api_keys),
+                    (_, miner_node, _, _, _, current_block),
+                ) = api_inputs;
 
                 println!("Warp API started on port {:?}", api_addr.port());
                 println!();
@@ -141,6 +143,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
                 async move {
                     let serve = warp::serve(routes::miner_node_with_user_routes(
+                        api_keys,
                         current_block,
                         db,
                         miner_node,
@@ -180,7 +183,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         None => {
             // Miner warp API
             let warp_handle = tokio::spawn({
-                let (db, miner_node, api_addr, api_tls, current_block) = miner_api_inputs;
+                let (db, miner_node, api_addr, api_tls, api_keys, current_block) = miner_api_inputs;
 
                 println!("Warp API started on port {:?}", api_addr.port());
                 println!();
@@ -189,8 +192,12 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                 bind_address.set_port(api_addr.port());
 
                 async move {
-                    let serve =
-                        warp::serve(routes::miner_node_routes(current_block, db, miner_node));
+                    let serve = warp::serve(routes::miner_node_routes(
+                        api_keys,
+                        current_block,
+                        db,
+                        miner_node,
+                    ));
                     if let Some(api_tls) = api_tls {
                         serve
                             .tls()
@@ -239,6 +246,12 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("initial_block_config")
                 .long("initial_block_config")
                 .help("Run the compute node using the given initial block config file.")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("api_config")
+                .long("api_config")
+                .help("Use file to provide api configuration options.")
                 .takes_value(true),
         )
         .arg(
@@ -331,7 +344,13 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
     let intial_block_setting_file = matches
         .value_of("initial_block_config")
         .unwrap_or("src/bin/initial_block.json");
+    let api_setting_file = matches
+        .value_of("api_config")
+        .unwrap_or("src/bin/api_config.json");
 
+    settings
+        .set_default("api_keys", Vec::<String>::new())
+        .unwrap();
     settings.set_default("miner_node_idx", 0).unwrap();
     settings.set_default("miner_compute_node_idx", 0).unwrap();
     settings.set_default("miner_storage_node_idx", 0).unwrap();
@@ -358,6 +377,9 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
         .unwrap();
     settings
         .merge(config::File::with_name(intial_block_setting_file))
+        .unwrap();
+    settings
+        .merge(config::File::with_name(api_setting_file))
         .unwrap();
 
     if let Some(index) = matches.value_of("index") {
