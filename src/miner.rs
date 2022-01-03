@@ -8,15 +8,13 @@ use crate::interfaces::{
 };
 use crate::utils::{
     self, concat_merkle_coinbase, format_parition_pow_address, generate_pow_nonce,
-    get_paiments_for_wallet, get_partition_entry_key, to_api_keys, validate_pow_block, ApiKeys,
-    DeserializedBlockchainItem, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
-    RunningTaskOrResult,
+    get_paiments_for_wallet, to_api_keys, validate_pow_block, ApiKeys, DeserializedBlockchainItem,
+    LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::crypto::secretbox_chacha20_poly1305::Key;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block;
 use naom::primitives::transaction::Transaction;
@@ -126,11 +124,9 @@ pub struct MinerNode {
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
     storage_addr: SocketAddr,
-    partition_key: Option<Key>,
     rand_num: Vec<u8>,
     current_block: CurrentBlockWithMutex,
     last_pow: Option<ProofOfWork>,
-    partition_list: Vec<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, SocketAddr)>,
@@ -182,9 +178,7 @@ impl MinerNode {
             wallet_db,
             compute_addr,
             storage_addr,
-            partition_list: Default::default(),
             rand_num: Default::default(),
-            partition_key: None,
             current_block: Arc::new(Mutex::new(None)),
             last_pow: None,
             current_coinbase: None,
@@ -316,12 +310,6 @@ impl MinerNode {
                 if self.process_found_partition_pow().await {
                     info!("Partition Pow found and sent");
                 }
-            }
-            Ok(Response {
-                success: true,
-                reason: "Received partition list successfully",
-            }) => {
-                debug!("RECEIVED PARTITION LIST");
             }
             Ok(Response {
                 success: true,
@@ -480,7 +468,6 @@ impl MinerNode {
         match req {
             SendBlockchainItem { key, item } => Some(self.receive_blockchain_item(peer, key, item)),
             SendBlock { block, reward } => self.receive_pre_block(peer, block, reward).await,
-            SendPartitionList { p_list } => self.receive_partition_list(peer, p_list),
             SendRandomNum {
                 rnum,
                 win_coinbases,
@@ -559,34 +546,6 @@ impl MinerNode {
         Some(Response {
             success: true,
             reason: "Received random number successfully",
-        })
-    }
-
-    /// Handles the receipt of the filled partition list
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer`     - Sending peer's socket address
-    /// * `p_list`   - Vec<ProofOfWork>. Is the partition list being recieved. It is a Vec containing proof of work objects.
-    fn receive_partition_list(
-        &mut self,
-        peer: SocketAddr,
-        p_list: Vec<ProofOfWork>,
-    ) -> Option<Response> {
-        if peer != self.compute_address() {
-            return None;
-        }
-
-        let new_key = Some(get_partition_entry_key(&p_list));
-        if self.partition_key == new_key {
-            return None;
-        }
-
-        self.partition_key = new_key;
-        self.partition_list = p_list;
-        Some(Response {
-            success: true,
-            reason: "Received partition list successfully",
         })
     }
 

@@ -1,28 +1,28 @@
+use crate::block_pipeline::{MiningPipelineItem, MiningPipelineStatus, Participants};
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
-use crate::compute_raft::{CommittedItem, ComputeRaft, MiningPipelineItem, MiningPipelineStatus};
+use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::{ComputeNodeConfig, ExtraNodeParams, TlsPrivateInfo};
 use crate::constants::{DB_PATH, PEER_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
-    BlockStoredInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
-    ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlock, MinedBlockExtraInfo, NodeType,
-    ProofOfWork, Response, StorageRequest, UserRequest, UtxoFetchType, UtxoSet, WinningPoWInfo,
+    BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
+    ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlock,
+    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest,
+    UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
 use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
-use crate::unicorn::Unicorn;
 use crate::utils::{
     concat_merkle_coinbase, create_receipt_asset_tx_from_sig, format_parition_pow_address,
-    generate_pow_random_num, get_partition_entry_key, serialize_hashblock_for_pow, to_api_keys,
-    validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
-    LocalEventSender, ResponseResult,
+    generate_pow_random_num, serialize_hashblock_for_pow, to_api_keys, validate_pow_block,
+    validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender,
+    ResponseResult,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::crypto::secretbox_chacha20_poly1305::Key;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::utils::druid_utils::druid_expectations_are_met;
@@ -43,6 +43,7 @@ use tracing_futures::Instrument;
 /// Key for local miner list
 pub const REQUEST_LIST_KEY: &str = "RequestListKey";
 pub const USER_NOTIFY_LIST_KEY: &str = "UserNotifyListKey";
+pub const POW_RANDOM_NUM_KEY: &str = "PowRandomNumKey";
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 
 /// Database columns
@@ -117,9 +118,6 @@ pub struct ComputeNode {
     current_mined_block: Option<MinedBlock>,
     druid_pool: DruidPool,
     current_random_num: Vec<u8>,
-    partition_key: Option<Key>,
-    partition_list: (Vec<ProofOfWork>, BTreeSet<SocketAddr>),
-    winning_pow_entries: BTreeMap<SocketAddr, WinningPoWInfo>,
     partition_full_size: usize,
     request_list: BTreeSet<SocketAddr>,
     request_list_first_flood: Option<usize>,
@@ -175,15 +173,12 @@ impl ComputeNode {
             threaded_calls: Default::default(),
             current_mined_block: None,
             druid_pool: Default::default(),
-            current_random_num: generate_pow_random_num(),
+            current_random_num: Default::default(),
             request_list: Default::default(),
             sanction_list: config.sanction_list,
             jurisdiction: config.jurisdiction,
             request_list_first_flood: Some(config.compute_minimum_miner_pool_len),
             partition_full_size: config.compute_partition_full_size,
-            partition_list: Default::default(),
-            winning_pow_entries: Default::default(),
-            partition_key: None,
             storage_addr,
             user_notification_list: Default::default(),
             coordinated_shutdown: u64::MAX,
@@ -204,6 +199,7 @@ impl ComputeNode {
         &self.current_mined_block
     }
 
+    /// Injects a new event into compute node
     pub fn inject_next_event(
         &self,
         from_peer_addr: SocketAddr,
@@ -225,10 +221,8 @@ impl ComputeNode {
     }
 
     /// Send initial requests:
-    /// - Request storage to resend trigger message
+    /// - None
     pub async fn send_startup_requests(&mut self) -> Result<()> {
-        info!("Sending startup requests: Sending mined block to storage or requesting retrigger");
-        self.send_block_to_storage_or_request_retrigger().await;
         Ok(())
     }
 
@@ -279,14 +273,6 @@ impl ComputeNode {
         self.node_raft.close_raft_loop().await
     }
 
-    /// Request storage to resend trigger messages
-    pub async fn request_storage_retrigger(&mut self) -> Result<()> {
-        self.node
-            .send(self.storage_addr, StorageRequest::RequestRetrigger)
-            .await?;
-        Ok(())
-    }
-
     /// Extract persistent dbs
     pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
         let raft_db = self.node_raft.take_closed_persistent_store().await;
@@ -319,7 +305,7 @@ impl ComputeNode {
                     reason: "Transaction added to corresponding DRUID droplets",
                 };
 
-                // If we haven't seen this DRUID yet
+            // If we haven't seen this DRUID yet
             } else {
                 let mut droplet = DruidDroplet {
                     participants: druid_info.participants,
@@ -385,65 +371,9 @@ impl ComputeNode {
         self.node_raft.get_mining_block()
     }
 
-    /// Get the current UNiCORN
-    pub fn get_current_unicorn(&self) -> Unicorn {
-        self.node_raft.get_current_unicorn()
-    }
-
-    /// Get the current winning miner
-    pub fn get_winning_miner(&self) -> Option<(SocketAddr, WinningPoWInfo)> {
-        self.node_raft.get_winning_miner()
-    }
-
-    /// Get the current mining pipeline status
-    pub fn get_mining_pipeline_status(&self) -> &MiningPipelineStatus {
-        self.node_raft.get_mining_pipeline_status()
-    }
-
-    /// Construct unicorn value to use
-    pub fn construct_unicorn_value(&mut self) {
-        self.node_raft.construct_unicorn_value()
-    }
-
     /// Get mining participants selected
-    pub fn get_mining_participants(&self) -> &Vec<SocketAddr> {
+    pub fn get_mining_participants(&self) -> &Participants {
         self.node_raft.get_mining_participants()
-    }
-
-    /// Sends the block to storage if `current_mined_block` has a `Some` value
-    /// If `current_mined_block` is `None`, request retrigger message from storage node
-    pub async fn send_block_to_storage_or_request_retrigger(&mut self) {
-        if self.current_mined_block.is_some() {
-            info!("Send block to storage");
-            debug!("CURRENT MINED BLOCK: {:?}", self.current_mined_block);
-            if let Err(e) = self.send_block_to_storage().await {
-                error!("Block not sent to storage {:?}", e);
-            }
-        } else {
-            // No block to send, request retrigger message from storage
-            info!("Request retrigger from storage");
-            if let Err(e) = self.request_storage_retrigger().await {
-                error!("Unable to request retrigger message from storage: {:?}", e);
-            }
-        }
-    }
-
-    /// Filter out the allowed participants from the partition list.
-    ///
-    /// This happens after the mining pipeline has selected the subset of participating miners.
-    pub fn filter_partition_list(&mut self) {
-        info!("Filtering partition list");
-        let allowed_participants = self.node_raft.get_mining_participants();
-        let current_participants = self.partition_list.1.clone();
-        let current_pow_entries = self.partition_list.0.clone();
-        let filtered_participants: (Vec<_>, BTreeSet<_>) = current_participants
-            .iter()
-            .zip(current_pow_entries.iter())
-            .filter(|(participant, _)| allowed_participants.contains(participant))
-            .map(|(participant, pow)| (pow.clone(), *participant))
-            .unzip();
-        self.partition_list = filtered_participants;
-        self.partition_key = Some(get_partition_entry_key(&self.partition_list.0));
     }
 
     ///Returns last generated block number from the node_raft
@@ -451,16 +381,20 @@ impl ComputeNode {
         self.node_raft.get_committed_current_block_num()
     }
 
-    /// Sets the commited mining block to the given block and transaction BTreeMap
+    /// Process block generation in single step (Test only)
     /// ### Arguments
-    /// * `block`  - Block to be set to commited mining block
+    /// * `block`    - Block to be set to commited mining block
     /// * `block_tx` - BTreeMap of the block transactions
-    pub fn set_committed_mining_block(
-        &mut self,
-        block: Block,
-        block_tx: BTreeMap<String, Transaction>,
-    ) {
-        self.node_raft.set_committed_mining_block(block, block_tx);
+    pub fn test_skip_block_gen(&mut self, block: Block, block_tx: BTreeMap<String, Transaction>) {
+        self.node_raft.test_skip_block_gen(block, block_tx)
+    }
+
+    /// Process all the mining phase in a single step (Test only)
+    /// ### Arguments
+    /// * `winning_pow`    - Address nad PoW for the winner to use
+    pub fn test_skip_mining(&mut self, winning_pow: (SocketAddr, WinningPoWInfo)) {
+        self.node_raft.test_skip_mining(winning_pow);
+        self.mining_block_mined();
     }
 
     /// Gets a decremented socket address of peer for storage
@@ -503,35 +437,11 @@ impl ComputeNode {
 
     /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
-        let mined_block = self.current_mined_block.clone().unwrap();
+        let mined_block = self.current_mined_block.clone();
         self.node
             .send(self.storage_addr, StorageRequest::SendBlock { mined_block })
             .await?;
         Ok(())
-    }
-
-    /// Sets the current mined block
-    pub fn set_mining_block_mined(
-        &mut self,
-        winning_pow: WinningPoWInfo,
-        block: Block,
-        block_txs: BTreeMap<String, Transaction>,
-    ) {
-        let cb_hash = construct_tx_hash(&winning_pow.coinbase);
-        let extra_info = MinedBlockExtraInfo {
-            nonce: winning_pow.nonce,
-            mining_tx: (cb_hash, winning_pow.coinbase),
-            p_value: winning_pow.p_value,
-            d_value: winning_pow.d_value,
-            shutdown: self.coordinated_shutdown <= block.header.b_num,
-            m_witness: Default::default(),
-            unicorn: self.node_raft.get_current_unicorn(),
-        };
-        self.current_mined_block = Some(MinedBlock {
-            block,
-            block_txs,
-            extra_info,
-        });
     }
 
     /// Floods all peers with a PoW for UnicornShard creation
@@ -614,7 +524,6 @@ impl ComputeNode {
                 success: true,
                 reason: "Winning PoW intake open",
             }) => {
-                self.flood_list_to_partition().await.unwrap();
                 self.flood_block_to_partition().await.unwrap();
                 self.flood_block_to_users().await.unwrap();
             }
@@ -622,7 +531,11 @@ impl ComputeNode {
                 success: true,
                 reason: "Pipeline halted",
             }) => {
-                self.send_block_to_storage_or_request_retrigger().await;
+                info!("Send Block to storage");
+                debug!("CURRENT MINED BLOCK: {:?}", self.current_mined_block);
+                if let Err(e) = self.send_block_to_storage().await {
+                    error!("Block not sent to storage {:?}", e);
+                }
             }
             Ok(Response {
                 success: true,
@@ -679,11 +592,7 @@ impl ComputeNode {
             }) => {}
             Ok(Response {
                 success: false,
-                reason: "Partition list is already full",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Failed to add partition entry",
+                reason: "Partition list complete",
             }) => {}
             Ok(Response {
                 success: false,
@@ -755,8 +664,10 @@ impl ComputeNode {
                 }
                 _ = self.node_raft.timeout_propose_mining_event(), if ready && !shutdown => {
                     trace!("handle_next_event timeout mining pipeline");
-                    self.node_raft.propose_next_mining_event_timeout().await;
-                    self.handle_next_pipeline_stage().await;
+                    if !self.node_raft.propose_mining_event_at_timeout().await {
+                        self.node_raft.re_propose_uncommitted_current_b_num().await;
+                        self.resend_trigger_message().await;
+                    }
                 }
                 Some(event) = self.local_events.rx.recv(), if ready => {
                     if let Some(res) = self.handle_local_event(event) {
@@ -774,32 +685,6 @@ impl ComputeNode {
         }
     }
 
-    /// Handle the next mining pipeline stage as a response to mining event timeout.
-    ///
-    /// If no retrigger messages are required, the next pipeline stage will be proposed.
-    async fn handle_next_pipeline_stage(&mut self) {
-        let current_pipeline_status = self.node_raft.get_mining_pipeline_status().clone();
-        match current_pipeline_status {
-            MiningPipelineStatus::ParticipantIntake | MiningPipelineStatus::WinningPoWIntake => {
-                let new_pipeline_status = {
-                    if current_pipeline_status == MiningPipelineStatus::ParticipantIntake {
-                        MiningPipelineStatus::WinningPoWIntake
-                    } else {
-                        MiningPipelineStatus::Halted
-                    }
-                };
-                if !self.resend_trigger_message(current_pipeline_status).await {
-                    self.node_raft
-                        .propose_mining_pipeline_status(new_pipeline_status, None)
-                        .await;
-                }
-            }
-            MiningPipelineStatus::Halted => {
-                self.resend_trigger_message(current_pipeline_status).await;
-            }
-        }
-    }
-
     /// Handle commit data
     ///
     /// ### Arguments
@@ -808,8 +693,6 @@ impl ComputeNode {
     async fn handle_committed_data(&mut self, commit_data: RaftCommit) -> Option<Result<Response>> {
         match self.node_raft.received_commit(commit_data).await {
             Some(CommittedItem::FirstBlock) => {
-                self.node_raft.generate_first_block();
-                self.node_raft.event_processed_generate_snapshot();
                 self.reset_mining_block_process();
                 Some(Ok(Response {
                     success: true,
@@ -817,23 +700,30 @@ impl ComputeNode {
                 }))
             }
             Some(CommittedItem::Block) => {
-                let reason = if self.node_raft.is_shutdown_on_commit() {
-                    "Block shutdown"
-                } else {
-                    self.node_raft.generate_block().await;
-                    "Block committed"
-                };
-                self.node_raft.event_processed_generate_snapshot();
                 self.reset_mining_block_process();
                 Some(Ok(Response {
                     success: true,
-                    reason,
+                    reason: "Block committed",
                 }))
             }
-            Some(CommittedItem::Snapshot) => Some(Ok(Response {
+            Some(CommittedItem::BlockShutdown) => {
+                self.reset_mining_block_process();
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Block shutdown",
+                }))
+            }
+            Some(CommittedItem::StartPhasePowIntake) => Some(Ok(Response {
                 success: true,
-                reason: "Snapshot applied",
+                reason: "Winning PoW intake open",
             })),
+            Some(CommittedItem::StartPhaseHalted) => {
+                self.mining_block_mined();
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Pipeline halted",
+                }))
+            }
             Some(CommittedItem::Transactions) => {
                 delete_local_transactions(
                     &mut self.db,
@@ -844,36 +734,10 @@ impl ComputeNode {
                     reason: "Transactions committed",
                 }))
             }
-            Some(CommittedItem::PipelineStatus(new_pipeline_status)) => match new_pipeline_status {
-                MiningPipelineStatus::WinningPoWIntake => {
-                    self.filter_partition_list();
-                    Some(Ok(Response {
-                        success: true,
-                        reason: "Winning PoW intake open",
-                    }))
-                }
-                MiningPipelineStatus::Halted => {
-                    if let (Some((_, info)), Some((block, block_txs))) = (
-                        self.node_raft.get_winning_miner(),
-                        self.node_raft.take_mining_block(),
-                    ) {
-                        self.set_mining_block_mined(info, block, block_txs);
-                    }
-                    Some(Ok(Response {
-                        success: true,
-                        reason: "Pipeline halted",
-                    }))
-                }
-                _ => None,
-            },
-            Some(CommittedItem::PipelineError(current_pipeline_status)) => {
-                error!(
-                    "Pipeline error on: {:?}; Resending trigger message",
-                    current_pipeline_status
-                );
-                self.resend_trigger_message(current_pipeline_status).await;
-                None
-            }
+            Some(CommittedItem::Snapshot) => Some(Ok(Response {
+                success: true,
+                reason: "Snapshot applied",
+            })),
             None => None,
         }
     }
@@ -1092,40 +956,30 @@ impl ComputeNode {
         peer: SocketAddr,
         partition_entry: ProofOfWork,
     ) -> Response {
+        if self.node_raft.get_mining_pipeline_status() != &MiningPipelineStatus::ParticipantIntake {
+            return Response {
+                success: false,
+                reason: "Partition list complete",
+            };
+        }
+
         let valid_pow = format_parition_pow_address(peer) == partition_entry.address
             && validate_pow_for_address(&partition_entry, &Some(&self.current_random_num));
 
-        match valid_pow {
-            true => {
-                if self.partition_list.0.len() >= self.partition_full_size {
-                    Response {
-                        success: false,
-                        reason: "Partition list is already full",
-                    }
-                } else if self.partition_list.1.insert(peer) {
-                    self.partition_list.0.push(partition_entry);
-                    self.partition_key = Some(get_partition_entry_key(&self.partition_list.0));
-
-                    // Propose the received partition entry to the block pipeline
-                    self.node_raft
-                        .propose_mining_pipeline_item(MiningPipelineItem::MiningParticipant(peer))
-                        .await;
-
-                    Response {
-                        success: true,
-                        reason: "Partition PoW received successfully",
-                    }
-                } else {
-                    Response {
-                        success: false,
-                        reason: "Failed to add partition entry",
-                    }
-                }
-            }
-            false => Response {
+        if !valid_pow {
+            return Response {
                 success: false,
                 reason: "PoW received is invalid",
-            },
+            };
+        }
+
+        self.node_raft
+            .propose_mining_pipeline_item(MiningPipelineItem::MiningParticipant(peer))
+            .await;
+
+        Response {
+            success: true,
+            reason: "Partition PoW received successfully",
         }
     }
 
@@ -1197,7 +1051,7 @@ impl ComputeNode {
 
         self.node
             .send_to_all(
-                self.partition_list.1.iter().copied(),
+                self.node_raft.get_mining_participants_iter(),
                 MineRequest::SendBlock {
                     block,
                     reward: *reward,
@@ -1216,7 +1070,7 @@ impl ComputeNode {
 
         self.node
             .send_to_all(
-                self.partition_list.1.iter().copied(),
+                self.node_raft.get_mining_participants_iter(),
                 MineRequest::SendTransactions {
                     tx_merkle_verification,
                 },
@@ -1242,41 +1096,42 @@ impl ComputeNode {
         Ok(())
     }
 
-    /// Floods all peers with the full partition list
-    pub async fn flood_list_to_partition(&mut self) -> Result<()> {
-        self.node
-            .send_to_all(
-                self.partition_list.1.iter().copied(),
-                MineRequest::SendPartitionList {
-                    p_list: self.partition_list.0.clone(),
-                },
-            )
-            .await
-            .unwrap();
-        Ok(())
+    /// Logs the winner of the block and changes the current block to a new block to be mined
+    pub fn mining_block_mined(&mut self) {
+        let (block, block_txs) = self.node_raft.take_mining_block().unwrap();
+        let (_, winning_pow) = self.node_raft.get_winning_miner().clone().unwrap();
+        let unicorn = self.node_raft.get_current_unicorn().clone();
+
+        let extra_info = MinedBlockExtraInfo {
+            shutdown: self.coordinated_shutdown <= block.header.b_num,
+        };
+        let pow = WinningPoWInfo {
+            nonce: winning_pow.nonce,
+            mining_tx: winning_pow.mining_tx,
+            p_value: winning_pow.p_value,
+            d_value: winning_pow.d_value,
+        };
+        let common = CommonBlockInfo {
+            block,
+            block_txs,
+            pow,
+            unicorn: unicorn.unicorn,
+            unicorn_witness: unicorn.witness,
+        };
+        self.current_mined_block = Some(MinedBlock { common, extra_info });
     }
 
     /// Reset the mining block processing to allow a new block.
     fn reset_mining_block_process(&mut self) {
         self.current_random_num = generate_pow_random_num();
-        self.partition_list = Default::default();
-        self.partition_key = None;
+        self.db
+            .put_cf(
+                DB_COL_INTERNAL,
+                POW_RANDOM_NUM_KEY,
+                &self.current_random_num,
+            )
+            .unwrap();
         self.current_mined_block = None;
-        self.winning_pow_entries = Default::default();
-    }
-
-    /// Determine if the current compute node is disconnected from the RAFT
-    pub async fn is_disconnected_from_raft(&mut self) -> bool {
-        let expected_peers_count = self.node_raft.raft_peer_addrs().count();
-        let disconnected_peers_count = self.get_disconnected_peers().await.len();
-        expected_peers_count == disconnected_peers_count
-    }
-
-    /// Get a list of all disconnected peers
-    pub async fn get_disconnected_peers(&mut self) -> Vec<SocketAddr> {
-        let expected_peers: Vec<_> = self.node_raft.raft_peer_addrs().copied().collect();
-
-        self.node.unconnected_peers(&expected_peers).await
     }
 
     /// Load and apply the local database to our state
@@ -1305,6 +1160,22 @@ impl ComputeNode {
             }
             Ok(None) => self.user_notification_list,
             Err(e) => panic!("Error accessing db: {:?}", e),
+        };
+
+        self.current_random_num = {
+            let current_random_num = match self.db.get_cf(DB_COL_INTERNAL, POW_RANDOM_NUM_KEY) {
+                Ok(Some(num)) => num,
+                Ok(None) => generate_pow_random_num(),
+                Err(e) => panic!("Error accessing db: {:?}", e),
+            };
+            debug!("load_local_db: current_random_num {:?}", current_random_num);
+            if let Err(e) = self
+                .db
+                .put_cf(DB_COL_INTERNAL, POW_RANDOM_NUM_KEY, &current_random_num)
+            {
+                panic!("Error accessing db: {:?}", e);
+            }
+            current_random_num
         };
 
         self.node_raft.set_key_run({
@@ -1344,12 +1215,9 @@ impl ComputeNode {
         nonce: Vec<u8>,
         coinbase: Transaction,
     ) -> Response {
-        let pow_mining_block = self
-            .node_raft
-            .get_mining_block()
-            .as_ref()
+        let pow_mining_block = (self.node_raft.get_mining_block().as_ref())
             .filter(|b| block_num == b.header.b_num)
-            .filter(|_| self.partition_list.1.contains(&address));
+            .filter(|_| self.node_raft.get_mining_participants().contains(&address));
 
         // Check if expected block
         let block_to_check = if let Some(mining_block) = pow_mining_block {
@@ -1392,17 +1260,14 @@ impl ComputeNode {
         // TODO: D and P will need to change with keccak prime intro
         let pow_info = WinningPoWInfo {
             nonce,
-            coinbase,
+            mining_tx: (coinbase_hash, coinbase),
             d_value: 0,
             p_value: 0,
         };
 
-        // Add winning PoW entry to local pool
-        self.winning_pow_entries.insert(address, pow_info.clone());
-
         // Propose the received PoW to the block pipeline
         self.node_raft
-            .propose_mining_pipeline_item(MiningPipelineItem::WinningPoW((address, pow_info)))
+            .propose_mining_pipeline_item(MiningPipelineItem::WinningPoW(address, pow_info))
             .await;
 
         Response {
@@ -1429,25 +1294,12 @@ impl ComputeNode {
             });
         }
 
-        let b_num = previous_block_info.block_num;
-        let committed_current_block_num = self.node_raft.get_committed_current_block_num();
-
         if !self
             .node_raft
             .propose_block_with_last_info(previous_block_info)
             .await
         {
-            if committed_current_block_num == Some(b_num + 1) {
-                // Block to mine and block stored are out of sync.
-                self.node_raft
-                    .propose_mining_pipeline_status(
-                        MiningPipelineStatus::ParticipantIntake,
-                        committed_current_block_num,
-                    )
-                    .await;
-            } else {
-                self.node_raft.re_propose_uncommitted_current_b_num().await;
-            }
+            self.node_raft.re_propose_uncommitted_current_b_num().await;
             return None;
         }
 
@@ -1455,6 +1307,30 @@ impl ComputeNode {
             success: true,
             reason: "Received block stored",
         })
+    }
+
+    /// Re-sends messages triggering the next step in flow
+    pub async fn resend_trigger_message(&mut self) {
+        match self.node_raft.get_mining_pipeline_status().clone() {
+            MiningPipelineStatus::Halted => {
+                info!("Resend block to storage");
+                if let Err(e) = self.send_block_to_storage().await {
+                    error!("Resend block to storage failed {:?}", e);
+                }
+            }
+            MiningPipelineStatus::ParticipantIntake => {
+                info!("Resend partition random number to miners");
+                if let Err(e) = self.flood_rand_num_to_requesters().await {
+                    error!("Resend partition random number to miners failed {:?}", e);
+                }
+            }
+            MiningPipelineStatus::WinningPoWIntake => {
+                info!("Resend block to partition miners");
+                if let Err(e) = self.flood_block_to_partition().await {
+                    error!("Resend block to partition miners failed {:?}", e);
+                }
+            }
+        }
     }
 
     /// Create a receipt asset transaction from data received
@@ -1491,33 +1367,6 @@ impl ComputeNode {
     /// Get `Node` member
     pub fn get_node(&self) -> &Node {
         &self.node
-    }
-
-    /// Re-sends messages triggering the next step in flow
-    ///
-    /// Will return `false` if no trigger messages were required
-    pub async fn resend_trigger_message(&mut self, pipeline_status: MiningPipelineStatus) -> bool {
-        match pipeline_status {
-            MiningPipelineStatus::ParticipantIntake => {
-                if !self.partition_list.1.is_empty() {
-                    return false;
-                }
-                info!("Resend partition random number to miners");
-                self.flood_rand_num_to_requesters().await.unwrap();
-            }
-            MiningPipelineStatus::WinningPoWIntake => {
-                if !self.winning_pow_entries.is_empty() {
-                    return false;
-                }
-                info!("Resend partition list and block to partition miners");
-                self.flood_list_to_partition().await.unwrap();
-                self.flood_block_to_partition().await.unwrap();
-            }
-            MiningPipelineStatus::Halted => {
-                self.send_block_to_storage_or_request_retrigger().await;
-            }
-        }
-        true
     }
 }
 

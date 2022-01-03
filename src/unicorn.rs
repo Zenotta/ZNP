@@ -1,9 +1,9 @@
-//! Implementation of a UNiCORN process, as per Lenstra and Wesolowski's "Random Zoo"
+//! Implementation of a UNICORN process, as per Lenstra and Wesolowski's "Random Zoo"
 //! paper (https://eprint.iacr.org/2015/366.pdf). The eval-verify processes use modular
 //! square root (sloth) with swapped neighbours, but this particular implementation may
 //! need to be optimised in future given certain seed or modulus sizes.
 //!
-//! The goal of a UNiCORN is to provide an uncontestable randomly generated number. The source
+//! The goal of a UNICORN is to provide an uncontestable randomly generated number. The source
 //! of the uncontestability is the seed, which is meant to be generated from multiple, random
 //! oracle sources (eg. tweets). In the sloth implementation the seed is then run through a
 //! function which is slow to compute but quick to verify (VDF, or Verifiable Delay Function)
@@ -11,37 +11,21 @@
 //!
 //! Although sloths have the extra ability to be slowed by a specific time length (through setting
 //! the iterations, or `l`), any function that has slow evaluation and quick verification will
-//! suffice for UNiCORN needs.
+//! suffice for UNICORN needs.
 //!
 //! Given the seed and witness values, anybody is able to verify the authenticity of the number
 //! generated.
 
 use crate::constants::MR_PRIME_ITERS;
+use crate::utils::rug_integer;
 use bincode::serialize;
 use rug::integer::IsPrime;
 use rug::Integer;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use tracing::error;
-
-/// Serialisation function for big ints
-pub fn serialize_big_int<S>(x: &Integer, s: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    s.serialize_str(&x.to_string_radix(16))
-}
-
-/// Deserialisation function for big ints
-pub fn deserialize_big_int<'de, D>(d: D) -> Result<Integer, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let buf = String::deserialize(d)?;
-    Ok(Integer::from_str_radix(&buf, 16).unwrap())
-}
 
 /// Constructs the seed for a new, ZNP-specific Unicorn
 ///
@@ -69,19 +53,53 @@ pub fn construct_seed(
     Integer::from_str_radix(&final_seed, 16).unwrap()
 }
 
-/// UNiCORN-relevant info for use on a RAFT
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+/// Constructs the ZNP-specific Unicorn
+///
+/// ### Arguments
+///
+/// * `seed`         - Result of construct_seed
+/// * `fixed_params` - UNICORN parameter to use
+pub fn construct_unicorn(seed: Integer, fixed_params: &UnicornFixedParam) -> UnicornInfo {
+    let unicorn = Unicorn {
+        seed,
+        modulus: Integer::from_str_radix(&fixed_params.modulus, 10).unwrap(),
+        iterations: fixed_params.iterations,
+        security_level: fixed_params.security,
+    };
+
+    let (w, g): (Integer, String) = match unicorn.eval() {
+        Some((w, g)) => (w, g),
+        None => panic!("UNICORN construction failed"),
+    };
+
+    UnicornInfo {
+        unicorn,
+        witness: w,
+        g_value: g,
+    }
+}
+
+/// Fixed parameters for unicorn
+#[derive(Default, Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub struct UnicornFixedParam {
+    /// UNICORN modulus number
+    pub modulus: String,
+    /// UNICORN iterations
+    pub iterations: u64,
+    /// UNICORN security level
+    pub security: u32,
+}
+
+/// UNICORN-relevant info for use on a RAFT
+#[derive(Default, Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct UnicornInfo {
     pub unicorn: Unicorn,
     pub g_value: String,
-    #[serde(
-        deserialize_with = "deserialize_big_int",
-        serialize_with = "serialize_big_int"
-    )]
+    #[serde(with = "rug_integer")]
     pub witness: Integer,
 }
 
-/// UNiCORN struct, with the following fields:
+/// UNICORN struct, with the following fields:
 ///
 /// - modulus (`p`)
 /// - iterations (`l`)
@@ -92,25 +110,14 @@ pub struct UnicornInfo {
 pub struct Unicorn {
     pub iterations: u64,
     pub security_level: u32,
-    #[serde(
-        deserialize_with = "deserialize_big_int",
-        serialize_with = "serialize_big_int"
-    )]
+    #[serde(with = "rug_integer")]
     pub seed: Integer,
-    #[serde(
-        deserialize_with = "deserialize_big_int",
-        serialize_with = "serialize_big_int"
-    )]
+    #[serde(with = "rug_integer")]
     pub modulus: Integer,
-    #[serde(
-        deserialize_with = "deserialize_big_int",
-        serialize_with = "serialize_big_int"
-    )]
-    pub witness: Integer,
 }
 
 impl Unicorn {
-    /// Sets the seed for the UNiCORN. Returns the commitment value `c`, as per
+    /// Sets the seed for the UNICORN. Returns the commitment value `c`, as per
     /// Lenstra and Wesolowski recommendations
     ///
     /// ### Arguments
@@ -137,9 +144,9 @@ impl Unicorn {
     /// - For i = 1,2,...,l in succession let wi ← τ(wi−1).
     /// - Let g ← hash(wl) and w ← wl.
     /// - Return g and w as the output and quit.
-    pub fn eval(&mut self) -> Option<(Integer, String)> {
+    pub fn eval(&self) -> Option<(Integer, String)> {
         if !self.is_valid_modulus() {
-            error!("Modulus for UNiCORN eval invalid");
+            error!("Modulus for UNICORN eval invalid");
             return None;
         }
 
@@ -154,9 +161,7 @@ impl Unicorn {
             w.pow_mod_mut(&exponent, &self.modulus).unwrap();
         }
 
-        self.witness = w.clone();
         let g = hex::encode(Sha3_256::digest(&serialize(&w.to_u64()).unwrap()));
-
         Some((w, g))
     }
 
@@ -173,7 +178,7 @@ impl Unicorn {
     ///
     /// * `seed`    - Seed to verify
     /// * `witness` - Witness value for trapdoor verification
-    pub fn verify(&mut self, seed: Integer, witness: Integer) -> bool {
+    pub fn verify(&self, seed: Integer, witness: Integer) -> bool {
         let square: Integer = 2u64.into();
         let mut w = witness;
 
@@ -187,18 +192,6 @@ impl Unicorn {
         }
 
         w == seed.div_rem_floor(self.modulus.clone()).1
-    }
-
-    /// Gets the calculated UNiCORN value, with an optional modulus division
-    ///
-    /// ### Arguments
-    ///
-    /// * `modulus` - Modulus to divide the UNiCORN by. Optional
-    pub fn get_unicorn(&self, modulus: Option<Integer>) -> Integer {
-        match modulus {
-            Some(p) => self.witness.clone().div_rem_floor(p).1,
-            None => self.witness.clone(),
-        }
     }
 
     /// Predicate for a valid modulus `p`
@@ -217,7 +210,7 @@ impl Unicorn {
     /// ### Arguments
     ///
     /// * `w` - Input to XOR
-    fn xor_for_overflow(&mut self, w: &mut Integer) {
+    fn xor_for_overflow(&self, w: &mut Integer) {
         *w ^= 1;
 
         while *w >= self.modulus || *w == 0 {
@@ -243,46 +236,50 @@ mod unicorn_tests {
             iterations: 1_000,
             security_level: 1,
             seed: Integer::from_str_radix(TEST_HASH, 16).unwrap(),
-            ..Default::default()
         }
     }
 
     #[test]
-    /// Checks that a valid unicorn can be constructed from a seed hash
-    fn should_generate_valid_unicorn() {
-        let mut uni = create_unicorn();
-        let (w, g) = uni.eval().unwrap();
+    /// Checks that a valid unicorn can be evaluated
+    fn eval_valid_unicorn() {
+        let uni = create_unicorn();
 
-        assert_eq!(w, Integer::from_str_radix(WITNESS, 10).unwrap());
+        let eval = uni.eval().unwrap();
+
         assert_eq!(
-            g,
-            "5d53469f20fef4f8eab52b88044ede69c77a6a68a60728609fc4a65ff531e7d0"
+            eval,
+            (
+                Integer::from_str_radix(WITNESS, 10).unwrap(),
+                "5d53469f20fef4f8eab52b88044ede69c77a6a68a60728609fc4a65ff531e7d0".to_string()
+            )
         );
-        assert!(uni.verify(
-            Integer::from_str_radix(TEST_HASH, 16).unwrap(),
-            Integer::from_str_radix(WITNESS, 10).unwrap()
-        ));
-        assert_eq!(uni.get_unicorn(Some(Integer::from(20))), Integer::from(7));
     }
 
     #[test]
-    /// Checks that an invalid unicorn is failed
-    fn should_fail_invalid_unicorn() {
-        let mut uni = create_unicorn();
-        let _ = uni.eval();
-
-        assert!(!uni.verify(
-            Integer::from_str_radix(TEST_HASH, 16).unwrap(),
-            Integer::from(8)
-        ));
-    }
-
-    #[test]
-    /// Checks that an invalid modulus is returned None
-    fn should_fail_invalid_modulus() {
+    /// Checks that an invalid modulus fail eval
+    fn eval_invalid_modulus_unicorn() {
         let mut uni = create_unicorn();
         uni.modulus = Integer::from(2);
 
-        assert_eq!(uni.eval(), None);
+        let eval = uni.eval();
+
+        assert_eq!(eval, None);
+    }
+
+    #[test]
+    /// Checks that unicorn is succeed only with correct witness
+    fn verify_unicorn() {
+        let uni = create_unicorn();
+
+        let good = uni.verify(
+            Integer::from_str_radix(TEST_HASH, 16).unwrap(),
+            Integer::from_str_radix(WITNESS, 10).unwrap(),
+        );
+        let bad = uni.verify(
+            Integer::from_str_radix(TEST_HASH, 16).unwrap(),
+            Integer::from(8),
+        );
+
+        assert_eq!((good, bad), (true, false));
     }
 }

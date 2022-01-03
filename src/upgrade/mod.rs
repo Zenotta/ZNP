@@ -10,7 +10,7 @@ mod tests_last_version_db;
 #[cfg(test)]
 mod tests_last_version_db_no_block;
 
-use crate::configurations::{DbMode, ExtraNodeParams};
+use crate::configurations::{DbMode, ExtraNodeParams, UnicornFixedInfo};
 use crate::constants::{
     DB_PATH, DB_VERSION_KEY, FUND_KEY, NETWORK_VERSION_SERIALIZED, TX_PREPEND, WALLET_PATH,
 };
@@ -81,6 +81,8 @@ pub enum DbCfg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpgradeCfg {
     pub raft_len: usize,
+    pub compute_partition_full_size: usize,
+    pub compute_unicorn_fixed_param: UnicornFixedInfo,
     pub passphrase: String,
     pub db_cfg: DbCfg,
 }
@@ -226,7 +228,10 @@ pub fn upgrade_compute_db_batch<'a>(
             }
         }
         let consensus = compute_raft::ComputeConsensused::from_import(consensus)
-            .with_peers_len(upgrade_cfg.raft_len);
+            .with_peers_len(upgrade_cfg.raft_len)
+            .with_partition_full_size(upgrade_cfg.compute_partition_full_size)
+            .with_unicorn_fixed_param(upgrade_cfg.compute_unicorn_fixed_param.clone())
+            .init_block_pipeline_status();
 
         Ok(serialize(&consensus)?)
     })?;
@@ -246,7 +251,8 @@ pub fn upgrade_same_version_compute_db(mut dbs: ExtraNodeParams) -> Result<Extra
         if key == compute::RAFT_KEY_RUN.as_bytes() {
             batch.put_cf(compute::DB_COL_INTERNAL, key, &value);
         } else if !(key == compute::REQUEST_LIST_KEY.as_bytes()
-            || key == compute::USER_NOTIFY_LIST_KEY.as_bytes())
+            || key == compute::USER_NOTIFY_LIST_KEY.as_bytes()
+            || key == compute::POW_RANDOM_NUM_KEY.as_bytes())
         {
             let e = UpgradeError::ConfigError("Unexpected key");
             return Err(log_key_value_error(e, "Unexpected key", &key, &value));
@@ -348,7 +354,7 @@ pub fn upgrade_storage_db_batch<'a>(
 
             let all_txs = storage::all_ordered_stored_block_tx_hashes(
                 &stored_block.block.transactions,
-                &stored_block.mining_tx_hash_and_nonces,
+                stored_block.mining_tx_hash_and_nonces.values(),
             );
             let mut tx_len = 0;
             for (tx_num, tx_hash) in all_txs {

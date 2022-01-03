@@ -8,7 +8,7 @@ use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -25,7 +25,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
 pub enum StorageRaftItem {
-    ReceivedBlock(CompleteBlock),
+    PartBlock(ReceivedBlock),
 }
 
 /// Commited item to process.
@@ -35,11 +35,26 @@ pub enum CommittedItem {
     Snapshot,
 }
 
-/// Complete block with common block info as well as extra info (such as mining transaction).
+/// Mined block received.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReceivedBlock {
+    pub peer: SocketAddr,
+    pub common: CommonBlockInfo,
+    pub per_node: MinedBlockExtraInfo,
+}
+
+/// Complete block info with all mining transactions and proof of work.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompleteBlock {
     pub common: CommonBlockInfo,
     pub extra_info: MinedBlockExtraInfo,
+}
+
+/// Complete block info with all mining transactions and proof of work.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompleteBlockBuilder {
+    pub common: CommonBlockInfo,
+    pub per_node: BTreeMap<u64, MinedBlockExtraInfo>,
 }
 
 /// All fields that are consensused between the RAFT group.
@@ -50,8 +65,8 @@ pub struct StorageConsensused {
     sufficient_majority: usize,
     /// Index of the last completed block.
     current_block_num: u64,
-    /// Blocks completed with hash as key.
-    current_blocks_completed: BTreeMap<Vec<u8>, (BTreeSet<u64>, CompleteBlock)>,
+    /// Part block completed by Peer ids.
+    current_block_completed_parts: BTreeMap<Vec<u8>, CompleteBlockBuilder>,
     /// The last commited raft index.
     last_committed_raft_idx_and_term: (u64, u64),
     /// The last block stored by ours and other node in consensus.
@@ -76,8 +91,6 @@ pub struct StorageRaft {
     consensused: StorageConsensused,
     /// Whether consensused received initial snapshot
     consensused_snapshot_applied: bool,
-    // Min duration for catchup
-    catchup_timeout_duration: Duration,
     /// Proposed items in flight.
     proposed_in_flight: RaftInFlightProposals,
     /// No longer process commits after shutdown reached
@@ -107,8 +120,6 @@ impl StorageRaft {
             db_utils::new_db(config.storage_db_mode, &DB_SPEC, raft_db),
         );
 
-        let catchup_timeout_duration =
-            Duration::from_millis(config.storage_catchup_duration as u64);
         let first_raft_peer = config.storage_node_idx == 0 || !raft_active.use_raft();
         let peers_len = raft_active.peers_len();
 
@@ -119,7 +130,6 @@ impl StorageRaft {
             raft_active,
             consensused,
             consensused_snapshot_applied: !use_raft,
-            catchup_timeout_duration,
             proposed_in_flight: Default::default(),
             shutdown_no_commit_process: false,
         }
@@ -197,6 +207,7 @@ impl StorageRaft {
         } else {
             warn!("apply_snapshot called self.consensused updated");
             self.consensused = deserialize(&consensused_ser).unwrap();
+            self.set_ignore_dedeup_b_num_less_than_current();
             Some(CommittedItem::Snapshot)
         }
     }
@@ -220,10 +231,10 @@ impl StorageRaft {
 
         trace!("received_commit_proposal {:?} -> {:?}", key, item);
         match item {
-            StorageRaftItem::ReceivedBlock(block) => {
+            StorageRaftItem::PartBlock(block) => {
                 let b_num = block.common.block.header.b_num;
                 if self.consensused.is_current_block(b_num) {
-                    debug!("CompleteBlock appened ({},{:?})", b_num, key);
+                    debug!("PartBlock appened ({},{:?})", b_num, key);
                     self.consensused.append_received_block(key, block);
                 }
             }
@@ -251,14 +262,27 @@ impl StorageRaft {
         self.raft_active.received_message(msg).await
     }
 
-    /// Propose complete block from which to reach consensus
+    /// Add block to our local pool from which to propose
+    /// consensused blocks.
     ///
     /// ### Arguments
     ///
-    /// * `complete_block` - CompleteBlock info to propose
-    pub async fn propose_block(&mut self, complete_block: CompleteBlock) -> bool {
-        let b_num = complete_block.common.block.header.b_num;
-        let item = StorageRaftItem::ReceivedBlock(complete_block);
+    /// * `peer` - socket address of the sending peer
+    /// * `common` - CommonBlockInfo holding all block infomation to be stored
+    /// * `mined_info` - MinedBlockExtraInfo holding mining info to be stored
+    pub async fn propose_received_part_block(
+        &mut self,
+        peer: SocketAddr,
+        common: CommonBlockInfo,
+        mined_info: MinedBlockExtraInfo,
+    ) -> bool {
+        let b_num = common.block.header.b_num;
+        let item = StorageRaftItem::PartBlock(ReceivedBlock {
+            peer,
+            common,
+            per_node: mined_info,
+        });
+
         self.propose_item_dedup(&item, b_num).await.is_some()
     }
 
@@ -291,6 +315,8 @@ impl StorageRaft {
 
     /// Generate a snapshot, needs to happen at the end of the event processing.
     pub fn event_processed_generate_snapshot(&mut self, block_stored: BlockStoredInfo) {
+        self.set_ignore_dedeup_b_num_less_than_current();
+
         let shutdown = block_stored.shutdown;
         self.consensused.last_block_stored = Some(block_stored);
 
@@ -306,16 +332,15 @@ impl StorageRaft {
         }
     }
 
-    /// Creates and returns a complete block
-    pub fn generate_complete_block(&mut self) -> CompleteBlock {
-        let (block, b_num) = self.consensused.generate_complete_block();
-        self.proposed_in_flight.ignore_dedeup_b_num_less_than(b_num);
-        block
+    /// Ignore processing raft item out of date.
+    fn set_ignore_dedeup_b_num_less_than_current(&mut self) {
+        self.proposed_in_flight
+            .ignore_dedeup_b_num_less_than(self.consensused.current_block_num);
     }
 
-    /// The duration for propose block time out
-    pub fn propose_catchup_timeout_duration(&self) -> Duration {
-        self.catchup_timeout_duration
+    /// Creates and returns a complete block
+    pub fn generate_complete_block(&mut self) -> CompleteBlock {
+        self.consensused.generate_complete_block()
     }
 
     /// Get the last block stored info to send to the compute nodes
@@ -348,7 +373,7 @@ impl StorageConsensused {
         Self {
             sufficient_majority,
             current_block_num,
-            current_blocks_completed: Default::default(),
+            current_block_completed_parts: Default::default(),
             last_committed_raft_idx_and_term,
             last_block_stored,
         }
@@ -378,52 +403,53 @@ impl StorageConsensused {
     ///
     pub fn has_block_ready_to_store(&self) -> bool {
         let completed_blocks_len = self
-            .current_blocks_completed
+            .current_block_completed_parts
             .values()
-            .map(|v| v.0.len())
+            .map(|v| v.per_node.len())
             .max()
             .unwrap_or(0);
-
-        if self.current_blocks_completed.len() > 1 {
-            let different_block_proposals: Vec<CompleteBlock> = self
-                .current_blocks_completed
-                .values()
-                .map(|(_, block)| block.clone())
-                .collect();
-            warn!("Different block proposals: {:?}", different_block_proposals);
-        }
 
         completed_blocks_len >= self.sufficient_majority
     }
 
-    ///Appends a RecievedBlock into the current_blocks_completed
+    ///Appends a RecievedBlock into the current_block_completed_parts
     ///
     /// ### Arguments
     ///
     /// * `key`   - Key containing the proposer_id to be appended.
     /// * `block` - RecievedBlock object that is being appended.
-    pub fn append_received_block(&mut self, key: RaftContextKey, block: CompleteBlock) {
-        let block_ser = serialize(&block).unwrap();
+    pub fn append_received_block(&mut self, key: RaftContextKey, block: ReceivedBlock) {
+        let block_ser = serialize(&block.common).unwrap();
         let block_hash = Sha3_256::digest(&block_ser).to_vec();
-        self.current_blocks_completed
+
+        let common = block.common;
+        let node_info = block.per_node;
+        let per_node = BTreeMap::new();
+        self.current_block_completed_parts
             .entry(block_hash)
-            .or_insert((BTreeSet::new(), block))
-            .0
-            .insert(key.proposer_id);
+            .or_insert(CompleteBlockBuilder { common, per_node })
+            .per_node
+            .insert(key.proposer_id, node_info);
     }
 
     ///generates a completed block and returns it.
-    pub fn generate_complete_block(&mut self) -> (CompleteBlock, u64) {
+    pub fn generate_complete_block(&mut self) -> CompleteBlock {
         self.current_block_num += 1;
-        let completed_blocks = std::mem::take(&mut self.current_blocks_completed);
+        let completed_parts = std::mem::take(&mut self.current_block_completed_parts);
 
-        let complete_block = completed_blocks
+        let (_, completed_parts) = completed_parts
             .into_iter()
-            .max_by_key(|(_, v)| v.0.len())
-            .map(|(_, block)| block.1)
+            .max_by_key(|(_, v)| v.per_node.len())
             .unwrap();
 
-        (complete_block, self.current_block_num)
+        let complete_block = CompleteBlock {
+            common: completed_parts.common,
+            extra_info: MinedBlockExtraInfo {
+                shutdown: completed_parts.per_node.values().all(|v| v.shutdown),
+            },
+        };
+
+        complete_block
     }
 
     /// Get the last block stored info to send to the compute nodes

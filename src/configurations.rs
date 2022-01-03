@@ -49,6 +49,17 @@ impl fmt::Debug for TlsSpec {
     }
 }
 
+/// Configuration info for unicorn
+#[derive(Default, Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct UnicornFixedInfo {
+    /// UNICORN modulus number
+    pub modulus: String,
+    /// UNICORN iterations
+    pub iterations: u64,
+    /// UNICORN security level
+    pub security: u32,
+}
+
 /// Configuration info for a TxOut
 #[derive(Debug, Clone, Deserialize)]
 pub struct TxOutSpec {
@@ -91,6 +102,8 @@ pub struct ComputeNodeConfig {
     pub tls_config: TlsSpec,
     /// Initial API keys
     pub api_keys: Vec<String>,
+    /// Configuation for unicorn
+    pub compute_unicorn_fixed_param: UnicornFixedInfo,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
