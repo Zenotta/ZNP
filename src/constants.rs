@@ -2,8 +2,16 @@ pub use naom::constants::*;
 
 /*------- BLOCK CONSTANTS --------*/
 
-// Bit shifting value for reward issuance
+/// Bit shifting value for reward issuance
 pub const REWARD_ISSUANCE_VAL: u8 = 25;
+
+/*------- CSPRNG USAGE NUMS -------*/
+
+/// CSPRNG usage number for winning miner selection
+pub const WINNING_MINER_UN: u128 = 3;
+
+/// Usage number for participating miner selection
+pub const MINER_PARTICIPATION_UN: u128 = 2;
 
 /*------- STORAGE CONSTANTS -------*/
 

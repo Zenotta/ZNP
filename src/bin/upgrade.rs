@@ -196,8 +196,12 @@ fn configuration(
         v => panic!("expect compute_block to be miner or discard: {}", v),
     };
     let raft_len = settings.get_array("storage_nodes").unwrap().len();
+    let compute_partition_full_size = settings.get("compute_partition_full_size").unwrap();
+    let compute_unicorn_fixed_param = settings.get("compute_unicorn_fixed_param").unwrap();
     let upgrade_cfg = UpgradeCfg {
         raft_len,
+        compute_partition_full_size,
+        compute_unicorn_fixed_param,
         passphrase,
         db_cfg,
     };
@@ -243,6 +247,7 @@ fn configuration(
 mod test {
     use super::*;
     use system::configurations::DbMode;
+    use system::get_test_common_unicorn;
 
     #[test]
     fn validate_startup_read_all_raft_1() {
@@ -264,6 +269,8 @@ mod test {
             ],
             UpgradeCfg {
                 raft_len: 1,
+                compute_partition_full_size: 1,
+                compute_unicorn_fixed_param: get_test_common_unicorn(),
                 passphrase: String::new(),
                 db_cfg: DbCfg::ComputeBlockToMine,
             },
@@ -288,6 +295,8 @@ mod test {
             vec![("user".to_owned(), DbMode::Test(1001))],
             UpgradeCfg {
                 raft_len: 1,
+                compute_partition_full_size: 1,
+                compute_unicorn_fixed_param: get_test_common_unicorn(),
                 passphrase: "TestPassPhrase".to_owned(),
                 db_cfg: DbCfg::ComputeBlockInStorage,
             },
@@ -310,6 +319,8 @@ mod test {
             vec![("compute".to_owned(), DbMode::Test(0))],
             UpgradeCfg {
                 raft_len: 3,
+                compute_partition_full_size: 2,
+                compute_unicorn_fixed_param: get_test_common_unicorn(),
                 passphrase: String::new(),
                 db_cfg: DbCfg::ComputeBlockToMine,
             },
@@ -340,6 +351,8 @@ mod test {
             ],
             UpgradeCfg {
                 raft_len: 2,
+                compute_partition_full_size: 2,
+                compute_unicorn_fixed_param: get_test_common_unicorn(),
                 passphrase: String::new(),
                 db_cfg: DbCfg::ComputeBlockToMine,
             },

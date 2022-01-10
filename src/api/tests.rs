@@ -146,18 +146,15 @@ fn get_wallet_db(passphrase: &str) -> WalletDb {
 
 fn get_db_with_block_no_mutex() -> SimpleDb {
     let block = Block::new();
-
     let tx = Transaction::new();
     let tx_value = serialize(&tx).unwrap();
     let tx_json = serde_json::to_vec(&tx).unwrap();
     let tx_hash = hex::encode(Sha3_256::digest(&serialize(&tx_value).unwrap()));
-
-    let mut mining_tx_hash_and_nonces = BTreeMap::new();
-    mining_tx_hash_and_nonces.insert(0, ("test".to_string(), vec![0, 1, 23]));
+    let mining_tx_hash_and_nonce = ("test".to_string(), vec![0, 1, 23]);
 
     let block_to_input = StoredSerializingBlock {
         block,
-        mining_tx_hash_and_nonces,
+        mining_tx_hash_and_nonce,
     };
 
     let mut db = new_db(DbMode::InMemory, &DB_SPEC, None);
@@ -323,7 +320,7 @@ async fn test_get_latest_block() {
     let res = request.reply(&filter).await;
 
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}");
+    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}");
 }
 
 /// Test GET wallet keypairs
@@ -701,7 +698,7 @@ async fn test_post_blockchain_entry_by_key_block() {
         .method("POST")
         .path("/blockchain_entry_by_key")
         .header("Content-Type", "application/json")
-        .json(&"b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a005a9997")
+        .json(&"b1eb4ee926b4eb05ff76d59f402b27ef085dd493a4905ce686eb8928159326d4c")
         .reply(&filter)
         .await;
 
@@ -711,7 +708,7 @@ async fn test_post_blockchain_entry_by_key_block() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "{\"Block\":{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}}");
+    assert_eq!(res.body(), "{\"Block\":{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}}");
 }
 
 /// Test POST for get blockchain tx by key
@@ -784,7 +781,7 @@ async fn test_post_block_info_by_nums() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "[[\"b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a005a9997\",{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}],[\"\",\"\"],[\"b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a005a9997\",{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}]]");
+    assert_eq!(res.body(), "[[\"b1eb4ee926b4eb05ff76d59f402b27ef085dd493a4905ce686eb8928159326d4c\",{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}],[\"\",\"\"],[\"b1eb4ee926b4eb05ff76d59f402b27ef085dd493a4905ce686eb8928159326d4c\",{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}]]");
 }
 
 /// Test POST make payment

@@ -20,8 +20,9 @@ use crate::upgrade::{
 };
 use crate::user::UserNode;
 use crate::utils::{
-    concat_maps, loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async,
-    make_utxo_set_from_seed, LocalEventSender, ResponseResult, StringError,
+    concat_maps, get_test_common_unicorn, loop_connnect_to_peers_async,
+    loop_wait_connnect_to_peers_async, make_utxo_set_from_seed, LocalEventSender, ResponseResult,
+    StringError,
 };
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
@@ -1064,7 +1065,7 @@ async fn init_storage(
         storage_api_port: 3001,
         storage_api_use_tls: true,
         storage_raft_tick_timeout: 200 / config.test_duration_divider,
-        storage_block_timeout: 1000 / config.test_duration_divider,
+        storage_catchup_duration: 2000 / config.test_duration_divider,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Storage {}", info);
@@ -1095,11 +1096,13 @@ async fn init_compute(
         compute_node_idx: node_info.index,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
+        compute_unicorn_fixed_param: get_test_common_unicorn(),
         compute_nodes: info.compute_nodes.clone(),
         storage_nodes: info.storage_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
         compute_raft,
         compute_raft_tick_timeout: 200 / config.test_duration_divider,
+        compute_mining_event_timeout: 500 / config.test_duration_divider,
         compute_transaction_timeout: 100 / config.test_duration_divider,
         compute_seed_utxo: config.compute_seed_utxo.clone(),
         compute_genesis_tx_in: config.compute_genesis_tx_in.clone(),

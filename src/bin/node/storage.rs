@@ -183,7 +183,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .set_default("storage_raft_tick_timeout", 10)
         .unwrap();
-    settings.set_default("storage_block_timeout", 1000).unwrap();
+    settings
+        .set_default("storage_catchup_duration", 1000)
+        .unwrap();
 
     settings
         .merge(config::File::with_name(setting_file))

@@ -2,6 +2,8 @@
 use crate::hash_block;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
+use crate::unicorn::Unicorn;
+use crate::utils::rug_integer;
 use bytes::Bytes;
 use naom::crypto::sign_ed25519::PublicKey;
 use naom::primitives::asset::Asset;
@@ -11,6 +13,7 @@ use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::TxIn;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::utils::transaction_utils::construct_tx_in_signable_hash;
+use rug::Integer;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -87,10 +90,11 @@ pub struct Response {
 }
 
 /// Mined block as stored in DB.
+/// TODO: Are we not storing the other info from CommonBlockInfo? (Unicorn etc..._
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct StoredSerializingBlock {
     pub block: Block,
-    pub mining_tx_hash_and_nonces: BTreeMap<u64, (String, Vec<u8>)>,
+    pub mining_tx_hash_and_nonce: (String, Vec<u8>),
 }
 
 /// Common info in all mined block that form a complete block.
@@ -98,13 +102,22 @@ pub struct StoredSerializingBlock {
 pub struct CommonBlockInfo {
     pub block: Block,
     pub block_txs: BTreeMap<String, Transaction>,
+    pub pow: WinningPoWInfo,
+    pub unicorn: Unicorn,
+    #[serde(with = "rug_integer")]
+    pub unicorn_witness: Integer,
+}
+
+/// Mined block structure
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MinedBlock {
+    pub common: CommonBlockInfo,
+    pub extra_info: MinedBlockExtraInfo,
 }
 
 /// Additional info specific to one of the mined block that form a complete block.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct MinedBlockExtraInfo {
-    pub nonce: Vec<u8>,
-    pub mining_tx: (String, Transaction),
     pub shutdown: bool,
 }
 
@@ -131,6 +144,15 @@ pub struct ProofOfWork {
 pub struct ProofOfWorkBlock {
     pub nonce: Vec<u8>,
     pub block: Block,
+}
+
+/// Winning PoW structure
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WinningPoWInfo {
+    pub nonce: Vec<u8>,
+    pub mining_tx: (String, Transaction),
+    pub p_value: u8,
+    pub d_value: u8,
 }
 
 impl Default for ProofOfWorkBlock {
@@ -295,30 +317,13 @@ pub enum CommMessage {
 #[allow(clippy::large_enum_variant)]
 #[derive(Deserialize, Serialize, Clone)]
 pub enum StorageRequest {
-    GetBlockchainItem {
-        key: String,
-    },
-    SendBlockchainItem {
-        key: String,
-        item: BlockchainItem,
-    },
-    GetHistory {
-        start_time: u64,
-        end_time: u64,
-    },
-    GetUnicornTable {
-        n_last_items: Option<u64>,
-    },
-    SendPow {
-        pow: ProofOfWork,
-    },
-    SendBlock {
-        common: CommonBlockInfo,
-        mined_info: MinedBlockExtraInfo,
-    },
-    Store {
-        incoming_contract: Contract,
-    },
+    GetBlockchainItem { key: String },
+    SendBlockchainItem { key: String, item: BlockchainItem },
+    GetHistory { start_time: u64, end_time: u64 },
+    GetUnicornTable { n_last_items: Option<u64> },
+    SendPow { pow: ProofOfWork },
+    SendBlock { mined_block: Option<MinedBlock> },
+    Store { incoming_contract: Contract },
     Closing,
     SendRaftCmd(RaftMessageWrapper),
 }
@@ -336,10 +341,7 @@ impl fmt::Debug for StorageRequest {
             } => write!(f, "GetHistory"),
             GetUnicornTable { ref n_last_items } => write!(f, "GetUnicornTable"),
             SendPow { ref pow } => write!(f, "SendPoW"),
-            SendBlock {
-                ref common,
-                ref mined_info,
-            } => write!(f, "SendBlock"),
+            SendBlock { ref mined_block } => write!(f, "SendBlock"),
             Store {
                 ref incoming_contract,
             } => write!(f, "Store"),
@@ -419,9 +421,6 @@ pub enum MineRequest {
         rnum: Vec<u8>,
         win_coinbases: Vec<String>,
     },
-    SendPartitionList {
-        p_list: Vec<ProofOfWork>,
-    },
     SendBlockchainItem {
         key: String,
         item: BlockchainItem,
@@ -446,7 +445,6 @@ impl fmt::Debug for MineRequest {
                 ref rnum,
                 ref win_coinbases,
             } => write!(f, "SendRandomNum"),
-            SendPartitionList { ref p_list } => write!(f, "SendPartitionList"),
             SendTransactions {
                 ref tx_merkle_verification,
             } => write!(f, "SendTransactions"),

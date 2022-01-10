@@ -494,6 +494,8 @@ pub mod convert {
         compute_raft::ComputeConsensusedImport {
             unanimous_majority: old.unanimous_majority,
             sufficient_majority: old.sufficient_majority,
+            partition_full_size: Default::default(),
+            unicorn_fixed_param: Default::default(),
             tx_current_block_num: old.tx_current_block_num,
             current_block: old.current_block.map(convert_block),
             utxo_set: convert_utxoset(old.utxo_set),

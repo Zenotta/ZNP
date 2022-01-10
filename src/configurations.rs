@@ -49,6 +49,17 @@ impl fmt::Debug for TlsSpec {
     }
 }
 
+/// Configuration info for unicorn
+#[derive(Default, Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct UnicornFixedInfo {
+    /// UNICORN modulus number
+    pub modulus: String,
+    /// UNICORN iterations
+    pub iterations: u64,
+    /// UNICORN security level
+    pub security: u32,
+}
+
 /// Configuration info for a TxOut
 #[derive(Debug, Clone, Deserialize)]
 pub struct TxOutSpec {
@@ -91,6 +102,8 @@ pub struct ComputeNodeConfig {
     pub tls_config: TlsSpec,
     /// Initial API keys
     pub api_keys: Vec<String>,
+    /// Configuation for unicorn
+    pub compute_unicorn_fixed_param: UnicornFixedInfo,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
@@ -105,7 +118,9 @@ pub struct ComputeNodeConfig {
     pub compute_api_use_tls: bool,
     /// Timeout for ticking raft
     pub compute_raft_tick_timeout: usize,
-    /// Index of the current node in compute_nodes
+    /// Timeout duration between mining event pipelines
+    pub compute_mining_event_timeout: usize,
+    /// Timeout duration between committing transactions
     pub compute_transaction_timeout: usize,
     /// Transaction hash and TxOut info to use to seed utxo
     pub compute_seed_utxo: UtxoSetSpec,
@@ -146,8 +161,8 @@ pub struct StorageNodeConfig {
     pub storage_api_use_tls: bool,
     /// Timeout for ticking raft
     pub storage_raft_tick_timeout: usize,
-    /// Timeout for generating a new block
-    pub storage_block_timeout: usize,
+    /// Timeout for fetch catchup
+    pub storage_catchup_duration: usize,
 }
 
 /// Configuration option for a storage node
