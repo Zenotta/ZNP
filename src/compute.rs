@@ -559,6 +559,7 @@ impl ComputeNode {
             }) => {
                 debug!("First Block ready to mine: {:?}", self.get_mining_block());
                 self.flood_rand_num_to_requesters().await.unwrap();
+                self.flood_block_to_users().await.unwrap();
             }
             Ok(Response {
                 success: true,
@@ -566,6 +567,7 @@ impl ComputeNode {
             }) => {
                 debug!("Block ready to mine: {:?}", self.get_mining_block());
                 self.flood_rand_num_to_requesters().await.unwrap();
+                self.flood_block_to_users().await.unwrap();
             }
             Ok(Response {
                 success: true,

@@ -70,6 +70,8 @@ pub struct WalletTxSpec {
     pub public_key: String,
     /// Amount for the transaction
     pub amount: u64,
+    /// Version of the address for the public key to use
+    pub address_version: Option<u64>,
 }
 
 /// Configuration info for a database

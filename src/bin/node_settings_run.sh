@@ -18,7 +18,7 @@ echo " "
 if [ "$1" != "no_rm" ]
 then
     echo "delete dbs"
-    rm -rf src/db/db/test.* src/wallet/wallet/test.*
+#   rm -rf src/db/db/test.* src/wallet/wallet/test.*
 fi
 echo " "
 echo "//-----------------------------//"
@@ -44,7 +44,7 @@ RUST_LOG="$STORAGE_LOG,raft=warn" target/release/node storage > storage_0.log 2>
 s0=$!
 RUST_LOG="$COMPUTE_LOG" target/release/node compute > compute_0.log 2>&1 &
 c0=$!
-RUST_LOG="$MINER_LOG" target/release/node miner --with_user_index=1 --api_port=3010 > miner_0.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --api_port=3010 > miner_0.log 2>&1 &
 m0=$!
 RUST_LOG="$USER_LOG" target/release/node user > user_0.log 2>&1 &
 u0=$!

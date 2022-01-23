@@ -76,20 +76,57 @@
         ]
     ],
     "user_test_auto_gen_setup": {
-        "user_initial_transactions": [],
-        "_user_initial_transactions": [
+        "_user_initial_transactions": [],
+        "user_initial_transactions": [
             [
                 {
-                    "out_point": "0-000000",
+                    "out_point": "0-gffb9abab147d717bd9cb6da3987db62",
                     "secret_key": "3053020101300506032b657004220420e2fa624994ec5c6f46e9a991ed8e8791c4d2ce2d7ed05a827bd45416e5a19555a123032100f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
                     "public_key": "f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
-                    "amount": 2
+                    "amount": 1,
+                    "address_version": 0
                 },
                 {
-                    "out_point": "0-000001",
+                    "out_point": "1-gffb9abab147d717bd9cb6da3987db62",
+                    "secret_key": "3053020101300506032b657004220420e2fa624994ec5c6f46e9a991ed8e8791c4d2ce2d7ed05a827bd45416e5a19555a123032100f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
+                    "public_key": "f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
+                    "amount": 1,
+                    "address_version": 0
+                },
+                {
+                    "out_point": "0-g2f6dbde7bb8fad8bc8f2d60ed152fb7",
                     "secret_key": "3053020101300506032b65700422042009784182e825fbd7e53333aa6b5f1d55bc19a992d5cf71253212264825bc89c8a123032100a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
                     "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
-                    "amount": 5
+                    "amount": 1,
+                    "address_version": 0
+                },
+                {
+                    "out_point": "1-g2f6dbde7bb8fad8bc8f2d60ed152fb7",
+                    "secret_key": "3053020101300506032b65700422042009784182e825fbd7e53333aa6b5f1d55bc19a992d5cf71253212264825bc89c8a123032100a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                    "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                    "amount": 1,
+                    "address_version": 0
+                },
+                {
+                    "out_point": "2-g2f6dbde7bb8fad8bc8f2d60ed152fb7",
+                    "secret_key": "3053020101300506032b65700422042009784182e825fbd7e53333aa6b5f1d55bc19a992d5cf71253212264825bc89c8a123032100a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                    "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                    "amount": 1,
+                    "address_version": 0
+                },
+                {
+                    "out_point": "0-gdfcdf57e87352ab2fe3e9c356e1e718",
+                    "secret_key": "3053020101300506032b65700422042009784182e825fbd7e53333aa6b5f1d55bc19a992d5cf71253212264825bc89c8a123032100a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                    "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                    "amount": 1,
+                    "address_version": 0
+                },
+                {
+                    "out_point": "1-gdfcdf57e87352ab2fe3e9c356e1e718",
+                    "secret_key": "3053020101300506032b65700422042009784182e825fbd7e53333aa6b5f1d55bc19a992d5cf71253212264825bc89c8a123032100a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                    "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                    "amount": 1,
+                    "address_version": 0
                 }
             ]
         ]

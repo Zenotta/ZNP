@@ -4,8 +4,10 @@ use bincode::{deserialize, serialize};
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::{OutPoint, Transaction};
-use naom::utils::transaction_utils::{construct_address, get_tx_out_with_out_point};
-use std::collections::BTreeMap;
+use naom::utils::transaction_utils::{
+    construct_address, construct_address_for, get_tx_out_with_out_point,
+};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Key material to generate transactions
 #[derive(Clone, Debug)]
@@ -13,6 +15,7 @@ pub struct TransactionsKeys {
     pub pk: PublicKey,
     pub sk: SecretKey,
     pub address: String,
+    pub version: Option<u64>,
 }
 
 /// Maintain a list of valid transactions to submit
@@ -22,6 +25,7 @@ pub struct TransactionGen {
     up_to_date_with_snapshot: bool,
     pending: BTreeMap<String, Transaction>,
     ready: BTreeMap<String, Vec<(OutPoint, TokenAmount)>>,
+    from_to_address: Vec<(String, String)>,
 }
 
 impl TransactionGen {
@@ -30,25 +34,61 @@ impl TransactionGen {
         let infos: Vec<_> = tx_specs
             .iter()
             .map(make_wallet_tx_info)
-            .map(|(out_p, pk, sk, amount)| ((out_p, amount), (pk, sk, construct_address(&pk))))
+            .map(|(out_p, pk, sk, amount, v)| {
+                ((out_p, amount), (pk, sk, construct_address_for(&pk, v), v))
+            })
             .collect();
 
-        let addr_to_keys = infos
-            .iter()
-            .map(|(_, (pk, sk, address))| (*pk, sk.clone(), address.clone()))
-            .map(|(pk, sk, address)| (address.clone(), TransactionsKeys { pk, sk, address }))
-            .collect();
-
+        let mut addr_to_keys = BTreeMap::new();
         let mut ready: BTreeMap<_, Vec<_>> = Default::default();
-        for (ready_val, (_, _, address)) in infos {
-            ready.entry(address).or_default().push(ready_val);
+        let mut old_address = BTreeSet::new();
+        let mut new_address = BTreeSet::new();
+        for (tx_out, (pk, sk, address, version)) in infos {
+            if version.is_some() {
+                let (pk, sk, address, version) = (pk, sk.clone(), construct_address(&pk), None);
+                new_address.insert(address.clone());
+
+                ready.entry(address.clone()).or_default();
+                addr_to_keys.insert(
+                    address.clone(),
+                    TransactionsKeys {
+                        pk,
+                        sk,
+                        address,
+                        version,
+                    },
+                );
+            }
+
+            if version.is_some() {
+                old_address.insert(address.clone());
+            } else {
+                new_address.insert(address.clone());
+            }
+
+            ready.entry(address.clone()).or_default().push(tx_out);
+            addr_to_keys.insert(
+                address.clone(),
+                TransactionsKeys {
+                    pk,
+                    sk,
+                    address,
+                    version,
+                },
+            );
         }
+
+        let mut from_to_address = Vec::new();
+        let to_addr = new_address.iter().cycle().skip(1).cloned();
+        from_to_address.extend(new_address.clone().into_iter().zip(to_addr.clone()));
+        from_to_address.extend(old_address.into_iter().zip(to_addr.clone()));
 
         Self {
             addr_to_keys,
             up_to_date_with_snapshot: false,
             pending: Default::default(),
             ready,
+            from_to_address,
         }
     }
 
@@ -94,18 +134,16 @@ impl TransactionGen {
         chunk_size: Option<usize>,
         total_tx: usize,
     ) -> Vec<(String, Transaction)> {
-        let from_addr: Vec<_> = self.addr_to_keys.keys().cloned().collect();
-        let to_addr = from_addr.iter().cycle().skip(1).cloned();
         let mut all_txs = Vec::new();
 
-        for (to, from) in to_addr.zip(&from_addr) {
+        for (from, to) in self.from_to_address.clone() {
             let input_len = if all_txs.len() >= total_tx {
                 break;
             } else {
                 chunk_size.unwrap_or(total_tx - all_txs.len())
             };
 
-            while let Some(tx) = self.make_transaction(from, &to, input_len) {
+            while let Some(tx) = self.make_transaction(&from, &to, input_len) {
                 all_txs.push(tx);
                 if all_txs.len() >= total_tx {
                     break;
@@ -144,6 +182,7 @@ impl TransactionGen {
                 &keys.pk,
                 &keys.sk,
                 TokenAmount(1),
+                keys.version,
             );
             self.pending.insert(hash.clone(), tx.clone());
 

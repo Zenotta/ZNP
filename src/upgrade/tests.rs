@@ -783,13 +783,15 @@ fn get_test_auto_gen_setup(count_override: Option<usize>) -> UserAutoGenTxSetup 
             out_point:  "0-000000".to_owned(),
             secret_key: "e2fa624994ec5c6f46e9a991ed8e8791c4d2ce2d7ed05a827bd45416e5a19555f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5".to_owned(),
             public_key: "f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5".to_owned(),
-            amount: 2
+            amount: 2,
+            address_version: None,
         },
         WalletTxSpec {
             out_point: "0-000001".to_owned(),
             secret_key: "09784182e825fbd7e53333aa6b5f1d55bc19a992d5cf71253212264825bc89c8a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43".to_owned(),
             public_key: "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43".to_owned(),
-            amount: 5
+            amount: 5,
+            address_version: None,
         }
     ];
 

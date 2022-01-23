@@ -12,7 +12,7 @@ use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::asset::Asset;
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
 use naom::utils::transaction_utils::{
-    construct_address, construct_payment_tx_ins, construct_tx_in_signable_hash,
+    construct_address_for, construct_payment_tx_ins, construct_tx_in_signable_hash,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -241,8 +241,8 @@ impl WalletDb {
         }
 
         for seed in seeds {
-            let (tx_out_p, pk, sk, amount) = make_wallet_tx_info(seed);
-            let (address, _) = self.store_payment_address(pk, sk).await;
+            let (tx_out_p, pk, sk, amount, v) = make_wallet_tx_info(seed);
+            let (address, _) = self.store_payment_address(pk, sk, v).await;
             let payments = vec![(tx_out_p, Asset::Token(amount), address)];
             self.save_usable_payments_to_wallet(payments).await.unwrap();
         }
@@ -258,7 +258,8 @@ impl WalletDb {
     /// TODO: Add static address capability for frequent payments
     pub async fn generate_payment_address(&self) -> (String, AddressStore) {
         let (public_key, secret_key) = sign::gen_keypair();
-        self.store_payment_address(public_key, secret_key).await
+        self.store_payment_address(public_key, secret_key, None)
+            .await
     }
 
     /// Store a new payment address, saving the related keys to the wallet
@@ -266,12 +267,13 @@ impl WalletDb {
         &self,
         public_key: PublicKey,
         secret_key: SecretKey,
+        address_version: Option<u64>,
     ) -> (String, AddressStore) {
-        let final_address = construct_address(&public_key);
+        let final_address = construct_address_for(&public_key, address_version);
         let address_keys = AddressStore {
             public_key,
             secret_key,
-            address_version: None,
+            address_version,
         };
 
         let save_result = self
@@ -829,6 +831,7 @@ pub fn tx_constructor_from_prev_out(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use naom::utils::transaction_utils::construct_address;
 
     #[test]
     /// Creating a valid payment address
