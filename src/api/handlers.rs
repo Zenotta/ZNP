@@ -19,7 +19,7 @@ use naom::primitives::asset::TokenAmount;
 use naom::primitives::druid::DdeValues;
 use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
-use naom::utils::transaction_utils::{construct_address, construct_tx_in_signable_hash};
+use naom::utils::transaction_utils::{construct_address_for, construct_tx_in_signable_hash};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -122,9 +122,11 @@ pub struct ChangePassphraseData {
 }
 
 /// Struct received from client to construct address
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct AddressConstructData {
-    pub pub_key: Vec<u8>,
+    pub pub_key: Option<Vec<u8>>,
+    pub pub_key_hex: Option<String>,
+    pub version: Option<u64>,
 }
 
 /// Struct received from client to fetch pending
@@ -570,11 +572,18 @@ pub async fn post_blocks_by_tx_hashes(
 
 //POST create a new payment address from a computet node
 pub async fn post_payment_address_construction(
-    address_construct_struct: AddressConstructData,
+    data: AddressConstructData,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let pub_key = address_construct_struct.pub_key;
-    if !pub_key.is_empty() {
-        let data: String = construct_address(&PublicKey::from_slice(&pub_key).unwrap());
+    let pub_key = data.pub_key;
+    let pub_key_hex = data.pub_key_hex;
+    let version = data.version;
+
+    let pub_key = pub_key.or_else(|| pub_key_hex.and_then(|k| hex::decode(k).ok()));
+    let pub_key = pub_key.filter(|k| !k.is_empty());
+    let pub_key = pub_key.and_then(|k| PublicKey::from_slice(&k));
+
+    if let Some(pub_key) = pub_key {
+        let data: String = construct_address_for(&pub_key, version);
         return Ok(warp::reply::json(&data));
     }
     Ok(warp::reply::json(&String::from("")))

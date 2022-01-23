@@ -23,7 +23,6 @@ use crate::utils::{decode_pub_key, decode_secret_key, tracing_log_try_init};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
-use bytes::Bytes;
 use naom::constants::{NETWORK_VERSION_TEMP, NETWORK_VERSION_V0};
 use naom::crypto::sign_ed25519::{self as sign};
 use naom::primitives::asset::{Asset, TokenAmount};
@@ -805,32 +804,57 @@ async fn test_address_construction() {
     //
     // Arrange
     //
-
-    let address_construct_data = AddressConstructData {
-        pub_key: vec![
+    let mut address1 = BTreeMap::new();
+    address1.insert(
+        "pub_key",
+        vec![
             109, 133, 37, 100, 46, 243, 13, 156, 189, 123, 142, 12, 24, 169, 49, 186, 187, 0, 63,
             27, 129, 207, 183, 13, 156, 208, 171, 164, 179, 118, 131, 183,
         ],
+    );
+
+    let mut address2 = BTreeMap::new();
+    address2.insert(
+        "pub_key_hex",
+        "6d8525642ef30d9cbd7b8e0c18a931babb003f1b81cfb70d9cd0aba4b37683b7",
+    );
+
+    let address3 = AddressConstructData {
+        pub_key_hex: Some(
+            "6d8525642ef30d9cbd7b8e0c18a931babb003f1b81cfb70d9cd0aba4b37683b7".to_owned(),
+        ),
+        version: Some(0),
+        ..Default::default()
     };
 
-    let request = warp::test::request()
-        .method("POST")
-        .path("/address_construction")
-        .header("Content-Type", "application/json")
-        .json(&address_construct_data);
+    let request = || {
+        warp::test::request()
+            .method("POST")
+            .path("/address_construction")
+            .header("Content-Type", "application/json")
+    };
 
     //
     // Act
     //
     let filter = routes::address_construction(&mut dp());
-    let res = request.reply(&filter).await;
+    let res1 = request().json(&address1).reply(&filter).await;
+    let res2 = request().json(&address2).reply(&filter).await;
+    let res3 = request().json(&address3).reply(&filter).await;
 
     //
     // Assert
     //
-    let expected =
-        Bytes::from_static(b"\"ca0abdcd2826a77218af0914601ee34c7ff44127aab9d0671267b25a7d36946a\"");
-    assert_eq!(res.body(), &expected);
+    let expected = "\"ca0abdcd2826a77218af0914601ee34c7ff44127aab9d0671267b25a7d36946a\"";
+
+    assert_eq!((res1.status(), res1.headers().clone()), success_json());
+    assert_eq!(res1.body(), expected);
+
+    assert_eq!((res2.status(), res2.headers().clone()), success_json());
+    assert_eq!(res2.body(), expected);
+
+    assert_eq!((res3.status(), res3.headers().clone()), success_json());
+    assert_eq!(res3.body(), "\"56d5b6da467e6c588966967ef5405dd2\"");
 }
 
 /// Test POST make ip payment with correct address
