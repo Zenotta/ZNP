@@ -22,6 +22,15 @@ use tokio::task;
 mod fund_store;
 pub use fund_store::{AssetValues, FundStore};
 
+/// Storage key for a &[u8] of the word 'MasterKeyStore'
+pub const MASTER_KEY_STORE_KEY: &str = "MasterKeyStore";
+
+pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+    db_path: WALLET_PATH,
+    suffix: "",
+    columns: &[],
+};
+
 /// Result wrapper for WalletDb errors
 ///
 /// TODO: Determine the remaining functions that require the `Result` wrapper for error handling
@@ -93,15 +102,6 @@ impl From<SimpleDbError> for WalletDbError {
         Self::Database(other)
     }
 }
-
-/// Storage key for a &[u8] of the word 'MasterKeyStore'
-pub const MASTER_KEY_STORE_KEY: &[u8] = "MasterKeyStore".as_bytes();
-
-pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
-    db_path: WALLET_PATH,
-    suffix: "",
-    columns: &[],
-};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddressStore {
@@ -601,12 +601,8 @@ pub fn get_address_store(
 ) -> AddressStore {
     match db.get_cf(DB_COL_DEFAULT, key_addr) {
         Ok(Some(store)) => {
-            let (nonce, output) = store.split_at(secretbox::NONCE_LEN);
-            let nonce = secretbox::Nonce::from_slice(nonce).unwrap();
-            match secretbox::open(output.to_vec(), &nonce, encryption_key) {
-                Some(decrypted) => deserialize(&decrypted).unwrap(),
-                _ => panic!("Error accessing wallet"),
-            }
+            let decrypted = decrypt_store(store, encryption_key);
+            deserialize(&decrypted).unwrap()
         }
         Ok(None) => panic!("Key address not present in wallet: {}", key_addr),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
@@ -625,13 +621,8 @@ pub fn save_address_store_to_wallet(
     store: AddressStore,
     encryption_key: &secretbox::Key,
 ) {
-    let input = {
-        let store = serialize(&store).unwrap();
-        let nonce = secretbox::gen_nonce();
-        let mut input: Vec<u8> = nonce.as_ref().to_vec();
-        input.append(&mut secretbox::seal(store, &nonce, encryption_key).unwrap());
-        input
-    };
+    let store = serialize(&store).unwrap();
+    let input = encrypt_store(store, encryption_key);
     db.put_cf(DB_COL_DEFAULT, key_addr, &input);
 }
 
@@ -721,6 +712,24 @@ pub fn make_key(passphrase: &[u8], salt: pwhash::Salt) -> secretbox::Key {
     let mut kb = [0; secretbox::KEY_LEN];
     pwhash::derive_key(&mut kb, passphrase, &salt, pwhash::OPSLIMIT_INTERACTIVE);
     secretbox::Key::from_slice(&kb).unwrap()
+}
+
+/// Decrypt a Store value
+pub fn decrypt_store(store: Vec<u8>, encryption_key: &secretbox::Key) -> Vec<u8> {
+    let (nonce, output) = store.split_at(secretbox::NONCE_LEN);
+    let nonce = secretbox::Nonce::from_slice(nonce).unwrap();
+    match secretbox::open(output.to_vec(), &nonce, encryption_key) {
+        Some(decrypted) => decrypted,
+        _ => panic!("Error accessing wallet"),
+    }
+}
+
+/// Encrypt a Store value
+pub fn encrypt_store(store: Vec<u8>, encryption_key: &secretbox::Key) -> Vec<u8> {
+    let nonce = secretbox::gen_nonce();
+    let mut input: Vec<u8> = nonce.as_ref().to_vec();
+    input.append(&mut secretbox::seal(store, &nonce, encryption_key).unwrap());
+    input
 }
 
 /// Make TxConstructors from stored TxOut

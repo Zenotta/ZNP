@@ -1,12 +1,11 @@
 use super::tests_last_version_db::{self, DbEntryType};
-use super::tests_last_version_db_no_block;
 use super::{
     dump_db, get_upgrade_compute_db, get_upgrade_storage_db, get_upgrade_wallet_db, old,
-    upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, DbCfg, UpgradeCfg, UpgradeError,
+    upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, UpgradeCfg, UpgradeError,
     UpgradeStatus,
 };
 use crate::configurations::{DbMode, ExtraNodeParams, UserAutoGenTxSetup, WalletTxSpec};
-use crate::constants::{DB_VERSION_KEY, LAST_BLOCK_HASH_KEY, NETWORK_VERSION_SERIALIZED};
+use crate::constants::{LAST_BLOCK_HASH_KEY, NETWORK_VERSION_SERIALIZED};
 use crate::db_utils::{
     new_db, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec, DB_COL_DEFAULT,
 };
@@ -27,47 +26,46 @@ use tracing::info;
 type ExtraNodeParamsFilterMap = BTreeMap<String, ExtraNodeParamsFilter>;
 
 const WALLET_PASSWORD: &str = "TestPassword";
-const LAST_BLOCK_STORED_NUM: u64 = 2;
+const LAST_BLOCK_STORED_NUM: u64 = 6;
 const LAST_BLOCK_BLOCK_HASH: &str =
-    "7825220b591e99ad654acd0268f9ec0a5e08d3f46929f93cd4195ce943bb9f5c";
-const LAST_BLOCK_STORAGE_DB_V0_2_0_INDEX: usize = 5;
-const STORAGE_DB_V0_2_0_INDEXES: &[&str] = &[
-    "nIndexedTxHashKey_0000000000000000_00000000",
-    "nIndexedTxHashKey_0000000000000000_00000001",
-    "nIndexedTxHashKey_0000000000000000_00000002",
-    "nIndexedTxHashKey_0000000000000000_00000003",
-    "nIndexedBlockHashKey_0000000000000001",
-    "nIndexedBlockHashKey_0000000000000002",
-    "nIndexedBlockHashKey_0000000000000000",
-    "nIndexedTxHashKey_0000000000000001_00000000",
-    "nIndexedTxHashKey_0000000000000002_00000003",
-    "nIndexedTxHashKey_0000000000000002_00000000",
-    "nIndexedTxHashKey_0000000000000001_00000001",
-    "nIndexedTxHashKey_0000000000000000_00000004",
-    "nIndexedTxHashKey_0000000000000001_00000002",
-    "nIndexedTxHashKey_0000000000000002_00000001",
-    "nIndexedTxHashKey_0000000000000002_00000002",
+    "b57dc8fbe539699a43af4f16c2f9293f013976571422524a492e5d5a54193b868";
+const LAST_BLOCK_STORAGE_DB_V0_3_0_INDEX: usize = 8;
+const STORAGE_DB_V0_3_0_JSON_OFFSET: usize = 29;
+const STORAGE_DB_V0_3_0_CHAIN_VS_OFFSET: usize = 117;
+const STORAGE_DB_V0_3_0_INDEXES: &[(&str, usize)] = &[
+    ("nIndexedTxHashKey_0000000000000000_00000000", 0),
+    ("nIndexedTxHashKey_0000000000000000_00000001", 1),
+    ("nIndexedTxHashKey_0000000000000000_00000002", 2),
+    ("nIndexedTxHashKey_0000000000000000_00000003", 3),
+    ("nIndexedBlockHashKey_0000000000000001", 4),
+    ("nIndexedBlockHashKey_0000000000000002", 5),
+    ("nIndexedBlockHashKey_0000000000000000", 6),
+    ("nIndexedBlockHashKey_0000000000000004", 15),
+    ("nIndexedBlockHashKey_0000000000000006", 16),
+    ("nIndexedBlockHashKey_0000000000000005", 17),
+    ("nIndexedBlockHashKey_0000000000000003", 18),
+    ("nIndexedTxHashKey_0000000000000006_00000000", 19),
+    ("nIndexedTxHashKey_0000000000000005_00000000", 20),
+    ("nIndexedTxHashKey_0000000000000001_00000000", 7),
+    ("nIndexedTxHashKey_0000000000000002_00000003", 8),
+    ("nIndexedTxHashKey_0000000000000006_00000001", 21),
+    ("nIndexedTxHashKey_0000000000000002_00000000", 9),
+    ("nIndexedTxHashKey_0000000000000001_00000001", 10),
+    ("nIndexedTxHashKey_0000000000000000_00000004", 11),
+    ("nIndexedTxHashKey_0000000000000005_00000003", 22),
+    ("nIndexedTxHashKey_0000000000000003_00000000", 23),
+    ("nIndexedTxHashKey_0000000000000006_00000003", 24),
+    ("nIndexedTxHashKey_0000000000000001_00000002", 12),
+    ("nIndexedTxHashKey_0000000000000005_00000001", 25),
+    ("nIndexedTxHashKey_0000000000000004_00000000", 26),
+    ("nIndexedTxHashKey_0000000000000002_00000001", 13),
+    ("nIndexedTxHashKey_0000000000000005_00000002", 27),
+    ("nIndexedTxHashKey_0000000000000006_00000002", 28),
+    ("nIndexedTxHashKey_0000000000000002_00000002", 14),
 ];
-const STORAGE_DB_V0_2_0_BLOCK_LEN: &[u32] = &[5, 3, 4];
+const STORAGE_DB_V0_3_0_BLOCK_LEN: &[u32] = &[5, 3, 4, 1, 1, 4, 4];
+const STORAGE_DB_V0_3_0_BLOCK_VERSION: &[u32] = &[0, 0, 0, 1, 1, 1, 1];
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
-
-const STORAGE_DB_V0_2_0_JSON: &[&str] = &[
-    "{\"inputs\":[{\"previous_out\":null,\"script_signature\":{\"stack\":[{\"Bytes\":\"+ (39) No person shall be seized or imprisoned, or stripped of their rights or possessions, or outlawed or exiled, or deprived of their standing in any way, nor will we proceed with force against them, or send others to do so, except by the lawful judgment of their equals or by the law of the land.\"}]}}],\"outputs\":[{\"value\":{\"Token\":2},\"amount\":2,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"be570a79d3066e78714600f5eb0e9b91\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"1e47c0a4a718ad926d8d4cf0c2070344\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"ef8cee427395f08788b7b7ffb94326ea\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"8767ae43bc20271fe841ccd4bce36d5d\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}",
-    "{\"inputs\":[{\"previous_out\":null,\"script_signature\":{\"stack\":[{\"Bytes\":\"+ (39) No person shall be seized or imprisoned, or stripped of their rights or possessions, or outlawed or exiled, or deprived of their standing in any way, nor will we proceed with force against them, or send others to do so, except by the lawful judgment of their equals or by the law of the land.\"}]}}],\"outputs\":[{\"value\":{\"Token\":5},\"amount\":5,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"fa2165facd049a33f1134c6043012ffb\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}",
-    "{\"inputs\":[{\"previous_out\":null,\"script_signature\":{\"stack\":[{\"Bytes\":\"+ (39) No person shall be seized or imprisoned, or stripped of their rights or possessions, or outlawed or exiled, or deprived of their standing in any way, nor will we proceed with force against them, or send others to do so, except by the lawful judgment of their equals or by the law of the land.\"}]}}],\"outputs\":[{\"value\":{\"Token\":123},\"amount\":123,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"e3f86d92484539e695581ee111580eb3\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}",
-    "{\"inputs\":[{\"previous_out\":null,\"script_signature\":{\"stack\":[{\"Bytes\":\"+ (39) No person shall be seized or imprisoned, or stripped of their rights or possessions, or outlawed or exiled, or deprived of their standing in any way, nor will we proceed with force against them, or send others to do so, except by the lawful judgment of their equals or by the law of the land.\"}]}}],\"outputs\":[{\"value\":{\"Token\":1234},\"amount\":1234,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"b78d8dae72a6b79401cebaa64a8063db\"},{\"value\":{\"Token\":1235},\"amount\":1235,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"5a4f627b0be3245edc7601bf3236bc77\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}",
-    "{\"block\":{\"header\":{\"version\":0,\"bits\":0,\"nonce\":[],\"b_num\":1,\"seed_value\":[],\"previous_hash\":\"abd4012af0eb398f7fed06cdc633c506d374bb8e38174035c0fb9910d3d7a7f6\",\"merkle_root_hash\":\"225cf9332e9e3518ea7111c31fcfab29b5ba4bb66e8c6dcdf0b2c99b32ba893d\"},\"transactions\":[\"g15d207734998a4c4343df9dd0195dbf\",\"g3beca40882c0403330fcced1c25786c\"]},\"mining_tx_hash_and_nonces\":{\"1\":[\"ga6d71de293071a6b8105dc8977952bc\",[123,185,41,76,125,197,57,74,136,173,162,115,51,48,52,85]]}}",
-    "{\"block\":{\"header\":{\"version\":0,\"bits\":0,\"nonce\":[],\"b_num\":2,\"seed_value\":[],\"previous_hash\":\"04d6006a3923d06c00be1c9f26e38142e1defbe0d5a57ea60d94255c20a59a04\",\"merkle_root_hash\":\"24c87c26cf5233f59ffe9b3f8f19cd7e1cdcf871dafb2e3e800e15cf155da944\"},\"transactions\":[\"g2f6dbde7bb8fad8bc8f2d60ed152fb7\",\"gdfcdf57e87352ab2fe3e9c356e1e718\",\"gffb9abab147d717bd9cb6da3987db62\"]},\"mining_tx_hash_and_nonces\":{\"1\":[\"g27fac41a2d62a56c8962e3d360838c8\",[105,193,78,76,22,66,126,68,153,72,115,5,186,3,121,186]]}}",
-    "{\"block\":{\"header\":{\"version\":0,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"000000\",\"000001\",\"000010\",\"000011\"]},\"mining_tx_hash_and_nonces\":{\"1\":[\"g50675ae09b507f5b02bd05f5ba49f4f\",[188,60,127,73,12,31,64,140,172,68,45,64,102,152,100,140]]}}",
-    "{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"060000000000000030303030303100000000\"},{\"Signature\":[15,237,67,91,55,60,111,53,186,10,225,72,215,108,191,108,95,130,87,205,12,236,67,124,29,118,171,215,4,218,220,52,51,41,239,216,154,126,203,240,50,148,246,18,6,219,74,147,223,193,23,59,41,11,45,228,38,185,83,153,25,20,140,6]},{\"PubKey\":[168,15,194,48,89,14,56,189,100,141,198,188,75,96,25,211,158,132,31,120,101,122,213,19,143,53,26,112,182,22,92,67]},{\"Op\":43},{\"Op\":93},{\"PubKeyHash\":\"fa2165facd049a33f1134c6043012ffb\"},{\"Op\":61},{\"Op\":95}]}}],\"outputs\":[{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"7027eda6d9ef25d7e1c4f833475e544f\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}",
-    "{\"inputs\":[{\"previous_out\":null,\"script_signature\":{\"stack\":[{\"Num\":2}]}}],\"outputs\":[{\"value\":{\"Token\":7510184},\"amount\":7510184,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"79609a5b997a265ab3f370c4abef00ad\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}",
-    "{\"inputs\":[{\"previous_out\":{\"t_hash\":\"g15d207734998a4c4343df9dd0195dbf\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"2000000000000000673135643230373733343939386134633433343364663964643031393564626600000000\"},{\"Signature\":[6,96,188,24,55,108,7,52,186,146,6,89,191,24,147,151,43,71,140,191,92,125,7,193,60,61,200,178,8,161,146,195,141,113,107,236,16,149,179,34,238,234,7,34,246,89,243,198,57,236,246,141,237,153,208,78,53,0,118,228,91,223,177,2]},{\"PubKey\":[244,240,193,169,81,149,158,136,254,52,61,229,162,235,231,239,188,177,84,34,9,11,53,73,87,127,66,77,182,133,28,165]},{\"Op\":43},{\"Op\":93},{\"PubKeyHash\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"Op\":61},{\"Op\":95}]}},{\"previous_out\":{\"t_hash\":\"g15d207734998a4c4343df9dd0195dbf\",\"n\":1},\"script_signature\":{\"stack\":[{\"Bytes\":\"2000000000000000673135643230373733343939386134633433343364663964643031393564626601000000\"},{\"Signature\":[109,88,99,175,220,193,176,165,242,203,174,230,196,85,191,198,116,31,116,87,114,139,19,91,80,131,243,110,162,110,135,145,16,83,6,19,75,10,73,32,240,221,152,66,225,239,1,51,228,51,56,169,65,117,156,253,211,40,61,143,53,50,68,9]},{\"PubKey\":[244,240,193,169,81,149,158,136,254,52,61,229,162,235,231,239,188,177,84,34,9,11,53,73,87,127,66,77,182,133,28,165]},{\"Op\":43},{\"Op\":93},{\"PubKeyHash\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"Op\":61},{\"Op\":95}]}},{\"previous_out\":{\"t_hash\":\"g15d207734998a4c4343df9dd0195dbf\",\"n\":2},\"script_signature\":{\"stack\":[{\"Bytes\":\"2000000000000000673135643230373733343939386134633433343364663964643031393564626602000000\"},{\"Signature\":[89,191,216,65,117,175,209,105,189,170,246,174,140,61,199,115,137,144,198,84,233,78,44,29,28,107,230,99,10,170,46,49,21,206,110,73,22,246,14,85,60,50,122,125,32,228,89,8,117,176,1,214,59,234,68,83,49,148,34,136,247,221,117,13]},{\"PubKey\":[244,240,193,169,81,149,158,136,254,52,61,229,162,235,231,239,188,177,84,34,9,11,53,73,87,127,66,77,182,133,28,165]},{\"Op\":43},{\"Op\":93},{\"PubKeyHash\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"Op\":61},{\"Op\":95}]}}],\"outputs\":[{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"fa2165facd049a33f1134c6043012ffb\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"fa2165facd049a33f1134c6043012ffb\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"fa2165facd049a33f1134c6043012ffb\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}",
-    "{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"060000000000000030303030303000000000\"},{\"Signature\":[51,224,185,21,223,149,19,164,216,28,169,33,79,61,20,12,74,28,61,173,24,154,243,35,237,190,145,8,115,111,103,97,69,148,32,191,237,141,206,62,193,21,6,218,63,94,90,28,177,32,43,244,226,231,132,169,55,4,37,94,236,73,134,0]},{\"PubKey\":[244,240,193,169,81,149,158,136,254,52,61,229,162,235,231,239,188,177,84,34,9,11,53,73,87,127,66,77,182,133,28,165]},{\"Op\":43},{\"Op\":93},{\"PubKeyHash\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"Op\":61},{\"Op\":95}]}}],\"outputs\":[{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"fa2165facd049a33f1134c6043012ffb\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"fa2165facd049a33f1134c6043012ffb\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}",
-    "{\"inputs\":[{\"previous_out\":null,\"script_signature\":{\"stack\":[{\"Num\":0}]}}],\"outputs\":[{\"value\":{\"Token\":7510185},\"amount\":7510185,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"d0031ff80365354c3a3162a407a9fe92\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}",
-    "{\"inputs\":[{\"previous_out\":null,\"script_signature\":{\"stack\":[{\"Num\":1}]}}],\"outputs\":[{\"value\":{\"Token\":7510185},\"amount\":7510185,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"b2791ed55fb72717d96e1197eee1ca7b\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}",
-    "{\"inputs\":[{\"previous_out\":{\"t_hash\":\"g15d207734998a4c4343df9dd0195dbf\",\"n\":3},\"script_signature\":{\"stack\":[{\"Bytes\":\"2000000000000000673135643230373733343939386134633433343364663964643031393564626603000000\"},{\"Signature\":[130,136,85,195,70,24,196,166,116,166,239,78,228,33,199,157,153,199,195,23,64,37,172,62,90,156,33,173,174,133,219,213,180,26,95,166,45,109,168,2,132,208,65,162,167,22,223,164,180,55,75,197,122,121,154,130,148,65,179,155,241,132,204,14]},{\"PubKey\":[244,240,193,169,81,149,158,136,254,52,61,229,162,235,231,239,188,177,84,34,9,11,53,73,87,127,66,77,182,133,28,165]},{\"Op\":43},{\"Op\":93},{\"PubKeyHash\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"Op\":61},{\"Op\":95}]}},{\"previous_out\":{\"t_hash\":\"g15d207734998a4c4343df9dd0195dbf\",\"n\":4},\"script_signature\":{\"stack\":[{\"Bytes\":\"2000000000000000673135643230373733343939386134633433343364663964643031393564626604000000\"},{\"Signature\":[220,49,169,206,205,116,247,147,201,167,122,222,133,184,55,45,234,225,178,98,99,195,43,40,111,45,130,5,123,229,22,223,74,164,87,57,116,39,197,116,110,121,192,87,130,67,36,58,142,217,192,68,238,127,194,245,212,217,188,126,70,83,177,11]},{\"PubKey\":[244,240,193,169,81,149,158,136,254,52,61,229,162,235,231,239,188,177,84,34,9,11,53,73,87,127,66,77,182,133,28,165]},{\"Op\":43},{\"Op\":93},{\"PubKeyHash\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"Op\":61},{\"Op\":95}]}}],\"outputs\":[{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"fa2165facd049a33f1134c6043012ffb\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"fa2165facd049a33f1134c6043012ffb\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}",
-    "{\"inputs\":[{\"previous_out\":{\"t_hash\":\"g3beca40882c0403330fcced1c25786c\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"2000000000000000673362656361343038383263303430333333306663636564316332353738366300000000\"},{\"Signature\":[9,204,102,199,118,96,243,170,213,121,102,32,252,48,172,54,59,193,107,29,176,151,142,81,168,49,112,146,94,193,86,184,44,77,195,16,20,171,224,237,119,230,2,212,250,111,241,44,221,188,50,87,56,90,240,167,187,168,13,133,104,180,32,5]},{\"PubKey\":[168,15,194,48,89,14,56,189,100,141,198,188,75,96,25,211,158,132,31,120,101,122,213,19,143,53,26,112,182,22,92,67]},{\"Op\":43},{\"Op\":93},{\"PubKeyHash\":\"fa2165facd049a33f1134c6043012ffb\"},{\"Op\":61},{\"Op\":95}]}},{\"previous_out\":{\"t_hash\":\"g3beca40882c0403330fcced1c25786c\",\"n\":1},\"script_signature\":{\"stack\":[{\"Bytes\":\"2000000000000000673362656361343038383263303430333333306663636564316332353738366301000000\"},{\"Signature\":[19,242,222,156,30,233,59,112,39,88,61,225,188,230,233,152,174,162,32,138,130,212,162,39,158,127,100,110,193,94,217,134,30,242,14,64,211,17,238,112,75,109,204,152,173,187,126,178,121,44,18,77,136,212,20,157,196,7,163,176,36,145,140,3]},{\"PubKey\":[168,15,194,48,89,14,56,189,100,141,198,188,75,96,25,211,158,132,31,120,101,122,213,19,143,53,26,112,182,22,92,67]},{\"Op\":43},{\"Op\":93},{\"PubKeyHash\":\"fa2165facd049a33f1134c6043012ffb\"},{\"Op\":61},{\"Op\":95}]}}],\"outputs\":[{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"7027eda6d9ef25d7e1c4f833475e544f\"},{\"value\":{\"Token\":1},\"amount\":1,\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"7027eda6d9ef25d7e1c4f833475e544f\"}],\"version\":0,\"druid\":null,\"druid_participants\":null,\"expect_value\":null,\"expect_value_amount\":null}"
-];
 
 const KEEP_ALL_FILTER: ExtraNodeParamsFilter = ExtraNodeParamsFilter {
     db: true,
@@ -101,13 +99,6 @@ async fn upgrade_compute_in_memory() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn upgrade_compute_no_block_in_memory() {
-    let config = complete_network_config(20015);
-    let upgrade_cfg = cfg_upgrade_no_block();
-    upgrade_common(config, "compute1", upgrade_cfg).await;
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn upgrade_storage_in_memory() {
     let config = complete_network_config(20020);
     upgrade_common(config, "storage1", cfg_upgrade()).await;
@@ -133,7 +124,7 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
     //
     let mut network = Network::create_stopped_from_config(&config);
     let n_info = network.get_node_info(name).unwrap().clone();
-    let db = create_old_node_db(&n_info, upgrade_cfg.db_cfg);
+    let db = create_old_node_db(&n_info);
 
     //
     // Act
@@ -151,13 +142,7 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
     //
     match n_info.node_type {
         NodeType::Compute => {
-            let (expected_mining_b_num, expected_b_num) =
-                if upgrade_cfg.db_cfg == DbCfg::ComputeBlockToMine {
-                    let expected = Some(LAST_BLOCK_STORED_NUM + 1);
-                    (expected, expected)
-                } else {
-                    (None, Some(LAST_BLOCK_STORED_NUM))
-                };
+            let (expected_mining_b_num, expected_b_num) = (None, Some(LAST_BLOCK_STORED_NUM));
 
             let compute = network.compute(name).unwrap().lock().await;
 
@@ -180,17 +165,18 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
                 let mut expected = Vec::new();
                 let mut actual = Vec::new();
                 let mut actual_indexed = Vec::new();
-                for (idx, (_, k, v)) in tests_last_version_db::STORAGE_DB_V0_2_0.iter().enumerate()
-                {
-                    let idx_k = STORAGE_DB_V0_2_0_INDEXES[idx];
-                    let v_json = STORAGE_DB_V0_2_0_JSON[idx];
-                    println!("{}", v_json);
+                let db_v3 = tests_last_version_db::STORAGE_DB_V0_3_0;
+                for (i, (idx_k, data_i)) in STORAGE_DB_V0_3_0_INDEXES.iter().enumerate() {
+                    let (_, k, _) = db_v3[i];
+                    let json_idx = STORAGE_DB_V0_3_0_JSON_OFFSET + i;
+                    let data_v_idx = STORAGE_DB_V0_3_0_CHAIN_VS_OFFSET + data_i;
+                    let item_meta = index_meta(idx_k);
                     expected.push(Some(test_hash(BlockchainItem {
-                        version: 0,
-                        item_meta: index_meta(idx_k),
+                        version: STORAGE_DB_V0_3_0_BLOCK_VERSION[item_meta.block_num() as usize],
+                        item_meta,
                         key: k.to_vec(),
-                        data: v.to_vec(),
-                        data_json: v_json.as_bytes().to_vec(),
+                        data: db_v3[data_v_idx].2.to_vec(),
+                        data_json: db_v3[json_idx].2.to_vec(),
                     })));
                     actual.push(storage.get_stored_value(k).map(test_hash));
                     actual_indexed.push(storage.get_stored_value(idx_k).map(test_hash));
@@ -200,7 +186,7 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
                 assert_eq!(storage.get_stored_values_count(), expected.len());
                 assert_eq!(
                     storage.get_stored_value(LAST_BLOCK_HASH_KEY).map(test_hash),
-                    expected[LAST_BLOCK_STORAGE_DB_V0_2_0_INDEX]
+                    expected[LAST_BLOCK_STORAGE_DB_V0_3_0_INDEX]
                 );
                 assert_eq!(
                     storage.get_last_block_stored(),
@@ -226,12 +212,12 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
             let miner = network.miner(name).unwrap().lock().await;
             let wallet = miner.get_wallet_db();
             let payment = wallet
-                .fetch_inputs_for_payment(Asset::token_u64(15020370))
+                .fetch_inputs_for_payment(Asset::token_u64(37550922))
                 .await
                 .unwrap();
             assert_eq!(
                 (payment.0.len(), payment.1, payment.2.len()),
-                (2, Asset::token_u64(15020370), 2)
+                (5, Asset::token_u64(37550922), 5)
             );
         }
     }
@@ -250,13 +236,6 @@ async fn open_upgrade_started_compute_real_db() {
 async fn open_upgrade_started_compute_in_memory() {
     let config = complete_network_config(20110);
     open_upgrade_started_compute_common(config, "compute1", cfg_upgrade()).await;
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn open_upgrade_started_compute_no_block_in_memory() {
-    let config = complete_network_config(20115);
-    let upgrade_cfg = cfg_upgrade_no_block();
-    open_upgrade_started_compute_common(config, "compute1", upgrade_cfg).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -280,7 +259,7 @@ async fn open_upgrade_started_user_in_memory() {
 async fn open_upgrade_started_compute_common(
     config: NetworkConfig,
     name: &str,
-    upgrade_cfg: UpgradeCfg,
+    _upgrade_cfg: UpgradeCfg,
 ) {
     test_step_start();
 
@@ -289,7 +268,7 @@ async fn open_upgrade_started_compute_common(
     //
     let mut network = Network::create_stopped_from_config(&config);
     let n_info = network.get_node_info(name).unwrap().clone();
-    let db = create_old_node_db(&n_info, upgrade_cfg.db_cfg);
+    let db = create_old_node_db(&n_info);
 
     //
     // Act
@@ -326,26 +305,19 @@ async fn upgrade_restart_network_in_memory() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn upgrade_restart_network_compute_no_block_in_memory() {
-    let config = complete_network_config(20215);
-    let upgrade_cfg = cfg_upgrade_no_block();
-    upgrade_restart_network_common(config, upgrade_cfg, Default::default(), false).await;
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn upgrade_restart_network_compute_no_block_raft_2_in_memory() {
+async fn upgrade_restart_network_raft_2_in_memory() {
     // Create 2 identical copy of the database in memory for each node in raft grup.
     // Upgrade applying the configuration data and run.
     let raft_len = 2;
 
     let config = complete_network_config(20220).with_groups(raft_len, raft_len);
-    let mut upgrade_cfg = cfg_upgrade_no_block();
+    let mut upgrade_cfg = cfg_upgrade();
     upgrade_cfg.raft_len = raft_len;
     upgrade_restart_network_common(config, upgrade_cfg, Default::default(), false).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn upgrade_restart_network_compute_no_block_raft_3_raft_db_only_in_memory() {
+async fn upgrade_restart_network_raft_3_raft_db_only_in_memory() {
     // Only copy over the upgraded raft database, and pull main db
     let raft_len = 3;
     let filter = ExtraNodeParamsFilter {
@@ -363,13 +335,13 @@ async fn upgrade_restart_network_compute_no_block_raft_3_raft_db_only_in_memory(
     .collect();
 
     let config = complete_network_config(20230).with_groups(raft_len, raft_len - 1);
-    let mut upgrade_cfg = cfg_upgrade_no_block();
+    let mut upgrade_cfg = cfg_upgrade();
     upgrade_cfg.raft_len = raft_len;
     upgrade_restart_network_common(config, upgrade_cfg, params_filters, false).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn upgrade_restart_network_compute_no_block_raft_3_pre_launch_only_in_memory() {
+async fn upgrade_restart_network_raft_3_pre_launch_only_in_memory() {
     // Pull raft database during pre-launch, and pull main db
     let raft_len = 3;
     let filter = ExtraNodeParamsFilter {
@@ -387,7 +359,7 @@ async fn upgrade_restart_network_compute_no_block_raft_3_pre_launch_only_in_memo
     .collect();
 
     let config = complete_network_config(20240).with_groups(raft_len, raft_len - 1);
-    let mut upgrade_cfg = cfg_upgrade_no_block();
+    let mut upgrade_cfg = cfg_upgrade();
     upgrade_cfg.raft_len = raft_len;
     upgrade_restart_network_common(config, upgrade_cfg, params_filters, true).await;
 }
@@ -414,7 +386,7 @@ async fn upgrade_restart_network_common(
 
     for name in network.dead_nodes().clone() {
         let n_info = network.get_node_info(&name).unwrap();
-        let db = create_old_node_db(n_info, upgrade_cfg.db_cfg);
+        let db = create_old_node_db(n_info);
         let db = get_upgrade_node_db(n_info, in_memory(db)).unwrap();
         let (db, _) = upgrade_node_db(n_info, db, &upgrade_cfg).unwrap();
         let db = filter_dbs(db, params_filters.get(&name).unwrap_or(&KEEP_ALL_FILTER));
@@ -476,7 +448,7 @@ async fn upgrade_restart_network_common(
 
         let raft_len = upgrade_cfg.raft_len;
         let expected_count =
-            tests_last_version_db::STORAGE_DB_V0_2_0.len() + extra_blocks * (miner_nodes.len() + 1);
+            STORAGE_DB_V0_3_0_INDEXES.len() + extra_blocks * (miner_nodes.len() + 1);
         assert_eq!(actual_count, vec![expected_count; raft_len]);
         assert_eq!(actual_last_bnum, vec![Some(expected_block_num); raft_len]);
     }
@@ -495,7 +467,7 @@ async fn upgrade_spend_old_tx() {
 
     for name in ["user1", "compute1"] {
         let node_info = network.get_node_info(name).unwrap().clone();
-        let db = create_old_node_db(&node_info, DbCfg::ComputeBlockToMine);
+        let db = create_old_node_db(&node_info);
         let db = get_upgrade_node_db(&node_info, in_memory(db)).unwrap();
         let (db, _) = upgrade_node_db(&node_info, db, &cfg_upgrade()).unwrap();
         let db = open_as_new_node_db(&node_info, in_memory(db)).unwrap();
@@ -532,26 +504,18 @@ async fn upgrade_spend_old_tx() {
 // Test helpers
 //
 
-fn create_old_node_db(info: &NetworkNodeInfo, db_cfg: DbCfg) -> ExtraNodeParams {
+fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
     match info.node_type {
         NodeType::Compute => ExtraNodeParams {
             db: Some(create_old_db(
                 &old::compute::DB_SPEC,
                 info.db_mode,
-                if db_cfg == DbCfg::ComputeBlockToMine {
-                    tests_last_version_db::COMPUTE_DB_V0_2_0
-                } else {
-                    tests_last_version_db_no_block::COMPUTE_DB_V0_2_0
-                },
+                tests_last_version_db::COMPUTE_DB_V0_3_0,
             )),
             raft_db: Some(create_old_db(
                 &old::compute_raft::DB_SPEC,
                 info.db_mode,
-                if db_cfg == DbCfg::ComputeBlockToMine {
-                    tests_last_version_db::COMPUTE_RAFT_DB_V0_2_0
-                } else {
-                    tests_last_version_db_no_block::COMPUTE_RAFT_DB_V0_2_0
-                },
+                tests_last_version_db::COMPUTE_RAFT_DB_V0_3_0,
             )),
             ..Default::default()
         },
@@ -559,12 +523,12 @@ fn create_old_node_db(info: &NetworkNodeInfo, db_cfg: DbCfg) -> ExtraNodeParams 
             db: Some(create_old_db(
                 &old::storage::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::STORAGE_DB_V0_2_0,
+                tests_last_version_db::STORAGE_DB_V0_3_0,
             )),
             raft_db: Some(create_old_db(
                 &old::storage_raft::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::STORAGE_RAFT_DB_V0_2_0,
+                tests_last_version_db::STORAGE_RAFT_DB_V0_3_0,
             )),
             ..Default::default()
         },
@@ -572,7 +536,7 @@ fn create_old_node_db(info: &NetworkNodeInfo, db_cfg: DbCfg) -> ExtraNodeParams 
             wallet_db: Some(create_old_db(
                 &old::wallet::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::USER_DB_V0_2_0,
+                tests_last_version_db::USER_DB_V0_3_0,
             )),
             ..Default::default()
         },
@@ -580,7 +544,7 @@ fn create_old_node_db(info: &NetworkNodeInfo, db_cfg: DbCfg) -> ExtraNodeParams 
             wallet_db: Some(create_old_db(
                 &old::wallet::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::MINER_DB_V0_2_0,
+                tests_last_version_db::MINER_DB_V0_3_0,
             )),
             ..Default::default()
         },
@@ -599,15 +563,7 @@ async fn test_step_complete(network: Network) {
 
 fn create_old_db(spec: &SimpleDbSpec, db_mode: DbMode, entries: &[DbEntryType]) -> SimpleDb {
     let mut db = new_db(db_mode, spec, None);
-
-    let mut batch = db.batch_writer();
-    batch.delete_cf(DB_COL_DEFAULT, DB_VERSION_KEY);
-    for (_column, key, value) in entries {
-        batch.put_cf(DB_COL_DEFAULT, key, value);
-    }
-    let batch = batch.done();
-    db.write(batch).unwrap();
-
+    db.import_items(entries.iter().copied()).unwrap();
     db
 }
 
@@ -731,15 +687,6 @@ fn cfg_upgrade() -> UpgradeCfg {
     UpgradeCfg {
         raft_len: 1,
         passphrase: WALLET_PASSWORD.to_owned(),
-        db_cfg: DbCfg::ComputeBlockToMine,
-    }
-}
-
-fn cfg_upgrade_no_block() -> UpgradeCfg {
-    UpgradeCfg {
-        raft_len: 1,
-        passphrase: WALLET_PASSWORD.to_owned(),
-        db_cfg: DbCfg::ComputeBlockInStorage,
     }
 }
 
@@ -751,9 +698,9 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
         block_hash: LAST_BLOCK_BLOCK_HASH.to_owned(),
         block_num: LAST_BLOCK_STORED_NUM,
         nonce: Vec::new(),
-        merkle_hash: "24c87c26cf5233f59ffe9b3f8f19cd7e1cdcf871dafb2e3e800e15cf155da944".to_owned(),
+        merkle_hash: "713dd314b0b69ed969acc84ea98fe8abdc100a2dbaf4d65161bacb5da3e71791".to_owned(),
         mining_transactions: std::iter::once((
-            "g27fac41a2d62a56c8962e3d360838c8".to_owned(),
+            "g801b501129674d9a0b389617665a95a".to_owned(),
             Transaction {
                 inputs: vec![TxIn {
                     previous_out: None,
@@ -762,11 +709,14 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
                     },
                 }],
                 outputs: vec![TxOut {
-                    value: Asset::Token(TokenAmount(7510184)),
+                    value: Asset::Token(TokenAmount(7510183)),
                     locktime: 0,
                     drs_block_hash: None,
                     drs_tx_hash: None,
-                    script_public_key: Some("79609a5b997a265ab3f370c4abef00ad".to_owned()),
+                    script_public_key: Some(
+                        "bdba6089d59492c9f89d9e3244fd6c38789884fde14e6192d87899a326a7415e"
+                            .to_owned(),
+                    ),
                 }],
                 version: old::constants::NETWORK_VERSION as usize,
                 druid_info: None,
@@ -899,7 +849,7 @@ fn index_meta(v: &str) -> BlockchainItemMeta {
             let block_num = u64::from_str_radix(block_num, 16).unwrap();
             BlockchainItemMeta::Block {
                 block_num,
-                tx_len: STORAGE_DB_V0_2_0_BLOCK_LEN[block_num as usize],
+                tx_len: STORAGE_DB_V0_3_0_BLOCK_LEN[block_num as usize],
             }
         }
         (Some("nIndexedTxHashKey"), Some(block_num), Some(tx_num)) => BlockchainItemMeta::Tx {

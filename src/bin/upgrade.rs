@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 use system::configurations::DbMode;
 use system::upgrade::{
     dump_db, get_db_to_dump_no_checks, get_upgrade_compute_db, get_upgrade_storage_db,
-    get_upgrade_wallet_db, upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, DbCfg,
-    DbSpecInfo, UpgradeCfg, UpgradeError, DB_SPEC_INFOS,
+    get_upgrade_wallet_db, upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, DbSpecInfo,
+    UpgradeCfg, UpgradeError, DB_SPEC_INFOS,
 };
 
 const NODE_TYPES: &[&str] = &["compute", "storage", "user", "miner"];
@@ -49,14 +49,14 @@ fn process_read(db_modes: Vec<(String, DbMode)>) -> Result<(), UpgradeError> {
     println!("///");
     println!("/// Upgrade with config {:?}", db_modes);
     println!("/// Preserved hard coded compute database");
-    println!("pub type DbEntryType = (&'static [u8], &'static [u8], &'static [u8]);");
+    println!("pub type DbEntryType = (&'static str, &'static [u8], &'static [u8]);");
     println!();
     for (node_type, mode) in db_modes {
         for spec in DB_SPEC_INFOS.iter().filter(|s| s.node_type == node_type) {
             let raft_name = raft_for_spec(spec);
             println!("/// Database for {}{}, {:?}", node_type, raft_name, mode);
 
-            let name = format!("{}{}_DB_V0_2_0", spec.node_type, raft_name).to_ascii_uppercase();
+            let name = format!("{}{}_DB_V0_3_0", spec.node_type, raft_name).to_ascii_uppercase();
             println!("pub const {}: &[DbEntryType] = &[", name);
 
             let db = get_db_to_dump_no_checks(mode, spec, None)?;
@@ -150,12 +150,6 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("compute_block")
-                .long("compute_block")
-                .help("Specify what to do with compute node: mine or discard")
-                .takes_value(true),
-        )
-        .arg(
             Arg::with_name("ignore")
                 .long("ignore")
                 .help("Ignore some toml nodes: ignore=compute.0,storage.0,user.1,miner.1")
@@ -190,16 +184,10 @@ fn configuration(
         "upgrade" => Processing::Upgrade,
         v => panic!("expect processing to be read or upgrade: {}", v),
     };
-    let db_cfg = match matches.value_of("compute_block").unwrap() {
-        "mine" => DbCfg::ComputeBlockToMine,
-        "discard" => DbCfg::ComputeBlockInStorage,
-        v => panic!("expect compute_block to be miner or discard: {}", v),
-    };
     let raft_len = settings.get_array("storage_nodes").unwrap().len();
     let upgrade_cfg = UpgradeCfg {
         raft_len,
         passphrase,
-        db_cfg,
     };
 
     let ignore = matches.value_of("ignore").unwrap_or("");
@@ -251,7 +239,6 @@ mod test {
             "--config=src/bin/node_settings_local_raft_1.toml",
             "--processing=read",
             "--type=all",
-            "--compute_block=mine",
         ];
         let expected = (
             Processing::Read,
@@ -265,7 +252,6 @@ mod test {
             UpgradeCfg {
                 raft_len: 1,
                 passphrase: String::new(),
-                db_cfg: DbCfg::ComputeBlockToMine,
             },
         );
 
@@ -281,7 +267,6 @@ mod test {
             "--index=1",
             "--type=user",
             "--passphrase=TestPassPhrase",
-            "--compute_block=discard",
         ];
         let expected = (
             Processing::Upgrade,
@@ -289,7 +274,6 @@ mod test {
             UpgradeCfg {
                 raft_len: 1,
                 passphrase: "TestPassPhrase".to_owned(),
-                db_cfg: DbCfg::ComputeBlockInStorage,
             },
         );
 
@@ -303,7 +287,6 @@ mod test {
             "--config=src/bin/node_settings_local_raft_3.toml",
             "--processing=read",
             "--type=compute",
-            "--compute_block=mine",
         ];
         let expected = (
             Processing::Read,
@@ -311,7 +294,6 @@ mod test {
             UpgradeCfg {
                 raft_len: 3,
                 passphrase: String::new(),
-                db_cfg: DbCfg::ComputeBlockToMine,
             },
         );
 
@@ -325,7 +307,6 @@ mod test {
             "--config=src/bin/node_settings_local_raft_2.toml",
             "--processing=read",
             "--type=all",
-            "--compute_block=mine",
             "--ignore=miner.1,miner.2,miner.3,miner.4,miner.5,miner.6,user.1",
         ];
         let expected = (
@@ -341,7 +322,6 @@ mod test {
             UpgradeCfg {
                 raft_len: 2,
                 passphrase: String::new(),
-                db_cfg: DbCfg::ComputeBlockToMine,
             },
         );
 

@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::ops::Range;
 use std::time::Duration;
 use tokio::time::{self, Instant};
-use tracing::error;
+use tracing::{debug, error};
 
 pub type FetchedBlockChain = (u64, Vec<BlockchainItem>);
 
@@ -157,6 +157,10 @@ impl StorageFetch {
         &mut self,
         last_contiguous_block_num: Option<u64>,
     ) {
+        debug!(
+            "set_initial_last_contiguous_block_key = {:?}",
+            last_contiguous_block_num
+        );
         self.last_contiguous_block_num = last_contiguous_block_num;
     }
 

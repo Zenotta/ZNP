@@ -1,4 +1,5 @@
 use crate::configurations::WalletTxSpec;
+use crate::constants::NETWORK_VERSION;
 use crate::utils::{create_valid_transaction_with_ins_outs, make_wallet_tx_info};
 use bincode::{deserialize, serialize};
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
@@ -8,6 +9,11 @@ use naom::utils::transaction_utils::{
     construct_address, construct_address_for, get_tx_out_with_out_point,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use tracing::debug;
+
+pub type PendingMap = BTreeMap<String, (Transaction, Vec<(String, OutPoint, TokenAmount)>)>;
+pub type ReadyMap = BTreeMap<String, Vec<(OutPoint, TokenAmount)>>;
+pub type TransactionGenSer = (PendingMap, ReadyMap);
 
 /// Key material to generate transactions
 #[derive(Clone, Debug)]
@@ -23,8 +29,8 @@ pub struct TransactionsKeys {
 pub struct TransactionGen {
     addr_to_keys: BTreeMap<String, TransactionsKeys>,
     up_to_date_with_snapshot: bool,
-    pending: BTreeMap<String, Transaction>,
-    ready: BTreeMap<String, Vec<(OutPoint, TokenAmount)>>,
+    pending: PendingMap,
+    ready: ReadyMap,
     from_to_address: Vec<(String, String)>,
 }
 
@@ -92,7 +98,7 @@ impl TransactionGen {
         }
     }
 
-    pub fn pending_txs(&self) -> &BTreeMap<String, Transaction> {
+    pub fn pending_txs(&self) -> &PendingMap {
         &self.pending
     }
 
@@ -106,10 +112,24 @@ impl TransactionGen {
     }
 
     pub fn apply_snapshot_state(&mut self, snapshot: &[u8]) {
-        let (pending, ready) = deserialize(snapshot).unwrap();
+        let (pending, ready): TransactionGenSer = deserialize(snapshot).unwrap();
         self.pending = pending;
         self.ready = ready;
         self.up_to_date_with_snapshot = true;
+        debug!("apply_snapshot_state: {:?}", self);
+
+        for (tx_hash, (tx, src)) in std::mem::take(&mut self.pending) {
+            if tx.version == NETWORK_VERSION as usize {
+                self.pending.insert(tx_hash, (tx, src));
+                continue;
+            }
+
+            for (address, out_p, amount) in src {
+                self.ready.get_mut(&address).unwrap().push((out_p, amount));
+            }
+        }
+
+        debug!("apply_snapshot_state updated: {:?}", self);
     }
 
     /// Commit transaction that are ready to be spent
@@ -121,7 +141,7 @@ impl TransactionGen {
 
         for (addr, read_txs) in &mut self.ready {
             read_txs.extend(
-                get_tx_out_with_out_point(txs.iter().map(|(o, t)| (o, t)))
+                get_tx_out_with_out_point(txs.iter().map(|(o, (t, _))| (o, t)))
                     .filter(|(_, tx_out)| Some(addr) == tx_out.script_public_key.as_ref())
                     .map(|(out_p, tx_out)| (out_p, tx_out.value.token_amount())),
             );
@@ -184,7 +204,12 @@ impl TransactionGen {
                 TokenAmount(1),
                 keys.version,
             );
-            self.pending.insert(hash.clone(), tx.clone());
+
+            let inputs = inputs
+                .into_iter()
+                .map(|(o, a)| (from.to_owned(), o, a))
+                .collect();
+            self.pending.insert(hash.clone(), (tx.clone(), inputs));
 
             Some((hash, tx))
         } else {

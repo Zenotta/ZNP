@@ -42,11 +42,16 @@ pub const DB_COL_BC_ALL: &str = "block_chain_all";
 pub const DB_COL_BC_NAMED: &str = "block_chain_named";
 pub const DB_COL_BC_META: &str = "block_chain_meta";
 pub const DB_COL_BC_JSON: &str = "block_chain_json";
-pub const DB_COL_BC_NOW: &str = "block_chain_v0.3.0";
+pub const DB_COL_BC_NOW: &str = "block_chain_v0.4.0";
+pub const DB_COL_BC_V0_3_0: &str = "block_chain_v0.3.0";
 pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
 
 /// Version columns
-pub const DB_COLS_BC: &[(&str, u32)] = &[(DB_COL_BC_NOW, 1), (DB_COL_BC_V0_2_0, 0)];
+pub const DB_COLS_BC: &[(&str, u32)] = &[
+    (DB_COL_BC_NOW, 2),
+    (DB_COL_BC_V0_3_0, 1),
+    (DB_COL_BC_V0_2_0, 0),
+];
 pub const DB_POINTER_SEPARATOR: u8 = b':';
 
 /// Database specification
@@ -60,6 +65,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
         DB_COL_BC_META,
         DB_COL_BC_JSON,
         DB_COL_BC_NOW,
+        DB_COL_BC_V0_3_0,
         DB_COL_BC_V0_2_0,
     ],
 };
@@ -476,6 +482,10 @@ impl StorageNode {
                 if let Some(stored) = self.node_raft.get_last_block_stored() {
                     let b_num = stored.block_num;
                     if self.catchup_fetch.fetch_missing_blockchain_items(b_num) {
+                        debug!(
+                            "Snapshot applied: Fetch missing blocks: {:?}",
+                            &self.catchup_fetch
+                        );
                         return Some(Ok(Response {
                             success: true,
                             reason: "Snapshot applied: Fetch missing blocks",

@@ -3,8 +3,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod constants {
-    pub const NETWORK_VERSION: u32 = 0;
-    pub const NETWORK_VERSION_SERIALIZED: Option<&[u8]> = None;
+    pub const NETWORK_VERSION: u32 = 1;
+    pub const NETWORK_VERSION_SERIALIZED: Option<&[u8]> = Some(b"1");
     pub const DB_PATH: &str = "src/db/db";
     pub const WALLET_PATH: &str = "src/wallet/wallet";
 }
@@ -19,12 +19,8 @@ pub mod naom {
     pub type PublicKey = Vec<u8>;
     pub type SecretKey = Vec<u8>;
     pub type Signature = Vec<u8>;
-
-    #[derive(Clone, Debug, Serialize, Deserialize)]
-    pub struct StoredSerializingBlock {
-        pub block: Block,
-        pub mining_tx_hash_and_nonces: BTreeMap<u64, (String, Vec<u8>)>,
-    }
+    pub type Nonce = Vec<u8>;
+    pub type Salt = Vec<u8>;
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct Block {
@@ -52,10 +48,21 @@ pub mod naom {
         pub inputs: Vec<TxIn>,
         pub outputs: Vec<TxOut>,
         pub version: usize,
-        pub druid: Option<String>,
-        pub druid_participants: Option<usize>,
-        pub expect_value: Option<Asset>,
-        pub expect_value_amount: Option<TokenAmount>,
+        pub druid_info: Option<DdeValues>,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct DdeValues {
+        pub druid: String,
+        pub participants: usize,
+        pub expectations: Vec<DruidExpectation>,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct DruidExpectation {
+        pub from: String,
+        pub to: String,
+        pub asset: Asset,
     }
 
     //
@@ -97,6 +104,8 @@ pub mod naom {
         OP_HASH256 = 0x5d,
         OP_EQUALVERIFY = 0x3d,
         OP_CHECKSIG = 0x5f,
+        OP_HASH256_V0 = 0x6e,
+        OP_HASH256_TEMP = 0x6f,
     }
 
     impl Serialize for OpCodes {
@@ -113,6 +122,8 @@ pub mod naom {
                 0x5d => Ok(Self::OP_HASH256),
                 0x3d => Ok(Self::OP_EQUALVERIFY),
                 0x5f => Ok(Self::OP_CHECKSIG),
+                0x6e => Ok(Self::OP_HASH256_V0),
+                0x6f => Ok(Self::OP_HASH256_TEMP),
                 v => Err(serde::de::Error::custom(format!(
                     "Unkown OpCodes x{:02X}",
                     v
@@ -127,12 +138,18 @@ pub mod naom {
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct TxOut {
-        pub value: Option<Asset>,
-        pub amount: TokenAmount,
+        pub value: Asset,
         pub locktime: u64,
         pub drs_block_hash: Option<String>,
         pub drs_tx_hash: Option<String>,
         pub script_public_key: Option<String>,
+    }
+
+    #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
+    pub enum Asset {
+        Token(TokenAmount),
+        Data(DataAsset),
+        Receipt(u64),
     }
 
     #[derive(
@@ -140,16 +157,22 @@ pub mod naom {
     )]
     pub struct TokenAmount(pub u64);
 
-    #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
-    pub enum Asset {
-        Token(TokenAmount),
-        Data(Vec<u8>),
+    #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+    pub struct DataAsset {
+        pub data: Vec<u8>,
+        pub amount: u64,
     }
 }
 
 pub mod interfaces {
-    use super::naom::Transaction;
+    use super::naom::{Block, Transaction};
     use super::*;
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct StoredSerializingBlock {
+        pub block: Block,
+        pub mining_tx_hash_and_nonces: BTreeMap<u64, (String, Vec<u8>)>,
+    }
 
     #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
     pub struct BlockStoredInfo {
@@ -158,12 +181,14 @@ pub mod interfaces {
         pub nonce: Vec<u8>,
         pub merkle_hash: String,
         pub mining_transactions: BTreeMap<String, Transaction>,
+        pub shutdown: bool,
     }
 }
 
 pub mod raft_store {
     pub const HARDSTATE_KEY: &str = "HardStateKey";
-    pub const SNAPSHOT_KEY: &str = "SnaphotKey";
+    pub const SNAPSHOT_DATA_KEY: &str = "SnaphotDataKey";
+    pub const SNAPSHOT_META_KEY: &str = "SnaphotMetaKey";
     pub const ENTRY_KEY: &str = "EntryKey";
     pub const LAST_ENTRY_KEY: &str = "LastEntryKey";
 }
@@ -171,19 +196,29 @@ pub mod raft_store {
 pub mod compute {
     use super::*;
 
+    /// Key for local miner list
     pub const REQUEST_LIST_KEY: &str = "RequestListKey";
+    pub const USER_NOTIFY_LIST_KEY: &str = "UserNotifyListKey";
+    pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 
-    // New but compatible with 0.2.0
+    /// Database columns
+    pub const DB_COL_INTERNAL: &str = "internal";
+    pub const DB_COL_LOCAL_TXS: &str = "local_transactions";
+
+    // New but compatible with 1.0
     pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
         db_path: constants::DB_PATH,
         suffix: ".compute",
-        columns: &[],
+        columns: &[DB_COL_INTERNAL, DB_COL_LOCAL_TXS],
     };
 }
 
 pub mod compute_raft {
     use super::naom::*;
     use super::*;
+
+    // Only serialize the UtxoSet
+    pub type TrackedUtxoSet = UtxoSet;
 
     // New but compatible with 0.2.0
     pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
@@ -195,6 +230,12 @@ pub mod compute_raft {
     /// Stub AccumulatingBlockStoredInfo that should not be present in upgrade
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AccumulatingBlockStoredInfo {}
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub enum SpecialHandling {
+        Shutdown,
+        FirstUpgradeBlock,
+    }
 
     /// All fields that are consensused between the RAFT group.
     /// These fields need to be written and read from a committed log event.
@@ -209,27 +250,55 @@ pub mod compute_raft {
         pub current_block: Option<Block>,
         pub current_block_tx: BTreeMap<String, Transaction>,
         pub initial_utxo_txs: Option<BTreeMap<String, Transaction>>,
-        pub utxo_set: UtxoSet,
+        pub utxo_set: TrackedUtxoSet,
         pub current_block_stored_info:
             BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
         pub last_committed_raft_idx_and_term: (u64, u64),
         pub current_circulation: TokenAmount,
         pub current_reward: TokenAmount,
+        pub last_mining_transaction_hashes: Vec<String>,
+        pub special_handling: Option<SpecialHandling>,
     }
 }
 
 pub mod storage {
     use super::*;
 
+    /// Key storing current proposer run
+    pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
+    pub const LAST_CONTIGUOUS_BLOCK_KEY: &str = "LastContiguousBlockKey";
+
+    /// Database columns
+    pub const DB_COL_INTERNAL: &str = "internal";
+    pub const DB_COL_BC_ALL: &str = "block_chain_all";
+    pub const DB_COL_BC_NAMED: &str = "block_chain_named";
+    pub const DB_COL_BC_META: &str = "block_chain_meta";
+    pub const DB_COL_BC_JSON: &str = "block_chain_json";
+    pub const DB_COL_BC_V0_3_0: &str = "block_chain_v0.3.0";
+    pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
+
+    /// Version columns
+    pub const DB_COLS_BC: &[(&str, u32)] = &[(DB_COL_BC_V0_3_0, 1), (DB_COL_BC_V0_2_0, 0)];
+    pub const DB_POINTER_SEPARATOR: u8 = b':';
+
     // New but compatible with 0.2.0
     pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
         db_path: constants::DB_PATH,
         suffix: ".storage",
-        columns: &[],
+        columns: &[
+            DB_COL_INTERNAL,
+            DB_COL_BC_ALL,
+            DB_COL_BC_NAMED,
+            DB_COL_BC_META,
+            DB_COL_BC_JSON,
+            DB_COL_BC_V0_3_0,
+            DB_COL_BC_V0_2_0,
+        ],
     };
 }
 
 pub mod storage_raft {
+    use super::interfaces::BlockStoredInfo;
     use super::*;
 
     // New but compatible with 0.2.0
@@ -252,15 +321,22 @@ pub mod storage_raft {
         pub current_block_complete_timeout_peer_ids: BTreeSet<u64>,
         pub current_block_completed_parts: BTreeMap<Vec<u8>, CompleteBlock>,
         pub last_committed_raft_idx_and_term: (u64, u64),
+        pub last_block_stored: Option<BlockStoredInfo>,
     }
 }
 
 pub mod wallet {
-    use super::naom::{OutPoint, PublicKey, SecretKey, TokenAmount};
+    use super::naom::{
+        Asset, Nonce, OutPoint, PublicKey, Salt, SecretKey, TokenAmount, Transaction,
+    };
     use super::*;
 
     pub const KNOWN_ADDRESS_KEY: &str = "a";
     pub const FUND_KEY: &str = "f";
+    pub const MASTER_KEY_STORE_KEY: &str = "MasterKeyStore";
+    pub const TX_GENERATOR_KEY: &str = "TxGeneratorKey";
+    pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
+    pub const MINING_ADDRESS_KEY: &str = "MiningAddressKey";
 
     // New but compatible with 0.2.0
     pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
@@ -269,20 +345,41 @@ pub mod wallet {
         columns: &[],
     };
 
-    pub type WalletSavedTransactions = BTreeMap<OutPoint, TokenAmount>;
+    pub type WalletSavedTransactions = BTreeMap<OutPoint, Asset>;
+
+    pub type PendingMap = BTreeMap<String, Transaction>;
+    pub type ReadyMap = BTreeMap<String, Vec<(OutPoint, TokenAmount)>>;
+    pub type TransactionGenSer = (PendingMap, ReadyMap);
+
+    pub type LastCoinbase = (String, Transaction);
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct MasterKeyStore {
+        pub salt: Salt,
+        pub nonce: Nonce,
+        pub enc_master_key: Vec<u8>,
+    }
+
     #[derive(Default, Debug, Clone, Serialize, Deserialize)]
     pub struct FundStore {
-        pub running_total: TokenAmount,
+        pub running_total: AssetValues,
         pub transactions: WalletSavedTransactions,
         pub spent_transactions: WalletSavedTransactions,
     }
 
-    pub type KnownAddresses = BTreeSet<String>;
+    #[derive(Default, Debug, Copy, Clone, Serialize, Deserialize)]
+    pub struct AssetValues {
+        pub tokens: TokenAmount,
+        pub receipts: u64,
+    }
+
+    pub type KnownAddresses = Vec<String>;
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct AddressStore {
         pub public_key: PublicKey,
         pub secret_key: SecretKey,
+        pub address_version: Option<u64>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,13 +393,14 @@ pub mod convert {
         pub use super::super::*;
     }
     use crate::{
-        compute_raft, interfaces, storage_raft,
+        compute_raft, interfaces, storage_raft, transaction_gen,
         wallet::{self, AssetValues},
     };
     use naom::crypto::sign_ed25519::{PublicKey, SecretKey, Signature};
     use naom::primitives::{
         asset::{Asset, DataAsset, TokenAmount},
         block::{Block, BlockHeader},
+        druid::{DdeValues, DruidExpectation},
         transaction::{OutPoint, Transaction, TxIn, TxOut},
     };
     use naom::script::{lang::Script, OpCodes, StackEntry};
@@ -332,7 +430,27 @@ pub mod convert {
             inputs: old.inputs.into_iter().map(convert_txin).collect(),
             outputs: old.outputs.into_iter().map(convert_txout).collect(),
             version: old.version,
-            druid_info: None,
+            druid_info: old.druid_info.map(convert_dde_values),
+        }
+    }
+
+    pub fn convert_dde_values(old: old::naom::DdeValues) -> DdeValues {
+        DdeValues {
+            druid: old.druid,
+            participants: old.participants,
+            expectations: old
+                .expectations
+                .into_iter()
+                .map(convert_druid_expectation)
+                .collect(),
+        }
+    }
+
+    pub fn convert_druid_expectation(old: old::naom::DruidExpectation) -> DruidExpectation {
+        DruidExpectation {
+            from: old.from,
+            to: old.to,
+            asset: convert_asset(old.asset),
         }
     }
 
@@ -359,12 +477,8 @@ pub mod convert {
     pub fn convert_stack_entry(old: old::naom::StackEntry) -> StackEntry {
         match old {
             old::naom::StackEntry::Op(v) => StackEntry::Op(convert_op_code(v)),
-            old::naom::StackEntry::Signature(v) => {
-                StackEntry::Signature(Signature::from_slice(&v).unwrap())
-            }
-            old::naom::StackEntry::PubKey(v) => {
-                StackEntry::PubKey(PublicKey::from_slice(&v).unwrap())
-            }
+            old::naom::StackEntry::Signature(v) => StackEntry::Signature(convert_signature(v)),
+            old::naom::StackEntry::PubKey(v) => StackEntry::PubKey(convert_public_key(v)),
             old::naom::StackEntry::PubKeyHash(v) => StackEntry::PubKeyHash(v),
             old::naom::StackEntry::Num(v) => StackEntry::Num(v),
             old::naom::StackEntry::Bytes(v) => StackEntry::Bytes(v),
@@ -377,39 +491,38 @@ pub mod convert {
             old::naom::OpCodes::OP_HASH256 => OpCodes::OP_HASH256,
             old::naom::OpCodes::OP_EQUALVERIFY => OpCodes::OP_EQUALVERIFY,
             old::naom::OpCodes::OP_CHECKSIG => OpCodes::OP_CHECKSIG,
+            old::naom::OpCodes::OP_HASH256_V0 => OpCodes::OP_HASH256_V0,
+            old::naom::OpCodes::OP_HASH256_TEMP => OpCodes::OP_HASH256_TEMP,
         }
     }
 
     pub fn convert_txout(old: old::naom::TxOut) -> TxOut {
         TxOut {
-            value: convert_asset(old.value, old.amount),
+            value: convert_asset(old.value),
             locktime: old.locktime,
-            drs_block_hash: None,
-            drs_tx_hash: None,
+            drs_block_hash: old.drs_block_hash,
+            drs_tx_hash: old.drs_tx_hash,
             script_public_key: old.script_public_key,
         }
     }
 
-    pub fn convert_asset(
-        old_val: Option<old::naom::Asset>,
-        old_amount: old::naom::TokenAmount,
-    ) -> Asset {
-        match old_val {
-            Some(old::naom::Asset::Token(v)) => Asset::Token(convert_token_amount(v)),
-            Some(old::naom::Asset::Data(v)) => Asset::Data(DataAsset {
-                data: v,
-                amount: old_amount.0,
-            }),
-            None => Asset::Token(convert_token_amount(old_amount)),
+    pub fn convert_asset(old: old::naom::Asset) -> Asset {
+        match old {
+            old::naom::Asset::Token(v) => Asset::Token(convert_token_amount(v)),
+            old::naom::Asset::Data(v) => Asset::Data(convert_data_asset(v)),
+            old::naom::Asset::Receipt(v) => Asset::Receipt(v),
+        }
+    }
+
+    pub fn convert_data_asset(old: old::naom::DataAsset) -> DataAsset {
+        DataAsset {
+            data: old.data,
+            amount: old.amount,
         }
     }
 
     pub fn convert_token_amount(old: old::naom::TokenAmount) -> TokenAmount {
         TokenAmount(old.0)
-    }
-
-    pub fn convert_token_to_asset_value(old: old::naom::TokenAmount) -> AssetValues {
-        AssetValues::new(convert_token_amount(old), 0)
     }
 
     pub fn convert_token_to_asset(old: old::naom::TokenAmount) -> Asset {
@@ -429,62 +542,34 @@ pub mod convert {
     }
 
     pub fn convert_secret_key(old: old::naom::SecretKey) -> SecretKey {
-        //
-        // Format: ring pkcs8_prefix + Private key + pkcs8_separator + Public key
-        //
+        SecretKey::from_slice(&old).unwrap()
+    }
 
-        // Sequence: 0x30
-        // Size 83: 0x53
-        // Value: remaining byptes
-        //
-        // Integer: 0x02
-        // Size 01: 0x01
-        // Value 01: 0x01  (Version)
-        //
-        // Sequence: 0x30
-        // size 05: 0x05
-        // Value: 0x06 0x03 0x2b 0x65 0x70 (Algo)
-        //
-        // OctetString: 0x04
-        // Size 34 : 0x22
-        // Value: 0x04 0x20 + Private key bytes (nested private key)
-        const PKCS8_PREFIX: &[u8] = &[
-            0x30, 0x53, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
-            0x04, 0x20,
-        ];
+    pub fn convert_signature(old: old::naom::Signature) -> Signature {
+        Signature::from_slice(&old).unwrap()
+    }
 
-        // ContextSpecificConstructed1: 0xa1
-        // Size 35: 0x23
-        // Value: remaining byptes
-        //
-        // BitString: 0x03
-        // Size 33: 0x21
-        // unused_bits_at_end: 0: 0x00
-        // Value: public key bytes
-        const PKCS8_SEPARATOR: &[u8] = &[0xa1, 0x23, 0x03, 0x21, 0x00];
+    pub fn convert_fund_store(old: old::wallet::FundStore) -> wallet::FundStore {
+        wallet::FundStore::new(
+            convert_asset_values(old.running_total),
+            convert_saved_wallet_transactions(old.transactions),
+            convert_saved_wallet_transactions(old.spent_transactions),
+        )
+    }
 
-        let mut secret_key = PKCS8_PREFIX.to_vec();
-        secret_key.extend_from_slice(&old[..32]);
-        secret_key.extend_from_slice(PKCS8_SEPARATOR);
-        secret_key.extend_from_slice(&old[32..]);
-
-        SecretKey::from_slice(&secret_key).unwrap()
+    pub fn convert_asset_values(old: old::wallet::AssetValues) -> AssetValues {
+        AssetValues {
+            tokens: convert_token_amount(old.tokens),
+            receipts: old.receipts,
+        }
     }
 
     pub fn convert_saved_wallet_transactions(
         old: old::wallet::WalletSavedTransactions,
     ) -> BTreeMap<OutPoint, Asset> {
         old.into_iter()
-            .map(|(k, v)| (convert_outpoint(k), convert_token_to_asset(v)))
+            .map(|(k, v)| (convert_outpoint(k), convert_asset(v)))
             .collect()
-    }
-
-    pub fn convert_fund_store(old: old::wallet::FundStore) -> wallet::FundStore {
-        wallet::FundStore::new(
-            convert_token_to_asset_value(old.running_total),
-            convert_saved_wallet_transactions(old.transactions),
-            convert_saved_wallet_transactions(old.spent_transactions),
-        )
     }
 
     pub fn convert_compute_consensused_to_import(
@@ -511,13 +596,12 @@ pub mod convert {
 
     pub fn convert_storage_consensused_to_import(
         old: old::storage_raft::StorageConsensused,
-        last_block_stored: Option<interfaces::BlockStoredInfo>,
     ) -> storage_raft::StorageConsensusedImport {
         storage_raft::StorageConsensusedImport {
             sufficient_majority: old.sufficient_majority,
             current_block_num: old.current_block_num,
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
-            last_block_stored,
+            last_block_stored: old.last_block_stored.map(convert_block_stored_info),
         }
     }
 
@@ -540,6 +624,39 @@ pub mod convert {
         old.into_iter()
             .map(|(k, v)| (k, convert_transaction(v)))
             .collect()
+    }
+
+    pub fn convert_transaction_gen(
+        (old_pending, old_ready): old::wallet::TransactionGenSer,
+    ) -> transaction_gen::TransactionGenSer {
+        let (mut pending, mut ready) = transaction_gen::TransactionGenSer::default();
+        for (k, v) in old_ready {
+            ready.insert(
+                k,
+                v.into_iter()
+                    .map(|(o, a)| (convert_outpoint(o), convert_token_amount(a)))
+                    .collect(),
+            );
+        }
+        for (tx_hash, tx) in old_pending {
+            // Best effort regenerate the ready input
+            let mut src = Vec::new();
+            let tx = convert_transaction(tx);
+            for tx_in in &tx.inputs {
+                let out_p = tx_in.previous_out.clone().unwrap();
+                let address = (tx_in.script_signature.stack.get(5))
+                    .and_then(|v| match v {
+                        StackEntry::PubKeyHash(address) => Some(address.clone()),
+                        _ => None,
+                    })
+                    .unwrap();
+
+                src.push((address, out_p, TokenAmount(1)));
+            }
+            pending.insert(tx_hash, (tx, src));
+        }
+
+        (pending, ready)
     }
 }
 pub use convert::*;

@@ -209,6 +209,13 @@ impl BlockchainItemMeta {
             Self::Tx { .. } => BlockchainItemType::Tx,
         }
     }
+
+    pub fn block_num(&self) -> u64 {
+        match self {
+            Self::Block { block_num, .. } => *block_num,
+            Self::Tx { block_num, .. } => *block_num,
+        }
+    }
 }
 
 /// Denotes blockchain item types

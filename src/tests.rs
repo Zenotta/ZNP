@@ -3542,7 +3542,9 @@ async fn user_process_mining_notified(
 ) -> Option<BTreeMap<String, Transaction>> {
     let mut u = network.user(user).unwrap().lock().await;
     u.process_mining_notified().await;
-    u.pending_test_auto_gen_txs().cloned()
+    u.pending_test_auto_gen_txs()
+        .cloned()
+        .map(|m| m.into_iter().map(|(k, (tx, _))| (k, tx)).collect())
 }
 
 async fn user_get_received_utxo_set_keys(network: &mut Network, user: &str) -> Vec<OutPoint> {

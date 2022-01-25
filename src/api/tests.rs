@@ -144,12 +144,13 @@ fn get_wallet_db(passphrase: &str) -> WalletDb {
 }
 
 fn get_db_with_block_no_mutex() -> SimpleDb {
-    let block = Block::new();
-
     let tx = Transaction::new();
     let tx_value = serialize(&tx).unwrap();
     let tx_json = serde_json::to_vec(&tx).unwrap();
-    let tx_hash = hex::encode(Sha3_256::digest(&serialize(&tx_value).unwrap()));
+    let tx_hash = construct_tx_hash(&tx);
+
+    let mut block = Block::new();
+    block.transactions.push(tx_hash.clone());
 
     let mut mining_tx_hash_and_nonces = BTreeMap::new();
     mining_tx_hash_and_nonces.insert(0, ("test".to_string(), vec![0, 1, 23]));
@@ -174,7 +175,7 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
 
     {
         let block_num = 0;
-        let tx_len = 0;
+        let tx_len = 1;
         let t = BlockchainItemMeta::Block { block_num, tx_len };
         let pointer = put_to_block_chain(&mut batch, &t, &block_hash, &block_input, &block_json);
         put_named_last_block_to_block_chain(&mut batch, &pointer);
@@ -308,7 +309,7 @@ async fn test_get_latest_block() {
     let res = request.reply(&filter).await;
 
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}");
+    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}");
 }
 
 /// Test GET wallet keypairs
@@ -602,59 +603,87 @@ async fn test_get_utxo_set_addresses() {
 /// Test POST for get blockchain block by key
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_block() {
-    let _ = tracing_log_try_init();
+    let expected_meta = success_json();
+    let expected_body = "{\"Block\":{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}}";
 
-    let db = get_db_with_block();
-    let filter = routes::blockchain_entry_by_key(&mut dp(), db);
-
-    let res = warp::test::request()
-        .method("POST")
-        .path("/blockchain_entry_by_key")
-        .header("Content-Type", "application/json")
-        .json(&"b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a005a9997")
-        .reply(&filter)
-        .await;
-
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert("content-type", HeaderValue::from_static("application/json"));
-
-    assert_eq!(res.status(), 200);
-    assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "{\"Block\":{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}}");
+    test_post_blockchain_entry_by_key(
+        "b0056e102a0a2431982d71a88455c2b7d9eb262ad9ea54a68b36163e6c63b6541",
+        expected_meta.clone(),
+        expected_body,
+    )
+    .await;
+    test_post_blockchain_entry_by_key(
+        "nIndexedBlockHashKey_0000000000000000",
+        expected_meta,
+        expected_body,
+    )
+    .await;
 }
 
 /// Test POST for get blockchain tx by key
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_tx() {
-    let _ = tracing_log_try_init();
+    let expected_meta = success_json();
+    let expected_body =
+        "{\"Transaction\":{\"inputs\":[],\"outputs\":[],\"version\":2,\"druid_info\":null}}";
 
-    let db = get_db_with_block();
-    let filter = routes::blockchain_entry_by_key(&mut dp(), db);
-
-    let res = warp::test::request()
-        .method("POST")
-        .path("/blockchain_entry_by_key")
-        .header("Content-Type", "application/json")
-        .json(&"1842d4e51e99e14671077e4cac648339c3ca57e7219257fed707afd0f4d96232")
-        .reply(&filter)
-        .await;
-
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert("content-type", HeaderValue::from_static("application/json"));
-
-    assert_eq!(res.status(), 200);
-    assert_eq!(res.headers(), &headers);
-    assert_eq!(
-        res.body(),
-        "{\"Transaction\":{\"inputs\":[],\"outputs\":[],\"version\":1,\"druid_info\":null}}"
-    );
+    test_post_blockchain_entry_by_key(
+        "g98d0ab9304ca82f098a86ad6251803b",
+        expected_meta.clone(),
+        expected_body,
+    )
+    .await;
+    test_post_blockchain_entry_by_key(
+        "nIndexedTxHashKey_0000000000000000_00000001",
+        expected_meta,
+        expected_body,
+    )
+    .await;
 }
 
 /// Test POST for get blockchain with wrong key
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_failure() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    let expected_meta = (StatusCode::from_u16(500).unwrap(), headers);
+    let expected_body = "Unhandled rejection: ErrorNoDataFoundForKey";
+
+    test_post_blockchain_entry_by_key(
+        "b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a00000000",
+        expected_meta.clone(),
+        expected_body,
+    )
+    .await;
+    test_post_blockchain_entry_by_key(
+        "1842d4e51e99e14671077e4cac648339c3ca57e7219257fed707afd0f0000000",
+        expected_meta.clone(),
+        expected_body,
+    )
+    .await;
+    test_post_blockchain_entry_by_key(
+        "nIndexedTxHashKey_0000000000000011",
+        expected_meta.clone(),
+        expected_body,
+    )
+    .await;
+    test_post_blockchain_entry_by_key(
+        "nIndexedTxHashKey_0000000000000000_00000011",
+        expected_meta.clone(),
+        expected_body,
+    )
+    .await;
+    test_post_blockchain_entry_by_key("Test", expected_meta, expected_body).await;
+}
+
+async fn test_post_blockchain_entry_by_key(
+    key: &str,
+    expected_meta: (StatusCode, HeaderMap),
+    expected_body: &str,
+) {
     let _ = tracing_log_try_init();
 
     let db = get_db_with_block();
@@ -664,20 +693,12 @@ async fn test_post_blockchain_entry_by_key_failure() {
         .method("POST")
         .path("/blockchain_entry_by_key")
         .header("Content-Type", "application/json")
-        .json(&"test")
+        .json(&key)
         .reply(&filter)
         .await;
 
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "content-type",
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-
-    assert_eq!(res.status(), 500);
-    assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "Unhandled rejection: ErrorNoDataFoundForKey");
+    assert_eq!((res.status(), res.headers().clone()), expected_meta);
+    assert_eq!(res.body(), expected_body);
 }
 
 /// Test POST for get block info by nums
@@ -702,7 +723,7 @@ async fn test_post_block_info_by_nums() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "[[\"b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a005a9997\",{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}],[\"\",\"\"],[\"b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a005a9997\",{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}]]");
+    assert_eq!(res.body(), "[[\"b0056e102a0a2431982d71a88455c2b7d9eb262ad9ea54a68b36163e6c63b6541\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}],[\"\",\"\"],[\"b0056e102a0a2431982d71a88455c2b7d9eb262ad9ea54a68b36163e6c63b6541\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}]]");
 }
 
 /// Test POST make payment
@@ -1000,7 +1021,7 @@ async fn test_post_fetch_pending() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"pending_transactions\":{\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\":{\"participants\":2,\"txs\":{\"g1f213309772c9d61f995a71c66d3e7a\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Receipt\":10},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"},{\"value\":{\"Receipt\":1},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"1118536e3d5a13e347262b5023963111\"}],\"version\":1,\"druid_info\":{\"druid\":\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\",\"participants\":2,\"expectations\":[{\"from\":\"153ec7022f10ca535c83f6ab3572edd757772af4cc3b1caa1800f87514703f6e\",\"to\":\"4348536e3d5a13e347262b5023963edf\",\"asset\":{\"Token\":25200}}]}},\"gce73d452e2a15663c47f762eb68b72c\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"}],\"version\":1,\"druid_info\":{\"druid\":\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\",\"participants\":2,\"expectations\":[{\"from\":\"153ec7022f10ca535c83f6ab3572edd757772af4cc3b1caa1800f87514703f6e\",\"to\":\"1118536e3d5a13e347262b5023963111\",\"asset\":{\"Receipt\":1}}]}}}}}}"
+        "{\"pending_transactions\":{\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\":{\"participants\":2,\"txs\":{\"g98707f81cb2217fd1720cfda24bcceb\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Receipt\":10},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"},{\"value\":{\"Receipt\":1},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"1118536e3d5a13e347262b5023963111\"}],\"version\":2,\"druid_info\":{\"druid\":\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\",\"participants\":2,\"expectations\":[{\"from\":\"153ec7022f10ca535c83f6ab3572edd757772af4cc3b1caa1800f87514703f6e\",\"to\":\"4348536e3d5a13e347262b5023963edf\",\"asset\":{\"Token\":25200}}]}},\"ga83cd5fbd4fca921548214dae293ce7\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"}],\"version\":2,\"druid_info\":{\"druid\":\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\",\"participants\":2,\"expectations\":[{\"from\":\"153ec7022f10ca535c83f6ab3572edd757772af4cc3b1caa1800f87514703f6e\",\"to\":\"1118536e3d5a13e347262b5023963111\",\"asset\":{\"Receipt\":1}}]}}}}}}"
     );
 }
 
@@ -1465,9 +1486,7 @@ async fn test_post_block_nums_by_tx_hashes() {
         .method("POST")
         .path("/block_by_tx_hashes")
         .header("Content-Type", "application/json")
-        .json(&vec![
-            "1842d4e51e99e14671077e4cac648339c3ca57e7219257fed707afd0f4d96232",
-        ]);
+        .json(&vec!["g98d0ab9304ca82f098a86ad6251803b"]);
 
     //
     // Act
