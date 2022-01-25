@@ -15,10 +15,10 @@ use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
-    concat_merkle_coinbase, create_receipt_asset_tx_from_sig, format_parition_pow_address,
-    generate_pow_random_num, serialize_hashblock_for_pow, to_api_keys, validate_pow_block,
-    validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender,
-    ResponseResult,
+    check_druid_participants, concat_merkle_coinbase, create_receipt_asset_tx_from_sig,
+    format_parition_pow_address, generate_pow_random_num, serialize_hashblock_for_pow, to_api_keys,
+    validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
+    LocalEventSender, ResponseResult,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
@@ -259,6 +259,16 @@ impl ComputeNode {
         self.node_raft.get_committed_tx_druid_pool()
     }
 
+    /// The current local DRUID transactions present in the `local_tx_druid_pool`
+    pub fn get_local_druid_pool(&self) -> &Vec<BTreeMap<String, Transaction>> {
+        self.node_raft.get_local_tx_druid_pool()
+    }
+
+    // The current druid pool of pending DDE transactions
+    pub fn get_pending_druid_pool(&self) -> &DruidPool {
+        &self.druid_pool
+    }
+
     pub fn get_request_list(&self) -> &BTreeSet<SocketAddr> {
         &self.request_list
     }
@@ -288,82 +298,39 @@ impl ComputeNode {
         self.api_info.clone()
     }
 
-    /// Processes a dual double entry transaction
+    /// Validate and get DDE transactions that are ready to be added to the RAFT
+    ///
     /// ### Arguments
-    /// * `transaction` - Transaction to process
-    pub async fn process_dde_tx(&mut self, transaction: Transaction) -> Response {
-        if let Some(druid_info) = transaction.clone().druid_info {
-            let druid = druid_info.druid;
+    ///
+    /// * `transactions` - DDE transactions to process
+    pub fn validate_dde_txs(
+        &mut self,
+        transactions: BTreeMap<String, Transaction>,
+    ) -> Vec<(bool, BTreeMap<String, Transaction>)> {
+        let mut ready_txs = Vec::new();
+        for (tx_hash, tx) in transactions {
+            if let Some(druid_info) = tx.druid_info.clone() {
+                let druid = druid_info.druid;
+                let participants = druid_info.participants;
 
-            // If this transaction is meant to join others
-            #[allow(clippy::map_entry)]
-            if self.druid_pool.contains_key(&druid) {
-                self.process_tx_druid(druid, transaction);
+                let droplet = self
+                    .druid_pool
+                    .entry(druid.clone())
+                    .or_insert_with(|| DruidDroplet::new(participants));
 
-                return Response {
-                    success: true,
-                    reason: "Transaction added to corresponding DRUID droplets",
-                };
+                droplet.txs.insert(tx_hash.clone(), tx);
 
-            // If we haven't seen this DRUID yet
-            } else {
-                let mut droplet = DruidDroplet {
-                    participants: druid_info.participants,
-                    txs: BTreeMap::new(),
-                };
-
-                let tx_hash = construct_tx_hash(&transaction);
-                droplet.txs.insert(tx_hash, transaction);
-
-                self.druid_pool.insert(druid, droplet);
-                return Response {
-                    success: true,
-                    reason: "Transaction added to DRUID pool. Awaiting other parties",
-                };
+                // Execute the DDE tx if it's ready
+                if droplet.txs.len() == droplet.participants {
+                    let valid = druid_expectations_are_met(&druid, droplet.txs.values())
+                        && check_druid_participants(droplet);
+                    ready_txs.push((valid, droplet.txs.clone()));
+                    // TODO: Implement time-based removal?
+                    self.druid_pool.remove(&druid);
+                }
             }
         }
-
-        Response {
-            success: false,
-            reason: "Dual double entry transaction doesn't contain a DRUID",
-        }
-    }
-
-    /// Processes a dual double entry transaction's DRUID with the current pool
-    /// ### Arguments
-    /// * `druid`       - DRUID to match on
-    /// * `transaction` - Transaction to process
-    pub fn process_tx_druid(&mut self, druid: String, transaction: Transaction) {
-        let mut current_droplet = self.druid_pool.get(&druid).unwrap().clone();
-        let tx_hash = construct_tx_hash(&transaction);
-        current_droplet.txs.insert(tx_hash, transaction);
-
-        // Execute the tx if it's ready
-        if current_droplet.txs.len() == current_droplet.participants {
-            self.execute_dde_tx(current_droplet, &druid);
-            let _removal = self.druid_pool.remove(&druid);
-        }
-    }
-
-    /// Executes a waiting dual double entry transaction that is ready to execute
-    /// ### Arguments
-    /// * `droplet`  - DRUID droplet of transactions to execute
-    /// * `druid`    -
-    pub fn execute_dde_tx(&mut self, droplet: DruidDroplet, druid: &str) {
-        let txs_valid = {
-            let tx_validator = self.transactions_validator();
-            droplet.txs.values().all(tx_validator)
-        };
-
-        if txs_valid && druid_expectations_are_met(druid, droplet.txs.values()) {
-            self.node_raft.append_to_tx_druid_pool(droplet.txs);
-
-            trace!(
-                "Transactions for dual double entry execution are valid. Adding to pending block"
-            );
-        } else {
-            debug!("Transactions for dual double entry execution are invalid");
-        }
+        ready_txs
     }
 
     /// Returns the mining block from the node_raft
@@ -835,7 +802,6 @@ impl ComputeNode {
                 self.node_raft.received_message(msg).await;
                 None
             }
-            SendRbTransaction { transaction } => Some(self.process_dde_tx(transaction).await),
         }
     }
 
@@ -1421,28 +1387,44 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        let valid_tx: BTreeMap<_, _> = {
+        let (valid_dde_txs, valid_txs): (BTreeMap<_, _>, BTreeMap<_, _>) = {
             let tx_validator = self.transactions_validator();
             transactions
                 .into_iter()
                 .filter(|tx| tx_validator(tx))
                 .map(|tx| (construct_tx_hash(&tx), tx))
-                .collect()
+                .partition(|tx| tx.1.druid_info.is_some())
         };
 
-        // At this point the tx's are considered valid
-        let valid_tx_len = valid_tx.len();
-        store_local_transactions(&mut self.db, &valid_tx);
-        self.node_raft.append_to_tx_pool(valid_tx);
+        let total_valid_txs_len = valid_txs.len() + valid_dde_txs.len();
 
-        if valid_tx_len == 0 {
+        // No valid transactions (normal or DDE) provided
+        if total_valid_txs_len == 0 {
             return Response {
                 success: false,
                 reason: "No valid transactions provided",
             };
         }
 
-        if valid_tx_len < transactions_len {
+        // `Normal` transactions
+        store_local_transactions(&mut self.db, &valid_txs);
+        self.node_raft.append_to_tx_pool(valid_txs);
+
+        // `DDE` transactions
+        // TODO: Save DDE transactions to local DB storage
+        let ready_dde_txs = self.validate_dde_txs(valid_dde_txs);
+        let mut invalid_dde_txs_len = 0;
+        for (valid, ready) in ready_dde_txs {
+            if !valid {
+                invalid_dde_txs_len += 1;
+                continue;
+            }
+            self.node_raft.append_to_tx_druid_pool(ready);
+        }
+
+        // Some txs are invalid or some DDE txs are ready to execute but fail to validate
+        // TODO: Should provide better feedback on DDE transactions that fail
+        if (total_valid_txs_len < transactions_len) || invalid_dde_txs_len != 0 {
             return Response {
                 success: true,
                 reason: "Some transactions invalid. Adding valid transactions only",
@@ -1473,7 +1455,7 @@ impl ComputeApi for ComputeNode {
     }
 
     fn get_pending_druid_pool(&self) -> &DruidPool {
-        &self.druid_pool
+        self.get_pending_druid_pool()
     }
 }
 

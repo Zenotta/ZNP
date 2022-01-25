@@ -687,6 +687,11 @@ impl ComputeRaft {
         self.combined_tx_pool_len() + extra_len <= TX_POOL_LIMIT
     }
 
+    /// Get the local DRUID pool transactions
+    pub fn get_local_tx_druid_pool(&self) -> &Vec<BTreeMap<String, Transaction>> {
+        &self.local_tx_druid_pool
+    }
+
     /// Current tx_pool lenght handled by this node.
     fn combined_tx_pool_len(&self) -> usize {
         self.local_tx_pool.len() + self.proposed_and_consensused_tx_pool_len()

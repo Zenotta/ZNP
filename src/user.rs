@@ -619,12 +619,11 @@ impl UserNode {
         self.store_payment_transaction(transaction.clone()).await;
         let _peer_span =
             info_span!("sending receipt-based transaction to compute node for processing");
+        let transactions = vec![transaction.clone()];
         self.node
             .send(
                 compute_peer,
-                ComputeRequest::SendRbTransaction {
-                    transaction: transaction.clone(),
-                },
+                ComputeRequest::SendTransactions { transactions },
             )
             .await?;
 
