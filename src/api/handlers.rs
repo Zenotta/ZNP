@@ -5,7 +5,7 @@ use crate::db_utils::SimpleDb;
 use crate::interfaces::{
     node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
     BlockchainItemType, ComputeApi, ComputeApiRequest, DebugData, DruidPool, NodeType,
-    StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
+    OutPointData, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_stored_value_from_db, indexed_block_hash_key};
@@ -19,7 +19,7 @@ use naom::primitives::asset::TokenAmount;
 use naom::primitives::druid::DdeValues;
 use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
-use naom::utils::transaction_utils::{construct_address_for, construct_tx_in_signable_hash};
+use naom::utils::transaction_utils::construct_address_for;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -81,8 +81,8 @@ pub struct CreateReceiptAssetData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CreateTxInScript {
     Pay2PkH {
-        /// Signed data to sign
-        signed_data: String,
+        /// Data to sign
+        signable_data: String,
         /// Hex encoded signature
         signature: String,
         /// Hex encoded complete public key
@@ -170,7 +170,7 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
         addresses
             .entry(wallet_db.get_transaction_address(out_point))
             .or_insert_with(Vec::new)
-            .push((out_point.clone(), asset.clone()))
+            .push(OutPointData::new(out_point.clone(), asset.clone()));
     }
 
     let total = fund_store.running_total();
@@ -499,26 +499,6 @@ pub async fn post_create_receipt_asset(
     Ok(warp::reply::json(&"Creating receipt asset".to_owned()))
 }
 
-/// Post to get transactions info to sign to create a Transaction
-pub async fn post_signable_transactions(
-    mut data: Vec<CreateTransaction>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    for tx in &mut data {
-        for input in &mut tx.inputs {
-            if let Some(previous_out) = &input.previous_out {
-                input.script_signature = Some(CreateTxInScript::Pay2PkH {
-                    signed_data: construct_tx_in_signable_hash(previous_out),
-                    signature: Default::default(),
-                    public_key: Default::default(),
-                    address_version: None,
-                })
-            }
-        }
-    }
-
-    Ok(warp::reply::json(&data))
-}
-
 /// Post transactions to compute node
 pub async fn post_create_transactions(
     peer: Node,
@@ -609,6 +589,7 @@ pub fn with_opt_field<T>(field: Option<T>, err: &'static str) -> Result<T, warp:
     field.ok_or_else(|| generic_error(err))
 }
 
+/// Create a `Transaction` from a `CreateTransaction`
 pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, warp::Rejection> {
     let CreateTransaction {
         inputs,
@@ -624,7 +605,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, warp::Reje
             let script_signature = with_opt_field(i.script_signature, "Invalid script_signature")?;
             let tx_in = {
                 let CreateTxInScript::Pay2PkH {
-                    signed_data,
+                    signable_data,
                     signature,
                     public_key,
                     address_version,
@@ -638,7 +619,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, warp::Reje
                 TxIn {
                     previous_out: Some(previous_out),
                     script_signature: Script::pay2pkh(
-                        signed_data,
+                        signable_data,
                         signature,
                         public_key,
                         address_version,

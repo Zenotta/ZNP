@@ -12,6 +12,11 @@ compute_partition_full_size = 1
 compute_minimum_miner_pool_len = 1
 jurisdiction = "US"
 
+[compute_unicorn_fixed_param]
+modulus = "6864797660130609714981900799081393217269435300143305409394463459185543183397656052122559640661454554977296311391480858037121987999716643812574028291115057151"
+iterations = 2
+security = 1
+
 [user_test_auto_gen_setup]
 user_setup_tx_chunk_size = 5
 user_setup_tx_in_per_tx = 3

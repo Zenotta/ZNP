@@ -19,7 +19,7 @@ use std::hash::{Hash, Hasher};
 /// The hash information of the current block to mine
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct HashBlock {
-    pub unicorn: String,
+    pub prev_hash: String,
     pub merkle_hash: String,
     pub nonce: Vec<u8>,
     pub b_num: u64,
@@ -30,11 +30,12 @@ impl HashBlock {
     ///
     /// ### Arguments
     ///
-    /// * `unicorn`     - The Unicorn value to send
+    /// * `prev_hash`   - The previous hash of the block
     /// * `merkle_hash` - The merkle root hash of the transactions in this block
-    pub fn new_for_mining(unicorn: String, merkle_hash: String, b_num: u64) -> HashBlock {
+    /// * `b_num`       - The block number
+    pub fn new_for_mining(prev_hash: String, merkle_hash: String, b_num: u64) -> HashBlock {
         HashBlock {
-            unicorn,
+            prev_hash,
             merkle_hash,
             b_num,
             nonce: Vec::new(),

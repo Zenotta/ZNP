@@ -1,5 +1,5 @@
 use crate::comms_handler::Node;
-use crate::configurations::{UtxoSetSpec, WalletTxSpec};
+use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
 use crate::hash_block::*;
 use crate::interfaces::{BlockchainItem, BlockchainItemMeta, ProofOfWork, StoredSerializingBlock};
@@ -7,7 +7,6 @@ use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
-use naom::crypto::secretbox_chacha20_poly1305::Key;
 use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
 use naom::primitives::{
     asset::{Asset, TokenAmount},
@@ -22,19 +21,21 @@ use naom::utils::transaction_utils::{
 };
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio::time::Instant;
 use tracing::{trace, warn};
 
+pub type ApiKeys = Arc<Mutex<HashSet<String>>>;
 pub type LocalEventSender = MpscTracingSender<LocalEvent>;
 pub type LocalEventReceiver = mpsc::Receiver<LocalEvent>;
 
@@ -332,21 +333,6 @@ pub async fn create_and_save_fake_to_wallet(
         .unwrap();
 
     Ok(())
-}
-
-/// Computes a key that will be shared from a vector of PoWs
-///
-/// ### Arguments
-///
-/// * `p_list` - Vectoor of PoWs
-pub fn get_partition_entry_key(p_list: &[ProofOfWork]) -> Key {
-    let key_sha_seed: Vec<u8> = p_list
-        .iter()
-        .flat_map(|e| e.address.as_bytes().iter().chain(&e.nonce))
-        .copied()
-        .collect();
-
-    Key::from_slice(&Sha3_256::digest(&key_sha_seed)).unwrap()
 }
 
 /// Address to be used in Proof of Work
@@ -992,4 +978,41 @@ pub fn create_receipt_asset_tx_from_sig(
     };
 
     Ok(construct_tx_core(vec![tx_in], vec![tx_out]))
+}
+
+/// Confert to ApiKeys data structure
+pub fn to_api_keys(api_keys: Vec<String>) -> ApiKeys {
+    Arc::new(Mutex::new(api_keys.into_iter().collect()))
+}
+
+/// Test UnicornFixedInfo with fast compuation
+pub fn get_test_common_unicorn() -> UnicornFixedInfo {
+    UnicornFixedInfo{
+        modulus: "6864797660130609714981900799081393217269435300143305409394463459185543183397656052122559640661454554977296311391480858037121987999716643812574028291115057151".to_owned(),
+        iterations: 2,
+        security: 1
+    }
+}
+
+pub mod rug_integer {
+    use rug::Integer;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    /// Serialisation function for big ints
+    pub fn serialize<S>(x: &Integer, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value: String = x.to_string_radix(16);
+        value.serialize(s)
+    }
+
+    /// Deserialisation function for big ints
+    pub fn deserialize<'de, D>(d: D) -> Result<Integer, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value: String = Deserialize::deserialize(d)?;
+        Integer::from_str_radix(&value, 16).map_err(serde::de::Error::custom)
+    }
 }

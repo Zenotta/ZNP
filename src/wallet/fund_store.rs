@@ -34,7 +34,11 @@ impl AssetValues {
         AssetValues::new(TokenAmount(0), receipts)
     }
 
-    pub fn has_enough(self, asset_required: &Asset) -> bool {
+    pub fn is_empty(&self) -> bool {
+        self == &AssetValues::default()
+    }
+
+    pub fn has_enough(&self, asset_required: &Asset) -> bool {
         match asset_required {
             Asset::Token(tokens) => self.tokens >= *tokens,
             Asset::Receipt(receipts) => self.receipts >= *receipts,

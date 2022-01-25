@@ -19,7 +19,7 @@ use crate::user::{
     make_rb_payment_receipt_tx_and_response, make_rb_payment_send_transaction,
     make_rb_payment_send_tx_and_request,
 };
-use crate::utils::{decode_pub_key, decode_secret_key, tracing_log_try_init};
+use crate::utils::{decode_pub_key, decode_secret_key, to_api_keys, tracing_log_try_init};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
@@ -152,12 +152,11 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
     let mut block = Block::new();
     block.transactions.push(tx_hash.clone());
 
-    let mut mining_tx_hash_and_nonces = BTreeMap::new();
-    mining_tx_hash_and_nonces.insert(0, ("test".to_string(), vec![0, 1, 23]));
+    let mining_tx_hash_and_nonce = ("test".to_string(), vec![0, 1, 23]);
 
     let block_to_input = StoredSerializingBlock {
         block,
-        mining_tx_hash_and_nonces,
+        mining_tx_hash_and_nonce,
     };
 
     let mut db = new_db(DbMode::InMemory, &DB_SPEC, None);
@@ -261,6 +260,20 @@ fn success_json() -> (StatusCode, HeaderMap) {
     (StatusCode::from_u16(200).unwrap(), headers)
 }
 
+fn fail_plain(code: u16) -> (StatusCode, HeaderMap) {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+
+    (StatusCode::from_u16(code).unwrap(), headers)
+}
+
+pub async fn ok_reply() -> Result<impl warp::Reply, warp::Rejection> {
+    Ok(warp::reply::json(&0))
+}
+
 fn user_api_request_as_frame(request: UserApiRequest) -> Option<Vec<u8>> {
     let sent_request = UserRequest::UserApi(request);
     Some(serialize(&sent_request).unwrap())
@@ -309,7 +322,7 @@ async fn test_get_latest_block() {
     let res = request.reply(&filter).await;
 
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}");
+    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}");
 }
 
 /// Test GET wallet keypairs
@@ -360,24 +373,30 @@ async fn test_get_user_debug_data() {
     // Arrange
     //
     let db = get_wallet_db("");
+    let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13000).await;
     self_node.connect_to(c_socket).await.unwrap();
 
-    let request = warp::test::request().method("GET").path("/debug_data");
+    let request = || warp::test::request().method("GET").path("/debug_data");
+    let request_x_api = || request().header("x-api-key", "key");
 
     //
     // Act
     //
-    let filter = routes::user_node_routes(db, self_node.clone());
-    let res = request.reply(&filter).await;
+    let filter = routes::user_node_routes(ks, db, self_node.clone());
+    let res_a = request_x_api().reply(&filter).await;
+    let res_m = request().reply(&filter).await;
 
     //
     // Assert
     //
     let expected_string = "{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"new_payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13000\",\"127.0.0.1:13000\",\"Compute\"]]}";
-    assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), &expected_string);
+    assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
+    assert_eq!(res_a.body(), expected_string);
+
+    assert_eq!((res_m.status(), res_m.headers().clone()), fail_plain(400));
+    assert_eq!(res_m.body(), "Missing request header \"x-api-key\"");
 }
 
 /// Test get storage debug data
@@ -389,24 +408,30 @@ async fn test_get_storage_debug_data() {
     // Arrange
     //
     let db = get_db_with_block();
+    let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::Storage).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13010).await;
     self_node.connect_to(c_socket).await.unwrap();
 
-    let request = warp::test::request().method("GET").path("/debug_data");
+    let request = || warp::test::request().method("GET").path("/debug_data");
+    let request_x_api = || request().header("x-api-key", "key");
 
     //
     // Act
     //
-    let filter = routes::storage_node_routes(db, self_node.clone());
-    let res = request.reply(&filter).await;
+    let filter = routes::storage_node_routes(ks, db, self_node.clone());
+    let res_a = request_x_api().reply(&filter).await;
+    let res_m = request().reply(&filter).await;
 
     //
     // Assert
     //
     let expected_string = "{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"latest_block\",\"blockchain_entry_by_key\",\"block_by_tx_hashes\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13010\",\"127.0.0.1:13010\",\"Compute\"]]}";
-    assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_string);
+    assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
+    assert_eq!(res_a.body(), expected_string);
+
+    assert_eq!((res_m.status(), res_m.headers().clone()), fail_plain(400));
+    assert_eq!(res_m.body(), "Missing request header \"x-api-key\"");
 }
 
 /// Test get compute debug data
@@ -418,23 +443,31 @@ async fn test_get_compute_debug_data() {
     // Arrange
     //
     let compute = ComputeTest::new(vec![]);
+    let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::Compute).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13020).await;
     self_node.connect_to(c_socket).await.unwrap();
 
-    let request = warp::test::request().method("GET").path("/debug_data");
+    let request = || warp::test::request().method("GET").path("/debug_data");
+    let request_x_api = || request().header("x-api-key", "key");
+
     //
     // Act
     //
-    let filter = routes::compute_node_routes(compute.threaded_calls.tx.clone(), self_node.clone());
-    let res = request.reply(&filter).await;
+    let tx = compute.threaded_calls.tx.clone();
+    let filter = routes::compute_node_routes(ks, tx, self_node.clone());
+    let res_a = request_x_api().reply(&filter).await;
+    let res_m = request().reply(&filter).await;
 
     //
     // Assert
     //
     let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"fetch_pending\",\"create_receipt_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]]}";
-    assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_string);
+    assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
+    assert_eq!(res_a.body(), expected_string);
+
+    assert_eq!((res_m.status(), res_m.headers().clone()), fail_plain(400));
+    assert_eq!(res_m.body(), "Missing request header \"x-api-key\"");
 }
 
 /// Test get miner debug data
@@ -447,23 +480,30 @@ async fn test_get_miner_debug_data() {
     //
     let db = get_wallet_db("");
     let current_block = Default::default();
+    let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13030).await;
     self_node.connect_to(c_socket).await.unwrap();
 
-    let request = warp::test::request().method("GET").path("/debug_data");
+    let request = || warp::test::request().method("GET").path("/debug_data");
+    let request_x_api = || request().header("x-api-key", "key");
+
     //
     // Act
     //
-    let filter = routes::miner_node_routes(current_block, db, self_node.clone());
-    let res = request.reply(&filter).await;
+    let filter = routes::miner_node_routes(ks, current_block, db, self_node.clone());
+    let res_a = request_x_api().reply(&filter).await;
+    let res_m = request().reply(&filter).await;
 
     //
     // Assert
     //
     let expected_string = "{\"node_type\":\"Miner\",\"node_api\":[\"wallet_info\",\"export_keypairs\",\"import_keypairs\",\"new_payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13030\",\"127.0.0.1:13030\",\"Compute\"]]}";
-    assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_string);
+    assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
+    assert_eq!(res_a.body(), expected_string);
+
+    assert_eq!((res_m.status(), res_m.headers().clone()), fail_plain(400));
+    assert_eq!(res_m.body(), "Missing request header \"x-api-key\"");
 }
 
 /// Test get miner with user debug data
@@ -476,6 +516,7 @@ async fn test_get_miner_with_user_debug_data() {
     //
     let db = get_wallet_db("");
     let current_block = Default::default();
+    let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
     let (mut self_node_u, _self_socket_u) = new_self_node(NodeType::User).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13040).await;
@@ -483,19 +524,66 @@ async fn test_get_miner_with_user_debug_data() {
     self_node.connect_to(c_socket).await.unwrap();
     self_node_u.connect_to(s_socket).await.unwrap();
 
-    let request = warp::test::request().method("GET").path("/debug_data");
+    let request = || warp::test::request().method("GET").path("/debug_data");
+    let request_x_api = || request().header("x-api-key", "key");
+
     //
     // Act
     //
-    let filter = routes::miner_node_with_user_routes(current_block, db, self_node, self_node_u);
-    let res = request.reply(&filter).await;
+    let filter = routes::miner_node_with_user_routes(ks, current_block, db, self_node, self_node_u);
+    let res_a = request_x_api().reply(&filter).await;
+    let res_m = request().reply(&filter).await;
 
     //
     // Assert
     //
     let expected_string = "{\"node_type\":\"Miner/User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"new_payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13040\",\"127.0.0.1:13040\",\"Compute\"],[\"127.0.0.1:13041\",\"127.0.0.1:13041\",\"Storage\"]]}";
-    assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_string);
+    assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
+    assert_eq!(res_a.body(), expected_string);
+
+    assert_eq!((res_m.status(), res_m.headers().clone()), fail_plain(400));
+    assert_eq!(res_m.body(), "Missing request header \"x-api-key\"");
+}
+
+/// Test get miner with user debug data
+#[tokio::test(flavor = "current_thread")]
+async fn test_x_api_key() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let api_keys = to_api_keys(vec!["key".to_owned()]);
+    let api_keys_a = to_api_keys(vec!["any_key".to_owned()]);
+    let request = || warp::test::request().method("GET").path("/debug_data");
+    let request_x_api = |k: &str| request().header("x-api-key", k);
+
+    //
+    // Act
+    //
+    use warp::Filter;
+    let filter_x = routes::x_api_key(api_keys).and_then(ok_reply);
+    let r_x_a = request_x_api("key").reply(&filter_x).await;
+    let r_x_w = request_x_api("ke").reply(&filter_x).await;
+    let r_x_m = request().reply(&filter_x).await;
+
+    let filter_a = routes::x_api_key(api_keys_a).and_then(ok_reply);
+    let r_a_m = request().reply(&filter_a).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((r_x_a.status(), r_x_a.headers().clone()), success_json());
+    assert_eq!(r_x_a.body(), "0");
+
+    assert_eq!((r_x_w.status(), r_x_w.headers().clone()), fail_plain(500));
+    assert_eq!(r_x_w.body(), "Unhandled rejection: Unauthorized");
+
+    assert_eq!((r_x_m.status(), r_x_m.headers().clone()), fail_plain(400));
+    assert_eq!(r_x_m.body(), "Missing request header \"x-api-key\"");
+
+    assert_eq!((r_a_m.status(), r_a_m.headers().clone()), success_json());
+    assert_eq!(r_a_m.body(), "0");
 }
 
 /// Test GET wallet info
@@ -531,7 +619,7 @@ async fn test_get_wallet_info() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address\":[[{\"t_hash\":\"tx_hash\",\"n\":0},{\"Token\":11}]]}}");
+    assert_eq!(res.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":11}}]}}");
 }
 
 /// Test GET new payment address
@@ -604,10 +692,10 @@ async fn test_get_utxo_set_addresses() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_block() {
     let expected_meta = success_json();
-    let expected_body = "{\"Block\":{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}}";
+    let expected_body = "{\"Block\":{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}}";
 
     test_post_blockchain_entry_by_key(
-        "b0056e102a0a2431982d71a88455c2b7d9eb262ad9ea54a68b36163e6c63b6541",
+        "bceae6c35ac2fcdf3ac38ab4fbe500913c07c6621e96c444c77e37a5596c741a7",
         expected_meta.clone(),
         expected_body,
     )
@@ -723,7 +811,7 @@ async fn test_post_block_info_by_nums() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "[[\"b0056e102a0a2431982d71a88455c2b7d9eb262ad9ea54a68b36163e6c63b6541\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}],[\"\",\"\"],[\"b0056e102a0a2431982d71a88455c2b7d9eb262ad9ea54a68b36163e6c63b6541\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}]]");
+    assert_eq!(res.body(), "[[\"bceae6c35ac2fcdf3ac38ab4fbe500913c07c6621e96c444c77e37a5596c741a7\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}],[\"\",\"\"],[\"bceae6c35ac2fcdf3ac38ab4fbe500913c07c6621e96c444c77e37a5596c741a7\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}]]");
 }
 
 /// Test POST make payment
@@ -983,7 +1071,7 @@ async fn test_post_fetch_balance() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"total\":{\"tokens\":25200,\"receipts\":0},\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[[{\"t_hash\":\"tx_hash\",\"n\":0},{\"Token\":25200}]]}}"
+        "{\"total\":{\"tokens\":25200,\"receipts\":0},\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":25200}}]}}"
     );
 }
 
@@ -1021,7 +1109,7 @@ async fn test_post_fetch_pending() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"pending_transactions\":{\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\":{\"participants\":2,\"txs\":{\"g98707f81cb2217fd1720cfda24bcceb\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Receipt\":10},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"},{\"value\":{\"Receipt\":1},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"1118536e3d5a13e347262b5023963111\"}],\"version\":2,\"druid_info\":{\"druid\":\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\",\"participants\":2,\"expectations\":[{\"from\":\"153ec7022f10ca535c83f6ab3572edd757772af4cc3b1caa1800f87514703f6e\",\"to\":\"4348536e3d5a13e347262b5023963edf\",\"asset\":{\"Token\":25200}}]}},\"ga83cd5fbd4fca921548214dae293ce7\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"}],\"version\":2,\"druid_info\":{\"druid\":\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\",\"participants\":2,\"expectations\":[{\"from\":\"153ec7022f10ca535c83f6ab3572edd757772af4cc3b1caa1800f87514703f6e\",\"to\":\"1118536e3d5a13e347262b5023963111\",\"asset\":{\"Receipt\":1}}]}}}}}}"
+        "{\"pending_transactions\":{\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\":{\"participants\":2,\"txs\":{\"g6cc9b1062850e9b8477768b6f01208a\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Receipt\":10},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"},{\"value\":{\"Receipt\":1},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"1118536e3d5a13e347262b5023963111\"}],\"version\":2,\"druid_info\":{\"druid\":\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\",\"participants\":2,\"expectations\":[{\"from\":\"1a53a3e3d61e4d9ab01ffef920548692ca21b615d4e153cdc2ee1b42d23d784c\",\"to\":\"4348536e3d5a13e347262b5023963edf\",\"asset\":{\"Token\":25200}}]}},\"gffb84a9c21bf6d5aff191a9bf0919d8\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"}],\"version\":2,\"druid_info\":{\"druid\":\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\",\"participants\":2,\"expectations\":[{\"from\":\"1a53a3e3d61e4d9ab01ffef920548692ca21b615d4e153cdc2ee1b42d23d784c\",\"to\":\"1118536e3d5a13e347262b5023963111\",\"asset\":{\"Receipt\":1}}]}}}}}}"
     );
 }
 
@@ -1067,45 +1155,6 @@ async fn test_post_update_running_total() {
 
 /// Test POST create receipt asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
-async fn test_post_signable_transactions() {
-    let _ = tracing_log_try_init();
-
-    //
-    // Arrange
-    //
-    let json_body = vec![CreateTransaction {
-        inputs: vec![CreateTxIn {
-            previous_out: Some(OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0)),
-            script_signature: None,
-        }],
-        outputs: vec![],
-        version: 1,
-        druid_info: None,
-    }];
-
-    let request = warp::test::request()
-        .method("POST")
-        .path("/signable_transactions")
-        .header("Content-Type", "application/json")
-        .json(&json_body.clone());
-
-    //
-    // Act
-    //
-    let filter = routes::signable_transactions(&mut dp());
-    let res = request.reply(&filter).await;
-
-    //
-    // Assert
-    //
-    assert_eq!(
-        ((res.status(), res.headers().clone()), from_utf8(res.body())),
-        (success_json(), "[{\"inputs\":[{\"previous_out\":{\"t_hash\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"n\":0},\"script_signature\":{\"Pay2PkH\":{\"signed_data\":\"2000000000000000313362643333353162373862656232643064616466323035386463633932366300000000\",\"signature\":\"\",\"public_key\":\"\",\"address_version\":null}}}],\"outputs\":[],\"version\":1,\"druid_info\":null}]")
-    );
-}
-
-/// Test POST create receipt asset on compute node successfully
-#[tokio::test(flavor = "current_thread")]
 async fn test_post_create_transactions() {
     test_post_create_transactions_common(None).await;
 }
@@ -1131,9 +1180,9 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     let (mut self_node, self_socket) = new_self_node(NodeType::Compute).await;
 
     let previous_out = OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0);
-    let signed_data = construct_tx_in_signable_hash(&previous_out);
+    let signable_data = construct_tx_in_signable_hash(&previous_out);
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
-    let raw_signature = sign::sign_detached(signed_data.as_bytes(), &secret_key);
+    let raw_signature = sign::sign_detached(signable_data.as_bytes(), &secret_key);
     let signature = hex::encode(raw_signature.as_ref());
     let public_key = COMMON_PUB_KEY.to_owned();
 
@@ -1141,7 +1190,7 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
         inputs: vec![CreateTxIn {
             previous_out: Some(previous_out.clone()),
             script_signature: Some(CreateTxInScript::Pay2PkH {
-                signed_data,
+                signable_data,
                 signature,
                 public_key,
                 address_version,
@@ -1324,15 +1373,7 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     //
     // Assert
     //
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "content-type",
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-
-    assert_eq!(res.status(), 500);
-    assert_eq!(res.headers(), &headers);
+    assert_eq!((res.status(), res.headers().clone()), fail_plain(500));
     assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidJSONStructure");
 }
 
@@ -1370,15 +1411,7 @@ async fn test_post_create_receipt_asset_tx_user_failure() {
     //
     // Assert
     //
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "content-type",
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-
-    assert_eq!(res.status(), 500);
-    assert_eq!(res.headers(), &headers);
+    assert_eq!((res.status(), res.headers().clone()), fail_plain(500));
     assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidJSONStructure");
 }
 
@@ -1455,20 +1488,12 @@ async fn test_post_change_passphrase_failure() {
     //
     // Assert
     //
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "content-type",
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-
     assert!(
         matches!(actual, Err(WalletDbError::PassphraseError)),
         "{:?}",
         actual
     );
-    assert_eq!(res.status(), 500);
-    assert_eq!(res.headers(), &headers);
+    assert_eq!((res.status(), res.headers().clone()), fail_plain(500));
     assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidPassphrase");
 }
 

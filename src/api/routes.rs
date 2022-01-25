@@ -1,9 +1,11 @@
+use crate::api::errors;
 use crate::api::handlers::{self, DbgPaths};
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::ComputeApi;
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::threaded_call::ThreadedCallSender;
+use crate::utils::ApiKeys;
 use crate::wallet::WalletDb;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
@@ -21,6 +23,31 @@ fn warp_path(
 ) -> impl Filter<Extract = (), Error = Rejection> + Clone {
     dp.push(p);
     warp::path(p)
+}
+
+/// Validate x-api-key if api_keys is provided
+pub fn x_api_key(api_keys: ApiKeys) -> impl Filter<Extract = (), Error = Rejection> + Clone {
+    let need_check = !api_keys.lock().unwrap().contains("any_key");
+
+    warp::header::<String>("x-api-key")
+        .and_then(move |n: String| {
+            let api_keys = api_keys.clone();
+            async move {
+                if !api_keys.lock().unwrap().contains(&n) {
+                    Err(warp::reject::custom(errors::Unauthorized))
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .untuple_one()
+        .or_else(move |err| async move {
+            if need_check {
+                Err(err)
+            } else {
+                Ok(())
+            }
+        })
 }
 
 //======= GET ROUTES =======//
@@ -288,17 +315,6 @@ pub fn change_passphrase(
         .with(post_cors())
 }
 
-// POST signable transaction
-pub fn signable_transactions(
-    dp: &mut DbgPaths,
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    warp_path(dp, "signable_transactions")
-        .and(warp::post())
-        .and(warp::body::json())
-        .and_then(handlers::post_signable_transactions)
-        .with(post_cors())
-}
-
 // POST create transactions
 pub fn create_transactions(
     dp: &mut DbgPaths,
@@ -341,13 +357,14 @@ pub fn address_construction(
 
 // API routes for User nodes
 pub fn user_node_routes(
+    api_keys: ApiKeys,
     db: WalletDb,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
 
-    wallet_info(dp, db.clone())
+    let routes = wallet_info(dp, db.clone())
         .or(make_payment(dp, db.clone(), node.clone()))
         .or(make_ip_payment(dp, db.clone(), node.clone()))
         .or(request_donation(dp, node.clone()))
@@ -358,44 +375,53 @@ pub fn user_node_routes(
         .or(new_payment_address(dp, db.clone()))
         .or(change_passphrase(dp, db))
         .or(address_construction(dp))
-        .or(debug_data(dp_vec, node, None))
+        .or(debug_data(dp_vec, node, None));
+
+    x_api_key(api_keys).and(routes)
 }
 
 // API routes for Storage nodes
 pub fn storage_node_routes(
+    api_keys: ApiKeys,
     db: Arc<Mutex<SimpleDb>>,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
 
-    block_by_num(dp, db.clone())
+    let routes = block_by_num(dp, db.clone())
         .or(latest_block(dp, db.clone()))
         .or(blockchain_entry_by_key(dp, db.clone()))
         .or(blocks_by_tx_hashes(dp, db))
         .or(address_construction(dp))
-        .or(debug_data(dp_vec, node, None))
+        .or(debug_data(dp_vec, node, None));
+
+    x_api_key(api_keys).and(routes)
 }
 
 // API routes for Compute nodes
 pub fn compute_node_routes(
+    api_keys: ApiKeys,
     threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
 
-    fetch_balance(dp, threaded_calls.clone())
+    let routes = fetch_balance(dp, threaded_calls.clone())
         .or(fetch_pending(dp, threaded_calls.clone()))
         .or(create_receipt_asset(dp, node.clone()))
         .or(create_transactions(dp, node.clone()))
         .or(utxo_addresses(dp, threaded_calls))
         .or(address_construction(dp))
-        .or(debug_data(dp_vec, node, None))
+        .or(debug_data(dp_vec, node, None));
+
+    x_api_key(api_keys).and(routes)
 }
 
 // API routes for Miner nodes
 pub fn miner_node_routes(
+    api_keys: ApiKeys,
     current_block: CurrentBlockWithMutex,
     db: WalletDb,
     node: Node,
@@ -403,18 +429,21 @@ pub fn miner_node_routes(
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
 
-    wallet_info(dp, db.clone())
+    let routes = wallet_info(dp, db.clone())
         .or(export_keypairs(dp, db.clone()))
         .or(import_keypairs(dp, db.clone()))
         .or(new_payment_address(dp, db.clone()))
         .or(change_passphrase(dp, db))
         .or(current_mining_block(dp, current_block))
         .or(address_construction(dp))
-        .or(debug_data(dp_vec, node, None))
+        .or(debug_data(dp_vec, node, None));
+
+    x_api_key(api_keys).and(routes)
 }
 
 // API routes for Miner nodes with User node capabilities
 pub fn miner_node_with_user_routes(
+    api_keys: ApiKeys,
     current_block: CurrentBlockWithMutex,
     db: WalletDb, /* Shared WalletDb */
     miner_node: Node,
@@ -423,7 +452,7 @@ pub fn miner_node_with_user_routes(
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
 
-    wallet_info(dp, db.clone())
+    let routes = wallet_info(dp, db.clone())
         .or(make_payment(dp, db.clone(), user_node.clone()))
         .or(make_ip_payment(dp, db.clone(), user_node.clone()))
         .or(request_donation(dp, user_node.clone()))
@@ -435,5 +464,7 @@ pub fn miner_node_with_user_routes(
         .or(change_passphrase(dp, db))
         .or(current_mining_block(dp, current_block))
         .or(address_construction(dp))
-        .or(debug_data(dp_vec, miner_node, Some(user_node)))
+        .or(debug_data(dp_vec, miner_node, Some(user_node)));
+
+    x_api_key(api_keys).and(routes)
 }

@@ -15,7 +15,7 @@ use crate::test_utils::{
     NetworkNodeInfo, NodeType,
 };
 use crate::tests::compute_committed_tx_pool;
-use crate::utils::tracing_log_try_init;
+use crate::utils::{get_test_common_unicorn, tracing_log_try_init};
 use crate::{compute, compute_raft, storage, storage_raft, wallet};
 use naom::primitives::asset::{Asset, TokenAmount};
 use std::collections::BTreeMap;
@@ -379,7 +379,6 @@ async fn upgrade_restart_network_common(
     let mut network = Network::create_stopped_from_config(&config);
     let compute_nodes = &config.nodes[&NodeType::Compute];
     let storage_nodes = &config.nodes[&NodeType::Storage];
-    let miner_nodes = &config.nodes[&NodeType::Miner];
     let raft_nodes: Vec<String> = compute_nodes.iter().chain(storage_nodes).cloned().collect();
     let extra_blocks = 2usize;
     let expected_block_num = LAST_BLOCK_STORED_NUM + extra_blocks as u64;
@@ -435,7 +434,7 @@ async fn upgrade_restart_network_common(
             actual_count.push(count);
             actual_last_bnum.push(last_bnum);
 
-            let (db, _, _) = storage.api_inputs();
+            let (db, _, _, _) = storage.api_inputs();
             let db = db.lock().unwrap();
             info!(
                 "dump_db {}: count:{} b_num:{:?}, \n{}",
@@ -447,8 +446,7 @@ async fn upgrade_restart_network_common(
         }
 
         let raft_len = upgrade_cfg.raft_len;
-        let expected_count =
-            STORAGE_DB_V0_3_0_INDEXES.len() + extra_blocks * (miner_nodes.len() + 1);
+        let expected_count = STORAGE_DB_V0_3_0_INDEXES.len() + extra_blocks * (1 + 1);
         assert_eq!(actual_count, vec![expected_count; raft_len]);
         assert_eq!(actual_last_bnum, vec![Some(expected_block_num); raft_len]);
     }
@@ -686,6 +684,8 @@ fn get_static_column(spec: SimpleDbSpec, name: &str) -> &'static str {
 fn cfg_upgrade() -> UpgradeCfg {
     UpgradeCfg {
         raft_len: 1,
+        compute_partition_full_size: 1,
+        compute_unicorn_fixed_param: get_test_common_unicorn(),
         passphrase: WALLET_PASSWORD.to_owned(),
     }
 }

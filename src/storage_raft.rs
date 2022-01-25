@@ -8,12 +8,11 @@ use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::time::{self, Instant};
 use tracing::{debug, trace, warn};
 
 pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
@@ -27,7 +26,6 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 #[allow(clippy::large_enum_variant)]
 pub enum StorageRaftItem {
     PartBlock(ReceivedBlock),
-    CompleteBlock(u64),
 }
 
 /// Commited item to process.
@@ -49,15 +47,14 @@ pub struct ReceivedBlock {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompleteBlock {
     pub common: CommonBlockInfo,
-    pub per_node: BTreeMap<u64, MinedBlockExtraInfo>,
+    pub extra_info: MinedBlockExtraInfo,
 }
 
-/// Different state for timeout
-#[derive(Clone, Debug)]
-pub enum ProposeBlockTimeout {
-    First,
-    None,
-    Some(Instant),
+/// Complete block info with all mining transactions and proof of work.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompleteBlockBuilder {
+    pub common: CommonBlockInfo,
+    pub per_node: BTreeMap<u64, MinedBlockExtraInfo>,
 }
 
 /// All fields that are consensused between the RAFT group.
@@ -68,10 +65,8 @@ pub struct StorageConsensused {
     sufficient_majority: usize,
     /// Index of the last completed block.
     current_block_num: u64,
-    /// Peer ids that have voted to complete the block.
-    current_block_complete_timeout_peer_ids: BTreeSet<u64>,
     /// Part block completed by Peer ids.
-    current_block_completed_parts: BTreeMap<Vec<u8>, CompleteBlock>,
+    current_block_completed_parts: BTreeMap<Vec<u8>, CompleteBlockBuilder>,
     /// The last commited raft index.
     last_committed_raft_idx_and_term: (u64, u64),
     /// The last block stored by ours and other node in consensus.
@@ -96,10 +91,6 @@ pub struct StorageRaft {
     consensused: StorageConsensused,
     /// Whether consensused received initial snapshot
     consensused_snapshot_applied: bool,
-    /// Min duration between each block poposal.
-    propose_block_timeout_duration: Duration,
-    /// Timeout expiration time for block poposal.
-    propose_block_timeout_at: ProposeBlockTimeout,
     /// Proposed items in flight.
     proposed_in_flight: RaftInFlightProposals,
     /// No longer process commits after shutdown reached
@@ -129,10 +120,6 @@ impl StorageRaft {
             db_utils::new_db(config.storage_db_mode, &DB_SPEC, raft_db),
         );
 
-        let propose_block_timeout_duration =
-            Duration::from_millis(config.storage_block_timeout as u64);
-        let propose_block_timeout_at = ProposeBlockTimeout::First;
-
         let first_raft_peer = config.storage_node_idx == 0 || !raft_active.use_raft();
         let peers_len = raft_active.peers_len();
 
@@ -143,8 +130,6 @@ impl StorageRaft {
             raft_active,
             consensused,
             consensused_snapshot_applied: !use_raft,
-            propose_block_timeout_duration,
-            propose_block_timeout_at,
             proposed_in_flight: Default::default(),
             shutdown_no_commit_process: false,
         }
@@ -200,7 +185,7 @@ impl StorageRaft {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
             RaftCommitData::Proposed(data, context) => {
-                self.received_commit_poposal(data, context).await
+                self.received_commit_proposal(data, context).await
             }
             RaftCommitData::Snapshot(data) => self.apply_snapshot(data),
             RaftCommitData::NewLeader => {
@@ -222,7 +207,7 @@ impl StorageRaft {
         } else {
             warn!("apply_snapshot called self.consensused updated");
             self.consensused = deserialize(&consensused_ser).unwrap();
-            self.propose_block_timeout_at = self.next_propose_block_timeout_at();
+            self.set_ignore_dedeup_b_num_less_than_current();
             Some(CommittedItem::Snapshot)
         }
     }
@@ -234,31 +219,23 @@ impl StorageRaft {
     ///
     /// * `raft_data` - Data for the commit
     /// * `raft_ctx`  - Context for the commit
-    async fn received_commit_poposal(
+    async fn received_commit_proposal(
         &mut self,
         raft_data: RaftData,
         raft_ctx: RaftData,
     ) -> Option<CommittedItem> {
         let (key, item, _) = self
             .proposed_in_flight
-            .received_commit_poposal(&raft_data, &raft_ctx)
+            .received_commit_proposal(&raft_data, &raft_ctx)
             .await?;
 
-        trace!("received_commit_poposal {:?} -> {:?}", key, item);
+        trace!("received_commit_proposal {:?} -> {:?}", key, item);
         match item {
             StorageRaftItem::PartBlock(block) => {
-                if self
-                    .consensused
-                    .is_current_block(block.common.block.header.b_num)
-                {
-                    debug!("PartBlock appened {:?}", key);
+                let b_num = block.common.block.header.b_num;
+                if self.consensused.is_current_block(b_num) {
+                    debug!("PartBlock appened ({},{:?})", b_num, key);
                     self.consensused.append_received_block(key, block);
-                }
-            }
-            StorageRaftItem::CompleteBlock(idx) => {
-                if self.consensused.is_current_block(idx) {
-                    debug!("CompleteBlock appened ({},{:?})", idx, key);
-                    self.consensused.append_received_block_timeout(key);
                 }
             }
         }
@@ -285,28 +262,6 @@ impl StorageRaft {
         self.raft_active.received_message(msg).await
     }
 
-    /// Blocks & waits for a timeout to propose a block.
-    pub async fn timeout_propose_block(&self) -> Option<()> {
-        if let ProposeBlockTimeout::Some(time) = self.propose_block_timeout_at {
-            time::sleep_until(time).await;
-            Some(())
-        } else {
-            None
-        }
-    }
-
-    /// Process as a result of timeout_propose_block.
-    /// Signal that the current block should complete.
-    /// Restart timeout, for re-proposal.
-    pub async fn propose_block_at_timeout(&mut self) -> bool {
-        self.propose_block_timeout_at = self.next_propose_block_timeout_at();
-
-        let b_num = self.consensused.current_block_num;
-        let item = StorageRaftItem::CompleteBlock(b_num);
-
-        self.propose_item_dedup(&item, b_num).await.is_some()
-    }
-
     /// Add block to our local pool from which to propose
     /// consensused blocks.
     ///
@@ -321,12 +276,6 @@ impl StorageRaft {
         common: CommonBlockInfo,
         mined_info: MinedBlockExtraInfo,
     ) -> bool {
-        if let ProposeBlockTimeout::First = &self.propose_block_timeout_at {
-            // Wait for compute and other nodes to be ready so we do not unecessarily
-            // timeout early on first block.
-            self.propose_block_timeout_at = self.next_propose_block_timeout_at();
-        }
-
         let b_num = common.block.header.b_num;
         let item = StorageRaftItem::PartBlock(ReceivedBlock {
             peer,
@@ -366,6 +315,8 @@ impl StorageRaft {
 
     /// Generate a snapshot, needs to happen at the end of the event processing.
     pub fn event_processed_generate_snapshot(&mut self, block_stored: BlockStoredInfo) {
+        self.set_ignore_dedeup_b_num_less_than_current();
+
         let shutdown = block_stored.shutdown;
         self.consensused.last_block_stored = Some(block_stored);
 
@@ -381,24 +332,15 @@ impl StorageRaft {
         }
     }
 
-    ///Creates and returns a complete block
+    /// Ignore processing raft item out of date.
+    fn set_ignore_dedeup_b_num_less_than_current(&mut self) {
+        self.proposed_in_flight
+            .ignore_dedeup_b_num_less_than(self.consensused.current_block_num);
+    }
+
+    /// Creates and returns a complete block
     pub fn generate_complete_block(&mut self) -> CompleteBlock {
-        self.propose_block_timeout_at = self.next_propose_block_timeout_at();
-
-        let (block, b_num) = self.consensused.generate_complete_block();
-        self.proposed_in_flight.ignore_dedeup_b_num_less_than(b_num);
-
-        block
-    }
-
-    ///Returns the clock time after the proposed block time out
-    fn next_propose_block_timeout_at(&mut self) -> ProposeBlockTimeout {
-        ProposeBlockTimeout::Some(Instant::now() + self.propose_block_timeout_duration)
-    }
-
-    /// The duration for propose block time out
-    pub fn propose_block_timeout_duration(&self) -> Duration {
-        self.propose_block_timeout_duration
+        self.consensused.generate_complete_block()
     }
 
     /// Get the last block stored info to send to the compute nodes
@@ -431,7 +373,6 @@ impl StorageConsensused {
         Self {
             sufficient_majority,
             current_block_num,
-            current_block_complete_timeout_peer_ids: Default::default(),
             current_block_completed_parts: Default::default(),
             last_committed_raft_idx_and_term,
             last_block_stored,
@@ -457,14 +398,10 @@ impl StorageConsensused {
         block_num == self.current_block_num
     }
 
-    ///Returns false is current block timeout peer ids length of this class is less than the sufficient_majority object of this class.
+    /// Returns false is current block timeout peer ids length of this class is less than the sufficient_majority object of this class.
     /// Returns true if a calculated completed block length of this class is greater or equal to the sufficient_majority object of this class.
     ///
     pub fn has_block_ready_to_store(&self) -> bool {
-        if self.current_block_complete_timeout_peer_ids.len() < self.sufficient_majority {
-            return false;
-        }
-
         let completed_blocks_len = self
             .current_block_completed_parts
             .values()
@@ -473,17 +410,6 @@ impl StorageConsensused {
             .unwrap_or(0);
 
         completed_blocks_len >= self.sufficient_majority
-    }
-
-    ///Inserts a prosper_id into the current_block_complete_timeout_peer_ids.
-    /// proposer_id is take from key
-    ///
-    /// ### Arguments
-    ///
-    /// * `key` - Key containing the proposer_id to be appended.
-    pub fn append_received_block_timeout(&mut self, key: RaftContextKey) {
-        self.current_block_complete_timeout_peer_ids
-            .insert(key.proposer_id);
     }
 
     ///Appends a RecievedBlock into the current_block_completed_parts
@@ -501,23 +427,29 @@ impl StorageConsensused {
         let per_node = BTreeMap::new();
         self.current_block_completed_parts
             .entry(block_hash)
-            .or_insert(CompleteBlock { common, per_node })
+            .or_insert(CompleteBlockBuilder { common, per_node })
             .per_node
             .insert(key.proposer_id, node_info);
     }
 
     ///generates a completed block and returns it.
-    pub fn generate_complete_block(&mut self) -> (CompleteBlock, u64) {
+    pub fn generate_complete_block(&mut self) -> CompleteBlock {
         self.current_block_num += 1;
-        let _timeouts = std::mem::take(&mut self.current_block_complete_timeout_peer_ids);
         let completed_parts = std::mem::take(&mut self.current_block_completed_parts);
 
-        let (_, complete_block) = completed_parts
+        let (_, completed_parts) = completed_parts
             .into_iter()
             .max_by_key(|(_, v)| v.per_node.len())
             .unwrap();
 
-        (complete_block, self.current_block_num)
+        let complete_block = CompleteBlock {
+            common: completed_parts.common,
+            extra_info: MinedBlockExtraInfo {
+                shutdown: completed_parts.per_node.values().all(|v| v.shutdown),
+            },
+        };
+
+        complete_block
     }
 
     /// Get the last block stored info to send to the compute nodes

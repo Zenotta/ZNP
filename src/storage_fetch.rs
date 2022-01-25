@@ -1,4 +1,4 @@
-use crate::configurations::NodeSpec;
+use crate::configurations::StorageNodeConfig;
 use crate::interfaces::{BlockchainItem, BlockchainItemMeta};
 use crate::storage::{indexed_block_hash_key, indexed_tx_hash_key};
 use std::fmt;
@@ -140,8 +140,9 @@ pub struct StorageFetch {
 
 impl StorageFetch {
     /// Initialize with database info
-    pub fn new(addr: SocketAddr, storage_nodes: &[NodeSpec], timeout_duration: Duration) -> Self {
-        let storage_nodes = storage_nodes.iter().map(|s| s.address);
+    pub fn new(config: &StorageNodeConfig, addr: SocketAddr) -> Self {
+        let timeout_duration = Duration::from_millis(config.storage_catchup_duration as u64);
+        let storage_nodes = config.storage_nodes.iter().map(|s| s.address);
         let storage_nodes = storage_nodes.filter(|a| a != &addr).collect();
         Self {
             timeout_duration,

@@ -7,8 +7,8 @@ use crate::interfaces::{
 };
 use crate::transaction_gen::{PendingMap, TransactionGen};
 use crate::utils::{
-    generate_half_druid, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, LocalEvent,
-    LocalEventChannel, LocalEventSender, ResponseResult,
+    generate_half_druid, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, to_api_keys,
+    ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
 };
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
 use bincode::deserialize;
@@ -117,7 +117,7 @@ pub struct UserNode {
     wallet_db: WalletDb,
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
-    api_info: (SocketAddr, Option<TlsPrivateInfo>),
+    api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys),
     trading_peer: Option<SocketAddr>,
     next_payment: Option<(Option<SocketAddr>, Transaction)>,
     last_block_notified: Block,
@@ -152,6 +152,7 @@ impl UserNode {
         let api_tls_info = config
             .user_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
+        let api_keys = to_api_keys(config.api_keys.clone());
 
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::User).await?;
 
@@ -180,7 +181,7 @@ impl UserNode {
             wallet_db,
             local_events: Default::default(),
             compute_addr,
-            api_info: (api_addr, api_tls_info),
+            api_info: (api_addr, api_tls_info, api_keys),
             trading_peer: None,
             next_payment: None,
             last_block_notified: Default::default(),
@@ -231,13 +232,14 @@ impl UserNode {
     }
 
     /// Info needed to run the API point.
-    pub fn api_inputs(&self) -> (WalletDb, Node, SocketAddr, Option<TlsPrivateInfo>) {
-        let (api_addr, api_tls_info) = self.api_info.clone();
+    pub fn api_inputs(&self) -> (WalletDb, Node, SocketAddr, Option<TlsPrivateInfo>, ApiKeys) {
+        let (api_addr, api_tls_info, api_keys) = self.api_info.clone();
         (
             self.wallet_db.clone(),
             self.node.clone(),
             api_addr,
             api_tls_info,
+            api_keys,
         )
     }
 
@@ -406,7 +408,7 @@ impl UserNode {
     /// - block notification request (if active)
     pub async fn send_startup_requests(&mut self) -> Result<()> {
         if self.is_test_auto_gen_tx_active() {
-            info!("Send startup requets: block notification");
+            info!("Send startup requests: block notification");
             return self.send_block_notification_request().await;
         }
         Ok(())

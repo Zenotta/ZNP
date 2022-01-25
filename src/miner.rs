@@ -8,15 +8,13 @@ use crate::interfaces::{
 };
 use crate::utils::{
     self, concat_merkle_coinbase, format_parition_pow_address, generate_pow_nonce,
-    get_paiments_for_wallet, get_partition_entry_key, validate_pow_block,
-    DeserializedBlockchainItem, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
-    RunningTaskOrResult,
+    get_paiments_for_wallet, to_api_keys, validate_pow_block, ApiKeys, DeserializedBlockchainItem,
+    LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::crypto::secretbox_chacha20_poly1305::Key;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block;
 use naom::primitives::transaction::Transaction;
@@ -56,7 +54,7 @@ pub type CurrentBlockWithMutex = Arc<Mutex<Option<BlockPoWReceived>>>;
 pub struct BlockPoWInfo {
     peer: SocketAddr,
     start_time: SystemTime,
-    unicorn: String,
+    prev_hash: String,
     hash_to_mine: String,
     coinbase: (String, Transaction),
     b_num: u64,
@@ -126,17 +124,15 @@ pub struct MinerNode {
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
     storage_addr: SocketAddr,
-    partition_key: Option<Key>,
     rand_num: Vec<u8>,
     current_block: CurrentBlockWithMutex,
     last_pow: Option<ProofOfWork>,
-    partition_list: Vec<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, SocketAddr)>,
     mining_block_task: RunningTaskOrResult<BlockPoWInfo>,
     blockchain_item_received: Option<(String, BlockchainItem, SocketAddr)>,
-    api_info: (SocketAddr, Option<TlsPrivateInfo>),
+    api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys),
 }
 
 impl MinerNode {
@@ -173,6 +169,7 @@ impl MinerNode {
         let api_tls_info = config
             .miner_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
+        let api_keys = to_api_keys(config.api_keys.clone());
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Miner).await?;
 
         Ok(MinerNode {
@@ -181,9 +178,7 @@ impl MinerNode {
             wallet_db,
             compute_addr,
             storage_addr,
-            partition_list: Default::default(),
             rand_num: Default::default(),
-            partition_key: None,
             current_block: Arc::new(Mutex::new(None)),
             last_pow: None,
             current_coinbase: None,
@@ -191,7 +186,7 @@ impl MinerNode {
             mining_partition_task: Default::default(),
             mining_block_task: Default::default(),
             blockchain_item_received: Default::default(),
-            api_info: (api_addr, api_tls_info),
+            api_info: (api_addr, api_tls_info, api_keys),
         }
         .load_local_db()
         .await?)
@@ -205,14 +200,16 @@ impl MinerNode {
         Node,
         SocketAddr,
         Option<TlsPrivateInfo>,
+        ApiKeys,
         CurrentBlockWithMutex,
     ) {
-        let (api_addr, api_tls_info) = self.api_info.clone();
+        let (api_addr, api_tls_info, api_keys) = self.api_info.clone();
         (
             self.wallet_db.clone(),
             self.node.clone(),
             api_addr,
             api_tls_info,
+            api_keys,
             self.current_block.clone(),
         )
     }
@@ -257,7 +254,7 @@ impl MinerNode {
     /// Send initial requests:
     /// - partition request
     pub async fn send_startup_requests(&mut self) -> Result<()> {
-        info!("Send startup requets: partition");
+        info!("Send startup requests: partition");
         self.send_partition_request().await
     }
 
@@ -313,12 +310,6 @@ impl MinerNode {
                 if self.process_found_partition_pow().await {
                     info!("Partition Pow found and sent");
                 }
-            }
-            Ok(Response {
-                success: true,
-                reason: "Received partition list successfully",
-            }) => {
-                debug!("RECEIVED PARTITION LIST");
             }
             Ok(Response {
                 success: true,
@@ -477,7 +468,6 @@ impl MinerNode {
         match req {
             SendBlockchainItem { key, item } => Some(self.receive_blockchain_item(peer, key, item)),
             SendBlock { block, reward } => self.receive_pre_block(peer, block, reward).await,
-            SendPartitionList { p_list } => self.receive_partition_list(peer, p_list),
             SendRandomNum {
                 rnum,
                 win_coinbases,
@@ -556,34 +546,6 @@ impl MinerNode {
         Some(Response {
             success: true,
             reason: "Received random number successfully",
-        })
-    }
-
-    /// Handles the receipt of the filled partition list
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer`     - Sending peer's socket address
-    /// * `p_list`   - Vec<ProofOfWork>. Is the partition list being recieved. It is a Vec containing proof of work objects.
-    fn receive_partition_list(
-        &mut self,
-        peer: SocketAddr,
-        p_list: Vec<ProofOfWork>,
-    ) -> Option<Response> {
-        if peer != self.compute_address() {
-            return None;
-        }
-
-        let new_key = Some(get_partition_entry_key(&p_list));
-        if self.partition_key == new_key {
-            return None;
-        }
-
-        self.partition_key = new_key;
-        self.partition_list = p_list;
-        Some(Response {
-            success: true,
-            reason: "Received partition list successfully",
         })
     }
 
@@ -831,14 +793,14 @@ impl MinerNode {
         self.mining_block_task = {
             let merkle_hash = &new_block.hash_block.merkle_hash;
             let hash_to_mine = concat_merkle_coinbase(merkle_hash, &mining_tx_hash).await;
-            let unicorn = new_block.hash_block.unicorn.clone();
+            let prev_hash = new_block.hash_block.prev_hash.clone();
             let coinbase = (mining_tx_hash, mining_tx);
             let nonce = Vec::new();
             let start_time = SystemTime::now();
             RunningTaskOrResult::Running(Self::generate_pow_for_block(BlockPoWInfo {
                 peer,
                 start_time,
-                unicorn,
+                prev_hash,
                 hash_to_mine,
                 coinbase,
                 b_num,
@@ -859,7 +821,7 @@ impl MinerNode {
         task::spawn_blocking(move || {
             // Mine Block with mining transaction
             info.nonce = generate_pow_nonce();
-            while !validate_pow_block(&info.unicorn, &info.hash_to_mine, &info.nonce) {
+            while !validate_pow_block(&info.prev_hash, &info.hash_to_mine, &info.nonce) {
                 info.nonce = generate_pow_nonce();
             }
 

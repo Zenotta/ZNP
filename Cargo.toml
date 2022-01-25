@@ -20,6 +20,7 @@ hex = "0.4.2"
 merkletree = "0.21.0"
 merkle-log = "0.0.3"
 naom = { path = "../naom" }
+keccak_prime = { path = "../keccak-prime" }
 protobuf = "~2.0"
 raft = "0.5.0"
 rand = "0.7.3"
