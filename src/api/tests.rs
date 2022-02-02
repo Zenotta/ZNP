@@ -1,7 +1,7 @@
 use crate::api::handlers::{
     AddressConstructData, Addresses, ChangePassphraseData, CreateReceiptAssetData,
     CreateTransaction, CreateTxIn, CreateTxInScript, DbgPaths, EncapsulatedPayment,
-    FetchPendingtData, PublicKeyAddresses,
+    FetchPendingData, PublicKeyAddresses,
 };
 use crate::api::routes;
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
@@ -13,12 +13,9 @@ use crate::interfaces::{
     StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
+use crate::test_utils::{generate_rb_transactions, RbReceiverData, RbSenderData};
 use crate::threaded_call::ThreadedCallChannel;
 use crate::tracked_utxo::TrackedUtxoSet;
-use crate::user::{
-    make_rb_payment_receipt_tx_and_response, make_rb_payment_send_transaction,
-    make_rb_payment_send_tx_and_request,
-};
 use crate::utils::{decode_pub_key, decode_secret_key, to_api_keys, tracing_log_try_init};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
@@ -217,40 +214,24 @@ fn generate_transaction(tx_hash: &str, script_public_key: &str) -> (String, Tran
 // Util function to create receipt base transactions.
 // Returns the hash of the tx and the tx itself
 fn get_rb_transactions() -> Vec<(String, Transaction)> {
-    generate_rb_transactions("tx_hash", COMMON_ADDR_STORE.0)
-}
+    let rb_sender_data = RbSenderData {
+        sender_pub_addr: "sender_address".to_owned(),
+        sender_pub_key: COMMON_PUB_KEY.to_owned(),
+        sender_sec_key: COMMON_SEC_KEY.to_owned(),
+        sender_prev_out: OutPoint::new("000000".to_owned(), 0),
+        sender_amount: TokenAmount(25_200),
+        sender_half_druid: "full_".to_owned(),
+    };
 
-// Generates a receipt base transaction using the given `tx_hash` and `script_public_key`
-fn generate_rb_transactions(tx_hash: &str, script_public_key: &str) -> Vec<(String, Transaction)> {
-    let asset = TokenAmount(25_200);
-    let tx_in = TxIn::new_from_input(OutPoint::new(tx_hash.to_string(), 0), Script::new());
-    let tx_out = TxOut::new_token_amount(script_public_key.to_string(), asset);
-    let sender_half_druid = COMMON_ADDRS[0].to_owned();
-    let sender_receipt_address = COMMON_ADDRS[1].to_owned();
+    let rb_receiver_data = RbReceiverData {
+        receiver_pub_addr: "receiver_address".to_owned(),
+        receiver_pub_key: COMMON_PUB_KEY.to_owned(),
+        receiver_sec_key: COMMON_SEC_KEY.to_owned(),
+        receiver_prev_out: OutPoint::new("000001".to_owned(), 0),
+        receiver_half_druid: "druid".to_owned(),
+    };
 
-    let r_asset = 10;
-    let r_tx_in = TxIn::new_from_input(OutPoint::new(tx_hash.to_string(), 0), Script::new());
-    let r_tx_out = TxOut::new_receipt_amount(script_public_key.to_string(), r_asset);
-    let receiver_half_druid = COMMON_ADDRS[2].to_owned();
-
-    let (rb_payment_data, rb_payment_request_data) = make_rb_payment_send_tx_and_request(
-        tx_out.value.clone(),
-        (vec![tx_in], vec![tx_out]),
-        sender_half_druid,
-        sender_receipt_address,
-    );
-    let (rb_receive_tx, rb_payment_response) = make_rb_payment_receipt_tx_and_response(
-        rb_payment_request_data,
-        (vec![r_tx_in], vec![r_tx_out]),
-        receiver_half_druid,
-        script_public_key.to_owned(),
-    );
-    let rb_send_tx = make_rb_payment_send_transaction(rb_payment_response, rb_payment_data);
-
-    let t_r_hash = construct_tx_hash(&rb_receive_tx);
-    let t_s_hash = construct_tx_hash(&rb_send_tx);
-
-    vec![(t_r_hash, rb_receive_tx), (t_s_hash, rb_send_tx)]
+    generate_rb_transactions(rb_sender_data, rb_receiver_data)
 }
 
 fn success_json() -> (StatusCode, HeaderMap) {
@@ -1083,10 +1064,9 @@ async fn test_post_fetch_pending() {
     // Arrange
     //
     let tx_vals = get_rb_transactions();
-    let druid = COMMON_ADDRS[0].to_owned() + COMMON_ADDRS[2];
     let compute = ComputeTest::new(tx_vals);
-    let druids = FetchPendingtData {
-        druid_list: vec![druid, "Druid2".to_owned()],
+    let druids = FetchPendingData {
+        druid_list: vec!["full_druid".to_owned(), "non_existing_druid".to_owned()],
     };
 
     let request = warp::test::request()
@@ -1109,8 +1089,7 @@ async fn test_post_fetch_pending() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"pending_transactions\":{\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\":{\"participants\":2,\"txs\":{\"g6cc9b1062850e9b8477768b6f01208a\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Receipt\":10},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"},{\"value\":{\"Receipt\":1},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"1118536e3d5a13e347262b5023963111\"}],\"version\":2,\"druid_info\":{\"druid\":\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\",\"participants\":2,\"expectations\":[{\"from\":\"1a53a3e3d61e4d9ab01ffef920548692ca21b615d4e153cdc2ee1b42d23d784c\",\"to\":\"4348536e3d5a13e347262b5023963edf\",\"asset\":{\"Token\":25200}}]}},\"gffb84a9c21bf6d5aff191a9bf0919d8\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"}],\"version\":2,\"druid_info\":{\"druid\":\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\",\"participants\":2,\"expectations\":[{\"from\":\"1a53a3e3d61e4d9ab01ffef920548692ca21b615d4e153cdc2ee1b42d23d784c\",\"to\":\"1118536e3d5a13e347262b5023963111\",\"asset\":{\"Receipt\":1}}]}}}}}}"
-    );
+        "{\"pending_transactions\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g274712ea22292d1a60446dc93566e96\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":null},{\"value\":{\"Receipt\":1},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":2,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}},\"g7f6fdc695f1127b466c39f049179aae\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":2,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Receipt\":1}}]}}}}}}");
 }
 
 /// Test POST update running total successful

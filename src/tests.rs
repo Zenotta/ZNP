@@ -5,20 +5,21 @@ use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTx
 use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
-    ComputeRequest, MinedBlock, MinedBlockExtraInfo, Response, StorageRequest,
+    ComputeRequest, DruidPool, MinedBlock, MinedBlockExtraInfo, Response, StorageRequest,
     StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{
-    get_test_tls_spec, node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig, NodeType,
+    generate_rb_transactions, get_test_tls_spec, node_join_all_checked, remove_all_node_dbs,
+    Network, NetworkConfig, NodeType, RbReceiverData, RbSenderData,
 };
 use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
-    create_valid_transaction_with_ins_outs, decode_secret_key, get_sanction_addresses,
-    tracing_log_try_init, validate_pow_block, LocalEvent, StringError,
+    create_valid_transaction_with_ins_outs, decode_pub_key, decode_secret_key,
+    get_sanction_addresses, tracing_log_try_init, validate_pow_block, LocalEvent, StringError,
 };
 use crate::wallet::AssetValues;
 use bincode::{deserialize, serialize};
@@ -26,10 +27,11 @@ use naom::crypto::sign_ed25519 as sign;
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
+use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::script::StackEntry;
 use naom::utils::transaction_utils::{
-    construct_address, construct_coinbase_tx, construct_tx_hash,
+    construct_address, construct_coinbase_tx, construct_receipt_create_tx, construct_tx_hash,
     construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
@@ -2613,20 +2615,10 @@ async fn make_receipt_based_payment_act(
     user_send_receipt_based_payment_response(network, to).await;
     user_handle_event(network, from, "Received receipt-based payment response").await;
     user_send_receipt_based_payment_to_desinations(network, from, compute).await;
-    compute_handle_event(
-        network,
-        compute,
-        "Transaction added to DRUID pool. Awaiting other parties",
-    )
-    .await;
+    compute_handle_event(network, compute, "Transactions added to tx pool").await;
     user_handle_event(network, to, "Payment transaction received").await;
     user_send_receipt_based_payment_to_desinations(network, to, compute).await;
-    compute_handle_event(
-        network,
-        compute,
-        "Transaction added to corresponding DRUID droplets",
-    )
-    .await;
+    compute_handle_event(network, compute, "Transactions added to tx pool").await;
     user_handle_event(network, from, "Payment transaction received").await;
     compute_handle_event(network, compute, "Transactions committed").await;
 }
@@ -2661,6 +2653,96 @@ async fn restart_user_with_seed() {
     // Assert
     //
     assert_eq!(db_0, db_1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reject_receipt_based_payment() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11500, 1);
+    network_config.compute_seed_utxo = make_compute_seed_utxo_with_info({
+        &[("000000", vec![(SOME_PUB_KEYS[0], DEFAULT_SEED_AMOUNT)])]
+    });
+    let mut network = Network::create_from_config(&network_config).await;
+    create_first_block_act(&mut network).await;
+    let mut create_receipt_asset_txs = BTreeMap::default();
+    create_receipt_asset_txs.insert(
+        "g44831b7fd9987d898cec6aefca5790f".to_owned(),
+        construct_receipt_create_tx(
+            0,
+            decode_pub_key(SOME_PUB_KEYS[1]).unwrap(),
+            &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
+            1,
+        ),
+    );
+    add_transactions_act(&mut network, &create_receipt_asset_txs).await;
+    proof_of_work_act(&mut network, CfgNum::All).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+    create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+
+    /* User1 -> User2 */
+    let rb_sender_data = RbSenderData {
+        sender_pub_addr: SOME_PUB_KEY_ADDRS[0].to_owned(),
+        sender_pub_key: SOME_PUB_KEYS[0].to_owned(),
+        sender_sec_key: SOME_SEC_KEYS[0].to_owned(),
+        sender_prev_out: OutPoint::new("000000".to_owned(), 0),
+        sender_amount: DEFAULT_SEED_AMOUNT,
+        sender_half_druid: "sender_druid".to_owned(),
+    };
+
+    let rb_receiver_data = RbReceiverData {
+        receiver_pub_addr: SOME_PUB_KEY_ADDRS[1].to_owned(),
+        receiver_pub_key: SOME_PUB_KEYS[1].to_owned(),
+        receiver_sec_key: SOME_SEC_KEYS[1].to_owned(),
+        receiver_prev_out: OutPoint::new("g44831b7fd9987d898cec6aefca5790f".to_owned(), 0),
+        receiver_half_druid: "receiver_druid".to_owned(),
+    };
+
+    let rb_txs = generate_rb_transactions(rb_sender_data, rb_receiver_data);
+    let rb_send_txs = vec![rb_txs[0].1.clone(), rb_txs[0].1.clone()];
+    let mut rb_recv_txs = vec![rb_txs[1].1.clone(), rb_txs[1].1.clone()];
+
+    // Invalid participant count
+    rb_recv_txs[0].druid_info.as_mut().unwrap().participants = 3;
+
+    // Invalid DRUID expectations
+    rb_recv_txs[1].druid_info.as_mut().unwrap().expectations = vec![DruidExpectation {
+        from: "wrong_from_addr".to_owned(), /* Invalid From Addr */
+        to: SOME_PUB_KEY_ADDRS[1].to_owned(),
+        asset: Asset::token_u64(6), /* Invalid TokenAmount */
+    }];
+
+    //
+    // Act
+    //
+    for i in 0..2 {
+        user_send_transaction_to_compute(&mut network, "user1", "compute1", &rb_send_txs[i]).await;
+        compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
+        user_send_transaction_to_compute(&mut network, "user1", "compute1", &rb_recv_txs[i]).await;
+        compute_handle_event(
+            &mut network,
+            "compute1",
+            "Some transactions invalid. Adding valid transactions only",
+        )
+        .await;
+    }
+
+    //
+    // Assert
+    //
+    let actual_pending_druid_pool = compute_pending_druid_pool(&mut network, "compute1").await;
+    let actual_local_druid_pool = compute_local_druid_pool(&mut network, "compute1").await;
+
+    assert_eq!(
+        (
+            actual_pending_druid_pool.len(),
+            actual_local_druid_pool.len()
+        ),
+        (0, 0)
+    );
 }
 
 //
@@ -3099,6 +3181,19 @@ async fn compute_committed_tx_druid_pool(
 ) -> Vec<BTreeMap<String, Transaction>> {
     let c = network.compute(compute).unwrap().lock().await;
     c.get_committed_tx_druid_pool().clone()
+}
+
+async fn compute_pending_druid_pool(network: &mut Network, compute: &str) -> DruidPool {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_pending_druid_pool().clone()
+}
+
+async fn compute_local_druid_pool(
+    network: &mut Network,
+    compute: &str,
+) -> Vec<BTreeMap<String, Transaction>> {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_local_druid_pool().clone()
 }
 
 async fn compute_all_inject_next_event(

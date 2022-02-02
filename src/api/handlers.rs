@@ -131,7 +131,7 @@ pub struct AddressConstructData {
 
 /// Struct received from client to fetch pending
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FetchPendingtData {
+pub struct FetchPendingData {
     pub druid_list: Vec<String>,
 }
 
@@ -430,7 +430,7 @@ pub async fn post_fetch_utxo_balance(
 //POST fetch pending transaction from a computet node
 pub async fn post_fetch_druid_pending(
     mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
-    fetch_input: FetchPendingtData,
+    fetch_input: FetchPendingData,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let pending_transactions = make_api_threaded_call(
         &mut threaded_calls,

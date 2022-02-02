@@ -2,7 +2,9 @@ use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
 use crate::hash_block::*;
-use crate::interfaces::{BlockchainItem, BlockchainItemMeta, ProofOfWork, StoredSerializingBlock};
+use crate::interfaces::{
+    BlockchainItem, BlockchainItemMeta, DruidDroplet, ProofOfWork, StoredSerializingBlock,
+};
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
@@ -983,6 +985,14 @@ pub fn create_receipt_asset_tx_from_sig(
 /// Confert to ApiKeys data structure
 pub fn to_api_keys(api_keys: Vec<String>) -> ApiKeys {
     Arc::new(Mutex::new(api_keys.into_iter().collect()))
+}
+
+/// Check to see if DDE transaction participants match
+pub fn check_druid_participants(droplet: &DruidDroplet) -> bool {
+    droplet
+        .txs
+        .iter()
+        .all(|(_, tx)| tx.druid_info.as_ref().map(|i| i.participants) == Some(droplet.participants))
 }
 
 /// Test UnicornFixedInfo with fast compuation

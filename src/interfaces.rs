@@ -178,6 +178,13 @@ pub struct DruidDroplet {
     pub txs: BTreeMap<String, Transaction>,
 }
 
+impl DruidDroplet {
+    pub fn new(participants: usize) -> Self {
+        let txs = Default::default();
+        DruidDroplet { participants, txs }
+    }
+}
+
 /// A placeholder Contract struct
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Contract;
@@ -479,6 +486,7 @@ pub trait MinerInterface {
 ///============ COMPUTE NODE ============///
 
 // Encapsulates compute requests injected by API
+#[allow(clippy::enum_variant_names)]
 #[derive(Deserialize, Serialize, Clone)]
 pub enum ComputeApiRequest {
     SendCreateReceiptRequest {
@@ -499,9 +507,6 @@ pub enum ComputeRequest {
     /// Process an API internal request
     ComputeApi(ComputeApiRequest),
 
-    SendRbTransaction {
-        transaction: Transaction,
-    },
     SendUtxoRequest {
         address_list: UtxoFetchType,
     },
@@ -546,7 +551,6 @@ impl fmt::Debug for ComputeRequest {
                 ref partition_entry,
             } => write!(f, "SendPartitionEntry"),
             SendTransactions { ref transactions } => write!(f, "SendTransactions"),
-            SendRbTransaction { ref transaction } => write!(f, "SendRbTransaction"),
             SendUserBlockNotificationRequest => write!(f, "SendUserBlockNotificationRequest"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
             Closing => write!(f, "Closing"),

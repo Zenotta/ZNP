@@ -18,15 +18,21 @@ use crate::upgrade::{
     upgrade_same_version_compute_db, upgrade_same_version_storage_db,
     upgrade_same_version_wallet_db,
 };
-use crate::user::UserNode;
+use crate::user::{
+    make_rb_payment_receipt_tx_and_response, make_rb_payment_send_transaction,
+    make_rb_payment_send_tx_and_request, UserNode,
+};
 use crate::utils::{
-    concat_maps, get_test_common_unicorn, loop_connnect_to_peers_async,
-    loop_wait_connnect_to_peers_async, make_utxo_set_from_seed, LocalEventSender, ResponseResult,
-    StringError,
+    concat_maps, decode_pub_key, decode_secret_key, get_test_common_unicorn,
+    loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
+    LocalEventSender, ResponseResult, StringError,
 };
 use futures::future::join_all;
-use naom::primitives::asset::TokenAmount;
-use naom::primitives::transaction::Transaction;
+use naom::crypto::sign_ed25519 as sign;
+use naom::primitives::asset::{Asset, TokenAmount};
+use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
+use naom::script::lang::Script;
+use naom::utils::transaction_utils::{construct_tx_hash, construct_tx_in_signable_hash};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -1348,4 +1354,96 @@ pub async fn get_bound_common_tls_configs(
         configs.push(config);
     }
     configs
+}
+
+pub struct RbSenderData {
+    pub sender_pub_addr: String,
+    pub sender_pub_key: String,
+    pub sender_sec_key: String,
+    pub sender_prev_out: OutPoint,
+    pub sender_amount: TokenAmount,
+    pub sender_half_druid: String,
+}
+
+pub struct RbReceiverData {
+    pub receiver_pub_addr: String,
+    pub receiver_pub_key: String,
+    pub receiver_sec_key: String,
+    pub receiver_prev_out: OutPoint,
+    pub receiver_half_druid: String,
+}
+
+// Generates a receipt-based transaction using the given sender and receiver data.
+pub fn generate_rb_transactions(
+    rb_sender_data: RbSenderData,
+    rb_receiver_data: RbReceiverData,
+) -> Vec<(String, Transaction)> {
+    let RbSenderData {
+        sender_pub_addr,
+        sender_pub_key,
+        sender_sec_key,
+        sender_prev_out,
+        sender_amount,
+        sender_half_druid,
+    } = rb_sender_data;
+
+    let RbReceiverData {
+        receiver_pub_addr,
+        receiver_pub_key,
+        receiver_sec_key,
+        receiver_prev_out,
+        receiver_half_druid,
+    } = rb_receiver_data;
+
+    let rb_send_signable_data = construct_tx_in_signable_hash(&sender_prev_out);
+    let rb_send_singature = sign::sign_detached(
+        rb_send_signable_data.as_bytes(),
+        &decode_secret_key(&sender_sec_key).unwrap(),
+    );
+
+    let rb_send_tx_in = TxIn {
+        previous_out: Some(sender_prev_out),
+        script_signature: Script::pay2pkh(
+            rb_send_signable_data,
+            rb_send_singature,
+            decode_pub_key(&sender_pub_key).unwrap(),
+            None,
+        ),
+    };
+
+    let rb_receive_signable_data = construct_tx_in_signable_hash(&receiver_prev_out);
+    let rb_receive_singature = sign::sign_detached(
+        rb_receive_signable_data.as_bytes(),
+        &decode_secret_key(&receiver_sec_key).unwrap(),
+    );
+
+    let rb_receive_tx_in = TxIn {
+        previous_out: Some(receiver_prev_out),
+        script_signature: Script::pay2pkh(
+            rb_receive_signable_data,
+            rb_receive_singature,
+            decode_pub_key(&receiver_pub_key).unwrap(),
+            None,
+        ),
+    };
+
+    let (rb_payment_data, rb_payment_request_data) = make_rb_payment_send_tx_and_request(
+        Asset::Token(sender_amount),
+        (vec![rb_send_tx_in], vec![TxOut::new()]),
+        sender_half_druid,
+        sender_pub_addr,
+    );
+
+    let (rb_receive_tx, rb_payment_response) = make_rb_payment_receipt_tx_and_response(
+        rb_payment_request_data,
+        (vec![rb_receive_tx_in], vec![TxOut::new()]),
+        receiver_half_druid,
+        receiver_pub_addr,
+    );
+
+    let rb_send_tx = make_rb_payment_send_transaction(rb_payment_response, rb_payment_data);
+    let t_r_hash = construct_tx_hash(&rb_receive_tx);
+    let t_s_hash = construct_tx_hash(&rb_send_tx);
+
+    vec![(t_r_hash, rb_receive_tx), (t_s_hash, rb_send_tx)]
 }
