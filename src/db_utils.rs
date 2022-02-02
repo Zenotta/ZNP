@@ -456,13 +456,13 @@ impl SimpleDbWriteBatch<'_> {
             Self::File { write, db } => {
                 let cf = db
                     .cf_handle(cf)
-                    .ok_or_else(|| SimpleDbError("Missing column".to_owned()))?;
+                    .ok_or_else(|| SimpleDbError(format!("Missing column {}", cf)))?;
                 write.put_cf(cf, key, value);
             }
             Self::InMemory { write, columns } => {
                 let cf = columns
                     .get(cf)
-                    .ok_or_else(|| SimpleDbError("Missing column".to_owned()))?;
+                    .ok_or_else(|| SimpleDbError(format!("Missing column {}", cf)))?;
                 write.push((*cf, key.as_ref().to_vec(), Some(value.as_ref().to_vec())));
             }
         }

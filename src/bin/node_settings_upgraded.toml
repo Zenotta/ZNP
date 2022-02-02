@@ -1,0 +1,32 @@
+compute_db_mode = { Test = 0 }
+storage_db_mode = { Test = 0 }
+miner_db_mode = { Test = 0 }
+user_db_mode = { Test = 1000 }
+user_api_port = 3000
+storage_api_port = 3001
+compute_api_port = 3003
+miner_api_port = 3004
+compute_raft = 1
+storage_raft = 1
+storage_block_timeout = 1000
+compute_partition_full_size = 1
+compute_minimum_miner_pool_len = 1
+jurisdiction = "US"
+
+[user_test_auto_gen_setup]
+user_setup_tx_chunk_size = 5
+user_setup_tx_in_per_tx = 3
+user_setup_tx_max_count = 100000
+
+#first node is leader
+[[compute_nodes]]
+address = "127.0.0.1:12300"
+
+[[storage_nodes]]
+address = "127.0.0.1:12330"
+
+[[miner_nodes]]
+address = "127.0.0.1:12340"
+
+[[user_nodes]]
+address = "127.0.0.1:12360"

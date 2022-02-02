@@ -2192,18 +2192,21 @@ async fn request_utxo_set_and_update_running_total_raft_1_node() {
                 secret_key: sk[0].to_string(),
                 public_key: pk[0].to_string(),
                 amount: 3,
+                address_version: None,
             },
             WalletTxSpec {
                 out_point: "0-000001".to_string(),
                 secret_key: sk[1].to_string(),
                 public_key: pk[1].to_string(),
                 amount: 3,
+                address_version: None,
             },
             WalletTxSpec {
                 out_point: "0-000002".to_string(),
                 secret_key: sk[2].to_string(),
                 public_key: pk[2].to_string(),
                 amount: 3,
+                address_version: None,
             },
         ]]
     };
@@ -2475,12 +2478,14 @@ pub async fn make_multiple_receipt_based_payments_raft_1_node() {
                 secret_key: sk[0].to_string(),
                 public_key: pk[0].to_string(),
                 amount: 11,
+                address_version: None,
             }],
             vec![WalletTxSpec {
                 out_point: "0-000001".to_string(),
                 secret_key: sk[1].to_string(),
                 public_key: pk[1].to_string(),
                 amount: 11,
+                address_version: None,
             }],
         ]
     };
@@ -3540,7 +3545,9 @@ async fn user_process_mining_notified(
 ) -> Option<BTreeMap<String, Transaction>> {
     let mut u = network.user(user).unwrap().lock().await;
     u.process_mining_notified().await;
-    u.pending_test_auto_gen_txs().cloned()
+    u.pending_test_auto_gen_txs()
+        .cloned()
+        .map(|m| m.into_iter().map(|(k, (tx, _))| (k, tx)).collect())
 }
 
 async fn user_get_received_utxo_set_keys(network: &mut Network, user: &str) -> Vec<OutPoint> {
@@ -3772,7 +3779,7 @@ fn valid_transactions_with(
     let mut transactions = BTreeMap::new();
     for (ins, outs) in &txs {
         let (t_hash, payment_tx) =
-            create_valid_transaction_with_ins_outs(ins, outs, &pk, &sk, amount);
+            create_valid_transaction_with_ins_outs(ins, outs, &pk, &sk, amount, None);
         transactions.insert(t_hash, payment_tx);
     }
 
@@ -3876,6 +3883,7 @@ fn wallet_seed(out_p: (i32, &str), amount: &TokenAmount) -> WalletTxSpec {
         secret_key: COMMON_SEC_KEY.to_owned(),
         public_key: COMMON_PUB_KEY.to_owned(),
         amount: amount.0,
+        address_version: None,
     }
 }
 

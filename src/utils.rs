@@ -515,6 +515,7 @@ pub fn create_valid_transaction(
         pub_key,
         secret_key,
         TokenAmount(1),
+        None,
     )
 }
 
@@ -537,6 +538,7 @@ pub fn create_valid_transaction_with_ins_outs(
     pub_key: &PublicKey,
     secret_key: &SecretKey,
     amount: TokenAmount,
+    address_version: Option<u64>,
 ) -> (String, Transaction) {
     let tx_ins = {
         let mut tx_in_cons = Vec::new();
@@ -549,7 +551,7 @@ pub fn create_valid_transaction_with_ins_outs(
                 previous_out: signable,
                 signatures: vec![signature],
                 pub_keys: vec![*pub_key],
-                address_version: None,
+                address_version,
             });
         }
 
@@ -648,13 +650,16 @@ pub fn make_utxo_set_from_seed(
 /// ### Arguments
 ///
 /// * `seed`    - &WalletTxSpec object containing parameters to generate wallet transactions
-pub fn make_wallet_tx_info(seed: &WalletTxSpec) -> (OutPoint, PublicKey, SecretKey, TokenAmount) {
+pub fn make_wallet_tx_info(
+    seed: &WalletTxSpec,
+) -> (OutPoint, PublicKey, SecretKey, TokenAmount, Option<u64>) {
     let tx_out_p = decode_wallet_out_point(&seed.out_point);
     let amount = TokenAmount(seed.amount as u64);
     let sk = decode_secret_key(&seed.secret_key).unwrap();
     let pk = decode_pub_key(&seed.public_key).unwrap();
+    let version = seed.address_version;
 
-    (tx_out_p, pk, sk, amount)
+    (tx_out_p, pk, sk, amount, version)
 }
 
 /// Decodes a wallet's OutPoint

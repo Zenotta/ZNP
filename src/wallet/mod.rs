@@ -12,7 +12,7 @@ use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::asset::Asset;
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
 use naom::utils::transaction_utils::{
-    construct_address, construct_payment_tx_ins, construct_tx_in_signable_hash,
+    construct_address_for, construct_payment_tx_ins, construct_tx_in_signable_hash,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,6 +21,15 @@ use std::{error, fmt, io};
 use tokio::task;
 mod fund_store;
 pub use fund_store::{AssetValues, FundStore};
+
+/// Storage key for a &[u8] of the word 'MasterKeyStore'
+pub const MASTER_KEY_STORE_KEY: &str = "MasterKeyStore";
+
+pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+    db_path: WALLET_PATH,
+    suffix: "",
+    columns: &[],
+};
 
 /// Result wrapper for WalletDb errors
 ///
@@ -93,15 +102,6 @@ impl From<SimpleDbError> for WalletDbError {
         Self::Database(other)
     }
 }
-
-/// Storage key for a &[u8] of the word 'MasterKeyStore'
-pub const MASTER_KEY_STORE_KEY: &[u8] = "MasterKeyStore".as_bytes();
-
-pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
-    db_path: WALLET_PATH,
-    suffix: "",
-    columns: &[],
-};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddressStore {
@@ -241,8 +241,8 @@ impl WalletDb {
         }
 
         for seed in seeds {
-            let (tx_out_p, pk, sk, amount) = make_wallet_tx_info(seed);
-            let (address, _) = self.store_payment_address(pk, sk).await;
+            let (tx_out_p, pk, sk, amount, v) = make_wallet_tx_info(seed);
+            let (address, _) = self.store_payment_address(pk, sk, v).await;
             let payments = vec![(tx_out_p, Asset::Token(amount), address)];
             self.save_usable_payments_to_wallet(payments).await.unwrap();
         }
@@ -258,7 +258,8 @@ impl WalletDb {
     /// TODO: Add static address capability for frequent payments
     pub async fn generate_payment_address(&self) -> (String, AddressStore) {
         let (public_key, secret_key) = sign::gen_keypair();
-        self.store_payment_address(public_key, secret_key).await
+        self.store_payment_address(public_key, secret_key, None)
+            .await
     }
 
     /// Store a new payment address, saving the related keys to the wallet
@@ -266,12 +267,13 @@ impl WalletDb {
         &self,
         public_key: PublicKey,
         secret_key: SecretKey,
+        address_version: Option<u64>,
     ) -> (String, AddressStore) {
-        let final_address = construct_address(&public_key);
+        let final_address = construct_address_for(&public_key, address_version);
         let address_keys = AddressStore {
             public_key,
             secret_key,
-            address_version: None,
+            address_version,
         };
 
         let save_result = self
@@ -599,12 +601,8 @@ pub fn get_address_store(
 ) -> AddressStore {
     match db.get_cf(DB_COL_DEFAULT, key_addr) {
         Ok(Some(store)) => {
-            let (nonce, output) = store.split_at(secretbox::NONCE_LEN);
-            let nonce = secretbox::Nonce::from_slice(nonce).unwrap();
-            match secretbox::open(output.to_vec(), &nonce, encryption_key) {
-                Some(decrypted) => deserialize(&decrypted).unwrap(),
-                _ => panic!("Error accessing wallet"),
-            }
+            let decrypted = decrypt_store(store, encryption_key);
+            deserialize(&decrypted).unwrap()
         }
         Ok(None) => panic!("Key address not present in wallet: {}", key_addr),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
@@ -623,13 +621,8 @@ pub fn save_address_store_to_wallet(
     store: AddressStore,
     encryption_key: &secretbox::Key,
 ) {
-    let input = {
-        let store = serialize(&store).unwrap();
-        let nonce = secretbox::gen_nonce();
-        let mut input: Vec<u8> = nonce.as_ref().to_vec();
-        input.append(&mut secretbox::seal(store, &nonce, encryption_key).unwrap());
-        input
-    };
+    let store = serialize(&store).unwrap();
+    let input = encrypt_store(store, encryption_key);
     db.put_cf(DB_COL_DEFAULT, key_addr, &input);
 }
 
@@ -719,6 +712,24 @@ pub fn make_key(passphrase: &[u8], salt: pwhash::Salt) -> secretbox::Key {
     let mut kb = [0; secretbox::KEY_LEN];
     pwhash::derive_key(&mut kb, passphrase, &salt, pwhash::OPSLIMIT_INTERACTIVE);
     secretbox::Key::from_slice(&kb).unwrap()
+}
+
+/// Decrypt a Store value
+pub fn decrypt_store(store: Vec<u8>, encryption_key: &secretbox::Key) -> Vec<u8> {
+    let (nonce, output) = store.split_at(secretbox::NONCE_LEN);
+    let nonce = secretbox::Nonce::from_slice(nonce).unwrap();
+    match secretbox::open(output.to_vec(), &nonce, encryption_key) {
+        Some(decrypted) => decrypted,
+        _ => panic!("Error accessing wallet"),
+    }
+}
+
+/// Encrypt a Store value
+pub fn encrypt_store(store: Vec<u8>, encryption_key: &secretbox::Key) -> Vec<u8> {
+    let nonce = secretbox::gen_nonce();
+    let mut input: Vec<u8> = nonce.as_ref().to_vec();
+    input.append(&mut secretbox::seal(store, &nonce, encryption_key).unwrap());
+    input
 }
 
 /// Make TxConstructors from stored TxOut
@@ -829,6 +840,7 @@ pub fn tx_constructor_from_prev_out(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use naom::utils::transaction_utils::construct_address;
 
     #[test]
     /// Creating a valid payment address
