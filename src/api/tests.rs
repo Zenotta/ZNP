@@ -578,8 +578,11 @@ async fn test_get_wallet_info() {
     let db = get_wallet_db("");
     let mut fund_store = db.get_fund_store();
     let out_point = OutPoint::new("tx_hash".to_string(), 0);
+    let out_point_s = OutPoint::new("tx_hash_spent".to_string(), 0);
     let asset = Asset::token_u64(11);
     fund_store.store_tx(out_point.clone(), asset.clone());
+    fund_store.store_tx(out_point_s.clone(), asset.clone());
+    fund_store.spend_tx(&out_point_s);
 
     db.set_db_value(FUND_KEY, serialize(&fund_store).unwrap())
         .await;
@@ -587,20 +590,30 @@ async fn test_get_wallet_info() {
     db.save_transaction_to_wallet(out_point, "public_address".to_string())
         .await
         .unwrap();
+    db.save_transaction_to_wallet(out_point_s, "public_address_spent".to_string())
+        .await
+        .unwrap();
 
     let request = warp::test::request().method("GET").path("/wallet_info");
+    let request_spent = warp::test::request()
+        .method("GET")
+        .path("/wallet_info/spent");
 
     //
     // Act
     //
     let filter = routes::wallet_info(&mut dp(), db);
     let res = request.reply(&filter).await;
+    let r_s = request_spent.reply(&filter).await;
 
     //
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":11}}]}}");
+
+    assert_eq!((r_s.status(), r_s.headers().clone()), success_json());
+    assert_eq!(r_s.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}");
 }
 
 /// Test GET new payment address
