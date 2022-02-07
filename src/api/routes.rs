@@ -68,6 +68,11 @@ pub fn wallet_info(
     warp_path(dp, "wallet_info")
         .and(warp::get())
         .and(with_node_component(db))
+        .and(
+            warp::path::param::<String>()
+                .map(Some)
+                .or_else(|_| async { Ok::<(Option<String>,), std::convert::Infallible>((None,)) }),
+        )
         .and_then(handlers::get_wallet_info)
         .with(get_cors())
 }

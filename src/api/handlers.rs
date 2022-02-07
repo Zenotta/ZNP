@@ -159,14 +159,22 @@ impl warp::reply::Reply for JsonReply {
 
 /// Gets the state of the connected wallet and returns it.
 /// Returns a `WalletInfo` struct
-pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn get_wallet_info(
+    wallet_db: WalletDb,
+    extra: Option<String>,
+) -> Result<impl warp::Reply, warp::Rejection> {
     let fund_store = match wallet_db.get_fund_store_err() {
         Ok(fund) => fund,
         Err(_) => return Err(warp::reject::custom(errors::ErrorCannotAccessWallet)),
     };
 
     let mut addresses = AddressesWithOutPoints::new();
-    for (out_point, asset) in fund_store.transactions() {
+    let txs = match extra.as_deref() {
+        Some("spent") => fund_store.spent_transactions(),
+        _ => fund_store.transactions(),
+    };
+
+    for (out_point, asset) in txs {
         addresses
             .entry(wallet_db.get_transaction_address(out_point))
             .or_insert_with(Vec::new)
