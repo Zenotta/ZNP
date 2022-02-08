@@ -13,12 +13,12 @@ use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::{UnicornFixedParam, UnicornInfo};
 use crate::utils::{calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed};
 use bincode::{deserialize, serialize};
+use naom::crypto::sha3_256;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::utils::transaction_utils::get_inputs_previous_out_point;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::future::Future;
@@ -1033,7 +1033,7 @@ impl ComputeConsensused {
 
         block.header.previous_hash = Some(previous_hash);
         block.header.b_num = b_num;
-        block.set_merkle_root().await;
+        block.set_txs_merkle_root_and_hash().await;
     }
 
     /// Apply set of valid transactions to the block.
@@ -1167,7 +1167,7 @@ impl ComputeConsensused {
         block: AccumulatingBlockStoredInfo,
     ) {
         let block_ser = serialize(&block).unwrap();
-        let block_hash = Sha3_256::digest(&block_ser).to_vec();
+        let block_hash = sha3_256::digest(&block_ser).to_vec();
 
         self.current_block_stored_info
             .entry(block_hash)
@@ -1346,7 +1346,6 @@ mod test {
             block_hash: "0123".to_string(),
             block_num: 0,
             nonce: vec![0],
-            merkle_hash: "0123".to_string(),
             mining_transactions: BTreeMap::new(),
             shutdown: false,
         };

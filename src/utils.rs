@@ -1,18 +1,17 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
-use crate::hash_block::*;
 use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, ProofOfWork, StoredSerializingBlock,
 };
 use crate::wallet::WalletDb;
-use bincode::serialize;
 use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
+use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
 use naom::primitives::{
     asset::{Asset, TokenAmount},
-    block::{build_merkle_tree, Block},
+    block::build_merkle_tree,
     transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
 };
 use naom::script::{lang::Script, StackEntry};
@@ -22,7 +21,6 @@ use naom::utils::transaction_utils::{
     get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
-use sha3::{Digest, Sha3_256};
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
@@ -346,24 +344,6 @@ pub fn format_parition_pow_address(addr: SocketAddr) -> String {
     format!("{}", addr)
 }
 
-/// Block to be used in Proof of Work
-///
-/// ### Arguments
-///
-/// * `block`    - &Block reference to be used in proof of work
-pub fn serialize_block_for_pow(block: &Block) -> Vec<u8> {
-    serialize(block).unwrap()
-}
-
-/// HashBlock to be used in Proof of Work
-///
-/// ### Arguments
-///
-/// * `block`    - &HashBlock reference to be used in proof of work
-pub fn serialize_hashblock_for_pow(block: &HashBlock) -> Vec<u8> {
-    serialize(block).unwrap()
-}
-
 /// Calculates the reward for the next block, to be placed within the coinbase tx
 ///
 /// ### Argeumtsn
@@ -474,7 +454,7 @@ pub fn validate_pow_block(prev_hash: &str, merkle_hash: &str, nonce: &[u8]) -> b
 ///
 /// * `pow`    - &u8 proof of work
 fn validate_pow(pow: &[u8]) -> bool {
-    let pow_hash = Sha3_256::digest(pow).to_vec();
+    let pow_hash = sha3_256::digest(pow).to_vec();
     pow_hash[0..MINING_DIFFICULTY].iter().all(|v| *v == 0)
 }
 

@@ -4,7 +4,6 @@ use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::{ComputeNodeConfig, ExtraNodeParams, TlsPrivateInfo};
 use crate::constants::{DB_PATH, PEER_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
-use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
     ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlock,
@@ -16,9 +15,9 @@ use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
     check_druid_participants, concat_merkle_coinbase, create_receipt_asset_tx_from_sig,
-    format_parition_pow_address, generate_pow_random_num, serialize_hashblock_for_pow, to_api_keys,
-    validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
-    LocalEventSender, ResponseResult,
+    format_parition_pow_address, generate_pow_random_num, to_api_keys, validate_pow_block,
+    validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender,
+    ResponseResult,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
@@ -1011,17 +1010,13 @@ impl ComputeNode {
         debug!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
         let header = block.header.clone();
-        let unicorn = header.previous_hash.unwrap_or_default();
-        let hashblock =
-            HashBlock::new_for_mining(unicorn, block.header.merkle_root_hash.clone(), header.b_num);
-        let block = serialize_hashblock_for_pow(&hashblock);
         let reward = self.node_raft.get_current_reward();
 
         self.node
             .send_to_all(
                 self.node_raft.get_mining_participants_iter(),
                 MineRequest::SendBlock {
-                    block,
+                    block: header,
                     reward: *reward,
                 },
             )
@@ -1190,13 +1185,7 @@ impl ComputeNode {
         // Check if expected block
         let block_to_check = if let Some(mining_block) = pow_mining_block {
             info!(?address, "Received expected PoW");
-            let header = &mining_block.header;
-            HashBlock {
-                merkle_hash: header.merkle_root_hash.clone(),
-                prev_hash: header.previous_hash.clone().unwrap_or_default(),
-                nonce: nonce.clone(),
-                b_num: header.b_num,
-            }
+            mining_block.header.clone()
         } else {
             trace!(?address, "Received outdated PoW");
             return Response {
@@ -1216,9 +1205,11 @@ impl ComputeNode {
 
         // Perform validation
         let coinbase_hash = construct_tx_hash(&coinbase);
+        let previous_hash = block_to_check.previous_hash.as_deref().unwrap_or("");
         let merkle_for_pow =
-            concat_merkle_coinbase(&block_to_check.merkle_hash, &coinbase_hash).await;
-        if !validate_pow_block(&block_to_check.prev_hash, &merkle_for_pow, &nonce) {
+            concat_merkle_coinbase(&block_to_check.txs_merkle_root_and_hash.0, &coinbase_hash)
+                .await;
+        if !validate_pow_block(previous_hash, &merkle_for_pow, &nonce) {
             return Response {
                 success: false,
                 reason: "Invalid PoW for block",

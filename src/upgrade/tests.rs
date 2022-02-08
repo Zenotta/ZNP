@@ -698,7 +698,6 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
         block_hash: LAST_BLOCK_BLOCK_HASH.to_owned(),
         block_num: LAST_BLOCK_STORED_NUM,
         nonce: Vec::new(),
-        merkle_hash: "713dd314b0b69ed969acc84ea98fe8abdc100a2dbaf4d65161bacb5da3e71791".to_owned(),
         mining_transactions: std::iter::once((
             "g801b501129674d9a0b389617665a95a".to_owned(),
             Transaction {

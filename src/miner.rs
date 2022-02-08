@@ -1,7 +1,6 @@
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
 use crate::constants::PEER_LIMIT;
-use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
     StorageRequest,
@@ -15,12 +14,12 @@ use crate::wallet::WalletDb;
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use naom::crypto::sha3_256;
 use naom::primitives::asset::TokenAmount;
-use naom::primitives::block;
+use naom::primitives::block::{self, BlockHeader};
 use naom::primitives::transaction::Transaction;
 use naom::utils::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use std::sync::{Arc, Mutex};
 use std::{
     error::Error,
@@ -64,7 +63,7 @@ pub struct BlockPoWInfo {
 /// Received block
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BlockPoWReceived {
-    hash_block: HashBlock,
+    block: BlockHeader,
     reward: TokenAmount,
 }
 
@@ -559,7 +558,7 @@ impl MinerNode {
     async fn receive_pre_block(
         &mut self,
         peer: SocketAddr,
-        pre_block: Vec<u8>,
+        pre_block: BlockHeader,
         reward: TokenAmount,
     ) -> Option<Response> {
         if peer != self.compute_address() {
@@ -567,17 +566,17 @@ impl MinerNode {
         }
 
         let new_block = BlockPoWReceived {
-            hash_block: deserialize::<HashBlock>(&pre_block).unwrap(),
+            block: pre_block,
             reward,
         };
 
-        let new_b_num = Some(new_block.hash_block.b_num);
+        let new_b_num = Some(new_block.block.b_num);
         let current_b_num = self
             .current_block
             .lock()
             .unwrap()
             .as_ref()
-            .map(|c| c.hash_block.b_num);
+            .map(|c| c.block.b_num);
         if new_b_num <= current_b_num {
             if new_b_num == current_b_num {
                 self.process_found_block_pow().await;
@@ -603,7 +602,7 @@ impl MinerNode {
         tx_merkle_verification: Vec<String>,
     ) -> Option<Response> {
         let current_block_info = self.current_block.lock().unwrap().clone().unwrap();
-        let merkle_root = current_block_info.hash_block.merkle_hash.clone();
+        let merkle_root = current_block_info.block.txs_merkle_root_and_hash.0.clone();
         let mut valid = true;
 
         if !merkle_root.is_empty() {
@@ -784,16 +783,16 @@ impl MinerNode {
         peer: SocketAddr,
         new_block: BlockPoWReceived,
     ) {
-        let b_num = new_block.hash_block.b_num;
+        let b_num = new_block.block.b_num;
         let current_payment_address = self.current_payment_address.clone().unwrap();
 
         let mining_tx = construct_coinbase_tx(b_num, new_block.reward, current_payment_address);
         let mining_tx_hash = construct_tx_hash(&mining_tx);
 
         self.mining_block_task = {
-            let merkle_hash = &new_block.hash_block.merkle_hash;
+            let merkle_hash = &new_block.block.txs_merkle_root_and_hash.0;
             let hash_to_mine = concat_merkle_coinbase(merkle_hash, &mining_tx_hash).await;
-            let prev_hash = new_block.hash_block.prev_hash.clone();
+            let prev_hash = new_block.block.previous_hash.clone().unwrap_or_default();
             let coinbase = (mining_tx_hash, mining_tx);
             let nonce = Vec::new();
             let start_time = SystemTime::now();
@@ -863,7 +862,7 @@ impl MinerNode {
         let mut pow_body = pow.address.as_bytes().to_vec();
         pow_body.extend(pow.nonce);
 
-        Ok(Sha3_256::digest(&pow_body).to_vec())
+        Ok(sha3_256::digest(&pow_body).to_vec())
     }
 
     /// Returns the last PoW.

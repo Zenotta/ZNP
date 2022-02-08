@@ -19,9 +19,8 @@ use crate::utils::{
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use naom::crypto::sha3_256;
 use serde::Serialize;
-use sha3::Digest;
-use sha3::Sha3_256;
 use std::collections::{BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt;
@@ -603,13 +602,12 @@ impl StorageNode {
         // Save the complete block
         trace!("Store complete block: {:?}", complete);
 
-        let ((stored_block, all_block_txs), (block_num, merkle_hash, nonce, shutdown)) = {
+        let ((stored_block, all_block_txs), (block_num, nonce, shutdown)) = {
             let CompleteBlock { common, extra_info } = complete;
 
             let header = common.block.header.clone();
             let block_num = header.b_num;
-            let merkle_hash = header.merkle_root_hash;
-            let nonce = header.nonce;
+            let nonce = common.pow.nonce.clone();
             let shutdown = extra_info.shutdown;
             let stored_block = StoredSerializingBlock {
                 block: common.block,
@@ -620,14 +618,14 @@ impl StorageNode {
             all_block_txs.insert(common.pow.mining_tx.0, common.pow.mining_tx.1);
 
             let to_store = (stored_block, all_block_txs);
-            let store_extra_info = (block_num, merkle_hash, nonce, shutdown);
+            let store_extra_info = (block_num, nonce, shutdown);
             (to_store, store_extra_info)
         };
 
         let block_input = serialize(&stored_block).unwrap();
         let block_json = serde_json::to_vec(&stored_block).unwrap();
         let block_hash = {
-            let hash_digest = Sha3_256::digest(&block_input);
+            let hash_digest = sha3_256::digest(&block_input);
             let mut hash_digest = hex::encode(hash_digest);
             hash_digest.insert(0, BLOCK_PREPEND as char);
             hash_digest
@@ -636,7 +634,6 @@ impl StorageNode {
         let last_block_stored_info = BlockStoredInfo {
             block_hash: block_hash.clone(),
             block_num,
-            merkle_hash,
             nonce,
             mining_transactions: std::iter::once(&stored_block.mining_tx_hash_and_nonce)
                 .filter_map(|(tx_hash, _)| all_block_txs.get_key_value(tx_hash))
@@ -899,7 +896,7 @@ impl StorageNode {
                 prev_hash.as_deref().unwrap_or("")
             };
             let merkle_for_pow = {
-                let merkle_root = &common.block.header.merkle_root_hash;
+                let merkle_root = &common.block.header.txs_merkle_root_and_hash.0;
                 let (mining_tx, _) = &common.pow.mining_tx;
                 concat_merkle_coinbase(merkle_root, mining_tx).await
             };

@@ -1,14 +1,13 @@
 #![allow(non_snake_case, unused)]
 
 use hex::encode;
+use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519 as sign;
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use rug::integer::Order;
 use rug::ops::Pow;
 use rug::Integer;
 use serde::{Deserialize, Serialize};
-use sha3::Digest;
-use sha3::Sha3_256;
 use std::collections::BTreeMap;
 use std::iter::FromIterator;
 
@@ -165,7 +164,7 @@ impl KeyAgreement {
 
     /// Computes M_iI, M_iIU, sigma_iI as the required hash values
     fn compute_hashes(&mut self) {
-        let mut mi_handler = Sha3_256::digest(&self.k_i).to_vec();
+        let mut mi_handler = sha3_256::digest(&self.k_i).to_vec();
 
         // Set M_i^I = H(k_i) || y_i
         mi_handler.append(&mut self.y_i.clone());
@@ -199,7 +198,7 @@ impl KeyAgreement {
         // Complicated sorcery to get a big int into a byte form
         let l_as_digits = val_l.to_digits::<u8>(Order::MsfBe);
 
-        self.t_iL = Sha3_256::digest(&l_as_digits).to_vec();
+        self.t_iL = sha3_256::digest(&l_as_digits).to_vec();
 
         // RIGHT SIDE
         let hexed_peer_right = encode(peer_value_right);
@@ -207,7 +206,7 @@ impl KeyAgreement {
         let val_r = big_peer_right.pow(self.x_i);
         let r_as_digits = val_r.to_digits::<u8>(Order::MsfBe);
 
-        self.t_iR = Sha3_256::digest(&r_as_digits).to_vec();
+        self.t_iR = sha3_256::digest(&r_as_digits).to_vec();
 
         // Compute Ti
         self.T_i = self
@@ -310,7 +309,7 @@ impl KeyAgreement {
             concatenation.append(&mut M_iI);
         }
 
-        self.sid_i = Sha3_256::digest(&concatenation).to_vec();
+        self.sid_i = sha3_256::digest(&concatenation).to_vec();
     }
 
     /// Computes k_j
@@ -379,7 +378,7 @@ impl KeyAgreement {
             key.append(&mut pid.1.k_j.clone());
         }
 
-        self.shared_key = Some(encode(Sha3_256::digest(&key)));
+        self.shared_key = Some(encode(sha3_256::digest(&key)));
     }
 
     /// Compute ek_i
@@ -401,7 +400,7 @@ impl KeyAgreement {
 
     /// Computes sigma_iII
     fn compute_sigma_iII(&mut self) {
-        let hashed_M_iII = Sha3_256::digest(&self.M_iII).to_vec();
+        let hashed_M_iII = sha3_256::digest(&self.M_iII).to_vec();
         self.sigma_iII = sign::sign_append(&hashed_M_iII, &self.s_key);
     }
 

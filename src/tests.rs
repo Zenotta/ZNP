@@ -23,6 +23,7 @@ use crate::utils::{
 };
 use crate::wallet::AssetValues;
 use bincode::{deserialize, serialize};
+use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519 as sign;
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::asset::{Asset, TokenAmount};
@@ -35,8 +36,6 @@ use naom::utils::transaction_utils::{
     construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
-use sha3::Digest;
-use sha3::Sha3_256;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -4095,7 +4094,7 @@ async fn complete_block(
 
     let hash_key = {
         let hash_input = serialize(&stored).unwrap();
-        let hash_digest = Sha3_256::digest(&hash_input);
+        let hash_digest = sha3_256::digest(&hash_input);
         let mut hash_digest = hex::encode(hash_digest);
         hash_digest.insert(0, BLOCK_PREPEND as char);
         hash_digest
@@ -4107,7 +4106,7 @@ async fn complete_block(
 
 async fn generate_pow_for_block(block: &Block, mining_tx_hash: String) -> Vec<u8> {
     let hash_to_mine =
-        concat_merkle_coinbase(&block.header.merkle_root_hash, &mining_tx_hash).await;
+        concat_merkle_coinbase(&block.header.txs_merkle_root_and_hash.0, &mining_tx_hash).await;
     let mut nonce: Vec<u8> = generate_nonce();
     let prev_hash: String;
     let temp_option = block.header.previous_hash.clone();
