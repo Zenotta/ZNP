@@ -419,6 +419,7 @@ pub mod convert {
         BlockHeader {
             version: old.version,
             bits: old.bits,
+            nonce_and_mining_tx_hash: Default::default(),
             b_num: old.b_num,
             seed_value: old.seed_value,
             previous_hash: old.previous_hash,

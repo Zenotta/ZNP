@@ -14,7 +14,7 @@ use crate::raft::RaftCommit;
 use crate::storage_fetch::{FetchStatus, FetchedBlockChain, StorageFetch};
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::{
-    concat_merkle_coinbase, get_genesis_tx_in_display, to_api_keys, validate_pow_block, ApiKeys,
+    apply_mining_tx, get_genesis_tx_in_display, to_api_keys, validate_pow_block, ApiKeys,
     LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
 };
 use bincode::{deserialize, serialize};
@@ -883,7 +883,8 @@ impl StorageNode {
         peer: SocketAddr,
         mined_block: Option<MinedBlock>,
     ) -> Option<Response> {
-        let (common, extra_info) = if let Some(MinedBlock { common, extra_info }) = mined_block {
+        let (mut common, extra_info) = if let Some(MinedBlock { common, extra_info }) = mined_block
+        {
             (common, extra_info)
         } else {
             self.resend_trigger_message().await;
@@ -891,18 +892,10 @@ impl StorageNode {
         };
 
         let valid = {
-            let prev_hash = {
-                let prev_hash = &common.block.header.previous_hash;
-                prev_hash.as_deref().unwrap_or("")
-            };
-            let merkle_for_pow = {
-                let merkle_root = &common.block.header.txs_merkle_root_and_hash.0;
-                let (mining_tx, _) = &common.pow.mining_tx;
-                concat_merkle_coinbase(merkle_root, mining_tx).await
-            };
-            let nonce = &common.pow.nonce;
-
-            validate_pow_block(prev_hash, &merkle_for_pow, nonce)
+            let nonce = common.pow.nonce.clone();
+            let mining_tx = common.pow.mining_tx.0.clone();
+            common.block.header = apply_mining_tx(common.block.header, nonce, mining_tx);
+            validate_pow_block(&common.block.header)
         };
 
         if !valid {

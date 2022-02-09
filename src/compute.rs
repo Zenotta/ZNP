@@ -14,7 +14,7 @@ use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
-    check_druid_participants, concat_merkle_coinbase, create_receipt_asset_tx_from_sig,
+    apply_mining_tx, check_druid_participants, create_receipt_asset_tx_from_sig,
     format_parition_pow_address, generate_pow_random_num, to_api_keys, validate_pow_block,
     validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender,
     ResponseResult,
@@ -1205,11 +1205,8 @@ impl ComputeNode {
 
         // Perform validation
         let coinbase_hash = construct_tx_hash(&coinbase);
-        let previous_hash = block_to_check.previous_hash.as_deref().unwrap_or("");
-        let merkle_for_pow =
-            concat_merkle_coinbase(&block_to_check.txs_merkle_root_and_hash.0, &coinbase_hash)
-                .await;
-        if !validate_pow_block(previous_hash, &merkle_for_pow, &nonce) {
+        let block_to_check = apply_mining_tx(block_to_check, nonce, coinbase_hash);
+        if !validate_pow_block(&block_to_check) {
             return Response {
                 success: false,
                 reason: "Invalid PoW for block",
@@ -1217,6 +1214,7 @@ impl ComputeNode {
         }
 
         // TODO: D and P will need to change with keccak prime intro
+        let (nonce, coinbase_hash) = block_to_check.nonce_and_mining_tx_hash;
         let pow_info = WinningPoWInfo {
             nonce,
             mining_tx: (coinbase_hash, coinbase),

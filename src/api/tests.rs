@@ -303,7 +303,7 @@ async fn test_get_latest_block() {
     let res = request.reply(&filter).await;
 
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}");
+    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[],\"\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}");
 }
 
 /// Test GET wallet keypairs
@@ -686,10 +686,10 @@ async fn test_get_utxo_set_addresses() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_block() {
     let expected_meta = success_json();
-    let expected_body = "{\"Block\":{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}}";
+    let expected_body = "{\"Block\":{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[],\"\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}}";
 
     test_post_blockchain_entry_by_key(
-        "bceae6c35ac2fcdf3ac38ab4fbe500913c07c6621e96c444c77e37a5596c741a7",
+        "b0e4467cea76b231b96f887fd4a3e0ebe8104eda76cb17f1771b6cf0938393f8e",
         expected_meta.clone(),
         expected_body,
     )
@@ -805,7 +805,7 @@ async fn test_post_block_info_by_nums() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "[[\"bceae6c35ac2fcdf3ac38ab4fbe500913c07c6621e96c444c77e37a5596c741a7\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}],[\"\",\"\"],[\"bceae6c35ac2fcdf3ac38ab4fbe500913c07c6621e96c444c77e37a5596c741a7\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}]]");
+    assert_eq!(res.body(), "[[\"b0e4467cea76b231b96f887fd4a3e0ebe8104eda76cb17f1771b6cf0938393f8e\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[],\"\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}],[\"\",\"\"],[\"b0e4467cea76b231b96f887fd4a3e0ebe8104eda76cb17f1771b6cf0938393f8e\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[],\"\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}]]");
 }
 
 /// Test POST make payment

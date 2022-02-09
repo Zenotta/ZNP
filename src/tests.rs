@@ -17,7 +17,7 @@ use crate::test_utils::{
 };
 use crate::user::UserNode;
 use crate::utils::{
-    calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
+    apply_mining_tx, calculate_reward, create_valid_create_transaction_with_ins_outs,
     create_valid_transaction_with_ins_outs, decode_pub_key, decode_secret_key,
     get_sanction_addresses, tracing_log_try_init, validate_pow_block, LocalEvent, StringError,
 };
@@ -27,7 +27,7 @@ use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519 as sign;
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::asset::{Asset, TokenAmount};
-use naom::primitives::block::Block;
+use naom::primitives::block::{Block, BlockHeader};
 use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::script::StackEntry;
@@ -4003,7 +4003,7 @@ async fn complete_first_block(
 }
 
 async fn construct_mining_common_info(
-    block: Block,
+    mut block: Block,
     block_txs: BTreeMap<String, Transaction>,
     addr: String,
 ) -> CommonBlockInfo {
@@ -4011,7 +4011,9 @@ async fn construct_mining_common_info(
     let amount = calculate_reward(TokenAmount(0));
     let tx = construct_coinbase_tx(block_num, amount, addr);
     let hash = construct_tx_hash(&tx);
-    let nonce = generate_pow_for_block(&block, hash.clone()).await;
+    block.header = apply_mining_tx(block.header, Vec::new(), hash.clone());
+    block.header = generate_pow_for_block(block.header).await;
+    let nonce = block.header.nonce_and_mining_tx_hash.0.clone();
 
     CommonBlockInfo {
         block,
@@ -4104,22 +4106,14 @@ async fn complete_block(
     ((hash_key, complete_str), complete)
 }
 
-async fn generate_pow_for_block(block: &Block, mining_tx_hash: String) -> Vec<u8> {
-    let hash_to_mine =
-        concat_merkle_coinbase(&block.header.txs_merkle_root_and_hash.0, &mining_tx_hash).await;
-    let mut nonce: Vec<u8> = generate_nonce();
-    let prev_hash: String;
-    let temp_option = block.header.previous_hash.clone();
-    match temp_option {
-        None => prev_hash = String::from(""),
-        _ => prev_hash = temp_option.unwrap(),
+async fn generate_pow_for_block(mut header: BlockHeader) -> BlockHeader {
+    header.nonce_and_mining_tx_hash.0 = generate_nonce();
+    while !validate_pow_block(&header) {
+        header.nonce_and_mining_tx_hash.0 = generate_nonce();
     }
-
-    while !validate_pow_block(&prev_hash, &hash_to_mine, &nonce) {
-        nonce = generate_nonce();
-    }
-    nonce
+    header
 }
+
 /// Generates a random sequence of values for a nonce
 fn generate_nonce() -> Vec<u8> {
     let mut rng = rand::thread_rng();
