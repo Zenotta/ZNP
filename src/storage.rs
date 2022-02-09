@@ -14,8 +14,8 @@ use crate::raft::RaftCommit;
 use crate::storage_fetch::{FetchStatus, FetchedBlockChain, StorageFetch};
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::{
-    apply_mining_tx, get_genesis_tx_in_display, to_api_keys, validate_pow_block, ApiKeys,
-    LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
+    get_genesis_tx_in_display, to_api_keys, validate_pow_block, ApiKeys, LocalEvent,
+    LocalEventChannel, LocalEventSender, ResponseResult,
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -602,23 +602,19 @@ impl StorageNode {
         // Save the complete block
         trace!("Store complete block: {:?}", complete);
 
-        let ((stored_block, all_block_txs), (block_num, nonce, shutdown)) = {
+        let ((stored_block, all_block_txs), (block_num, shutdown)) = {
             let CompleteBlock { common, extra_info } = complete;
 
-            let header = common.block.header.clone();
-            let block_num = header.b_num;
-            let nonce = common.pow.nonce.clone();
+            let block_num = common.block.header.b_num;
             let shutdown = extra_info.shutdown;
+
             let stored_block = StoredSerializingBlock {
                 block: common.block,
-                mining_tx_hash_and_nonce: (common.pow.mining_tx.0.clone(), common.pow.nonce),
             };
-
-            let mut all_block_txs = common.block_txs;
-            all_block_txs.insert(common.pow.mining_tx.0, common.pow.mining_tx.1);
+            let all_block_txs = common.block_txs;
 
             let to_store = (stored_block, all_block_txs);
-            let store_extra_info = (block_num, nonce, shutdown);
+            let store_extra_info = (block_num, shutdown);
             (to_store, store_extra_info)
         };
 
@@ -631,12 +627,13 @@ impl StorageNode {
             hash_digest
         };
 
+        let (nonce, mining_tx_hash) = stored_block.block.header.nonce_and_mining_tx_hash.clone();
         let last_block_stored_info = BlockStoredInfo {
             block_hash: block_hash.clone(),
             block_num,
             nonce,
-            mining_transactions: std::iter::once(&stored_block.mining_tx_hash_and_nonce)
-                .filter_map(|(tx_hash, _)| all_block_txs.get_key_value(tx_hash))
+            mining_transactions: std::iter::once(&mining_tx_hash)
+                .filter_map(|tx_hash| all_block_txs.get_key_value(tx_hash))
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             shutdown,
@@ -657,7 +654,7 @@ impl StorageNode {
 
         let all_txs = all_ordered_stored_block_tx_hashes(
             &stored_block.block.transactions,
-            std::iter::once(&stored_block.mining_tx_hash_and_nonce),
+            std::iter::once(&stored_block.block.header.nonce_and_mining_tx_hash),
         );
         let mut tx_len = 0;
         for (tx_num, tx_hash) in all_txs {
@@ -883,22 +880,14 @@ impl StorageNode {
         peer: SocketAddr,
         mined_block: Option<MinedBlock>,
     ) -> Option<Response> {
-        let (mut common, extra_info) = if let Some(MinedBlock { common, extra_info }) = mined_block
-        {
+        let (common, extra_info) = if let Some(MinedBlock { common, extra_info }) = mined_block {
             (common, extra_info)
         } else {
             self.resend_trigger_message().await;
             return None;
         };
 
-        let valid = {
-            let nonce = common.pow.nonce.clone();
-            let mining_tx = common.pow.mining_tx.0.clone();
-            common.block.header = apply_mining_tx(common.block.header, nonce, mining_tx);
-            validate_pow_block(&common.block.header)
-        };
-
-        if !valid {
+        if !validate_pow_block(&common.block.header) {
             return Some(Response {
                 success: false,
                 reason: "Block received not added. PoW invalid",
@@ -1143,12 +1132,12 @@ pub fn put_contiguous_block_num(batch: &mut SimpleDbWriteBatch, block_num: u64) 
 /// ### Arguments
 ///
 /// * `transactions`              - The block transactions
-/// * `mining_tx_hash_and_nonces` - The block mining transactions
+/// * `nonce_and_mining_tx_hash` - The block mining transactions
 pub fn all_ordered_stored_block_tx_hashes<'a>(
     transactions: &'a [String],
-    mining_tx_hash_and_nonces: impl Iterator<Item = &'a (String, Vec<u8>)> + 'a,
+    nonce_and_mining_tx_hash: impl Iterator<Item = &'a (Vec<u8>, String)> + 'a,
 ) -> impl Iterator<Item = (u32, &'a String)> + 'a {
-    let mining_hashes = mining_tx_hash_and_nonces.map(|(hash, _)| hash);
+    let mining_hashes = nonce_and_mining_tx_hash.map(|(_, hash)| hash);
     let all_txs = transactions.iter().chain(mining_hashes);
     all_txs.enumerate().map(|(idx, v)| (idx as u32, v))
 }

@@ -1061,23 +1061,23 @@ impl ComputeNode {
 
     /// Logs the winner of the block and changes the current block to a new block to be mined
     pub fn mining_block_mined(&mut self) {
-        let (block, block_txs) = self.node_raft.take_mining_block().unwrap();
+        let (mut block, mut block_txs) = self.node_raft.take_mining_block().unwrap();
         let (_, winning_pow) = self.node_raft.get_winning_miner().clone().unwrap();
         let unicorn = self.node_raft.get_current_unicorn().clone();
+
+        let mining_tx = winning_pow.mining_tx;
+        let nonce = winning_pow.nonce;
+        block.header = apply_mining_tx(block.header, nonce, mining_tx.0.clone());
+        block_txs.insert(mining_tx.0, mining_tx.1);
 
         let extra_info = MinedBlockExtraInfo {
             shutdown: self.coordinated_shutdown <= block.header.b_num,
         };
-        let pow = WinningPoWInfo {
-            nonce: winning_pow.nonce,
-            mining_tx: winning_pow.mining_tx,
-            p_value: winning_pow.p_value,
-            d_value: winning_pow.d_value,
-        };
         let common = CommonBlockInfo {
             block,
             block_txs,
-            pow,
+            pow_p_value: winning_pow.p_value,
+            pow_d_value: winning_pow.d_value,
             unicorn: unicorn.unicorn,
             unicorn_witness: unicorn.witness,
         };

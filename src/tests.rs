@@ -9,7 +9,7 @@ use crate::interfaces::{
     StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
 use crate::miner::MinerNode;
-use crate::storage::StorageNode;
+use crate::storage::{all_ordered_stored_block_tx_hashes, StorageNode};
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{
     generate_rb_transactions, get_test_tls_spec, node_join_all_checked, remove_all_node_dbs,
@@ -3251,7 +3251,8 @@ async fn compute_all_send_block_to_storage(network: &mut Network, compute_group:
 
 async fn compute_skip_mining(network: &mut Network, compute: &str, block_info: &CompleteBlock) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    let winning_pow_info = block_info.common.pow.clone();
+
+    let winning_pow_info = complete_block_winning_pow(block_info);
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0);
 
     c.test_skip_mining((addr, winning_pow_info))
@@ -3400,7 +3401,12 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
     };
 
     let mut block_txs = BTreeMap::new();
-    for tx_hash in &stored_block.block.transactions {
+    let all_txs = all_ordered_stored_block_tx_hashes(
+        &stored_block.block.transactions,
+        std::iter::once(&stored_block.block.header.nonce_and_mining_tx_hash),
+    );
+
+    for (_, tx_hash) in all_txs {
         let stored_value = s.get_stored_value(tx_hash)?;
         let stored_value =
             checked_blockchain_item_data(stored_value, BlockchainItemType::Tx).unwrap();
@@ -3411,26 +3417,13 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
         block_txs.insert(tx_hash.clone(), stored_tx);
     }
 
-    let (tx_hash, nonce) = &stored_block.mining_tx_hash_and_nonce;
-
-    let stored_value = s.get_stored_value(tx_hash)?;
-    let stored_value = checked_blockchain_item_data(stored_value, BlockchainItemType::Tx).unwrap();
-    let stored_tx = match deserialize::<Transaction>(&stored_value) {
-        Err(e) => return Some(format!("error mining tx hash: {:?} : {:?}", e, tx_hash)),
-        Ok(v) => v,
-    };
-
     let extra_info = MinedBlockExtraInfo { shutdown: false };
 
     let common = CommonBlockInfo {
         block: stored_block.block,
         block_txs,
-        pow: WinningPoWInfo {
-            nonce: nonce.clone(),
-            mining_tx: (tx_hash.clone(), stored_tx),
-            d_value: Default::default(),
-            p_value: Default::default(),
-        },
+        pow_d_value: Default::default(),
+        pow_p_value: Default::default(),
         unicorn: Default::default(),
         unicorn_witness: Default::default(),
     };
@@ -3992,8 +3985,21 @@ fn to_utxo_set(txs: &BTreeMap<String, Transaction>) -> UtxoSet {
     get_tx_out_with_out_point_cloned(txs.iter()).collect()
 }
 
-fn complete_block_mining_txs(block: &CompleteBlock) -> BTreeMap<String, Transaction> {
-    std::iter::once(block.common.pow.mining_tx.clone()).collect()
+fn complete_block_mining_txs(block_info: &CompleteBlock) -> BTreeMap<String, Transaction> {
+    let winning_pow_info = complete_block_winning_pow(block_info);
+    std::iter::once(winning_pow_info.mining_tx).collect()
+}
+
+fn complete_block_winning_pow(block_info: &CompleteBlock) -> WinningPoWInfo {
+    let header = &block_info.common.block.header;
+    let (nonce, tx_hash) = header.nonce_and_mining_tx_hash.clone();
+    let tx = block_info.common.block_txs.get(&tx_hash).unwrap().clone();
+    WinningPoWInfo {
+        nonce,
+        mining_tx: (tx_hash, tx),
+        p_value: block_info.common.pow_p_value,
+        d_value: block_info.common.pow_d_value,
+    }
 }
 
 async fn complete_first_block(
@@ -4004,7 +4010,7 @@ async fn complete_first_block(
 
 async fn construct_mining_common_info(
     mut block: Block,
-    block_txs: BTreeMap<String, Transaction>,
+    mut block_txs: BTreeMap<String, Transaction>,
     addr: String,
 ) -> CommonBlockInfo {
     let block_num = block.header.b_num;
@@ -4013,17 +4019,13 @@ async fn construct_mining_common_info(
     let hash = construct_tx_hash(&tx);
     block.header = apply_mining_tx(block.header, Vec::new(), hash.clone());
     block.header = generate_pow_for_block(block.header).await;
-    let nonce = block.header.nonce_and_mining_tx_hash.0.clone();
+    block_txs.insert(hash, tx);
 
     CommonBlockInfo {
         block,
         block_txs,
-        pow: WinningPoWInfo {
-            nonce,
-            mining_tx: (hash, tx),
-            d_value: Default::default(),
-            p_value: Default::default(),
-        },
+        pow_d_value: Default::default(),
+        pow_p_value: Default::default(),
         unicorn: Default::default(),
         unicorn_witness: Default::default(),
     }
@@ -4081,8 +4083,6 @@ async fn complete_block(
 
     let addr = hex::encode(vec![block_num as u8, 1_u8]);
     let common = construct_mining_common_info(block.clone(), block_txs.clone(), addr).await;
-    let mining_tx = common.pow.mining_tx.clone();
-    let nonce = common.pow.nonce.clone();
 
     let complete = CompleteBlock {
         common,
@@ -4091,7 +4091,6 @@ async fn complete_block(
 
     let stored = StoredSerializingBlock {
         block: complete.common.block.clone(),
-        mining_tx_hash_and_nonce: (mining_tx.0, nonce),
     };
 
     let hash_key = {

@@ -87,7 +87,6 @@ pub struct Response {
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct StoredSerializingBlock {
     pub block: Block,
-    pub mining_tx_hash_and_nonce: (String, Vec<u8>),
 }
 
 /// Common info in all mined block that form a complete block.
@@ -95,7 +94,8 @@ pub struct StoredSerializingBlock {
 pub struct CommonBlockInfo {
     pub block: Block,
     pub block_txs: BTreeMap<String, Transaction>,
-    pub pow: WinningPoWInfo,
+    pub pow_p_value: u8,
+    pub pow_d_value: u8,
     pub unicorn: Unicorn,
     #[serde(with = "rug_integer")]
     pub unicorn_witness: Integer,
