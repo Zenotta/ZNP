@@ -16,11 +16,14 @@ use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB
 use crate::test_utils::{generate_rb_transactions, RbReceiverData, RbSenderData};
 use crate::threaded_call::ThreadedCallChannel;
 use crate::tracked_utxo::TrackedUtxoSet;
-use crate::utils::{decode_pub_key, decode_secret_key, to_api_keys, tracing_log_try_init};
+use crate::utils::{
+    apply_mining_tx, decode_pub_key, decode_secret_key, to_api_keys, tracing_log_try_init,
+};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
 use naom::constants::{NETWORK_VERSION_TEMP, NETWORK_VERSION_V0};
+use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519::{self as sign};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
@@ -31,7 +34,6 @@ use naom::utils::transaction_utils::{
     construct_tx_in_signable_hash,
 };
 use serde_json::json;
-use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -148,13 +150,9 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
 
     let mut block = Block::new();
     block.transactions.push(tx_hash.clone());
+    block.header = apply_mining_tx(block.header, vec![0, 1, 23], "test".to_string());
 
-    let mining_tx_hash_and_nonce = ("test".to_string(), vec![0, 1, 23]);
-
-    let block_to_input = StoredSerializingBlock {
-        block,
-        mining_tx_hash_and_nonce,
-    };
+    let block_to_input = StoredSerializingBlock { block };
 
     let mut db = new_db(DbMode::InMemory, &DB_SPEC, None);
     let mut batch = db.batch_writer();
@@ -163,7 +161,7 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
     let block_input = serialize(&block_to_input).unwrap();
     let block_json = serde_json::to_vec(&block_to_input).unwrap();
     let block_hash = {
-        let hash_digest = Sha3_256::digest(&block_input);
+        let hash_digest = sha3_256::digest(&block_input);
         let mut hash_digest = hex::encode(hash_digest);
         hash_digest.insert(0, BLOCK_PREPEND as char);
         hash_digest
@@ -303,7 +301,7 @@ async fn test_get_latest_block() {
     let res = request.reply(&filter).await;
 
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}");
+    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[0,1,23],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}");
 }
 
 /// Test GET wallet keypairs
@@ -686,10 +684,10 @@ async fn test_get_utxo_set_addresses() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_block() {
     let expected_meta = success_json();
-    let expected_body = "{\"Block\":{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}}";
+    let expected_body = "{\"Block\":{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[0,1,23],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}}";
 
     test_post_blockchain_entry_by_key(
-        "bceae6c35ac2fcdf3ac38ab4fbe500913c07c6621e96c444c77e37a5596c741a7",
+        "b08ed47679b2f8395a4366553f3b2eb4d972b46513e8386b800a06b7351a56095",
         expected_meta.clone(),
         expected_body,
     )
@@ -805,7 +803,7 @@ async fn test_post_block_info_by_nums() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "[[\"bceae6c35ac2fcdf3ac38ab4fbe500913c07c6621e96c444c77e37a5596c741a7\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}],[\"\",\"\"],[\"bceae6c35ac2fcdf3ac38ab4fbe500913c07c6621e96c444c77e37a5596c741a7\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]},\"mining_tx_hash_and_nonce\":[\"test\",[0,1,23]]}]]");
+    assert_eq!(res.body(), "[[\"b08ed47679b2f8395a4366553f3b2eb4d972b46513e8386b800a06b7351a56095\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[0,1,23],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}],[\"\",\"\"],[\"b08ed47679b2f8395a4366553f3b2eb4d972b46513e8386b800a06b7351a56095\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[0,1,23],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}]]");
 }
 
 /// Test POST make payment

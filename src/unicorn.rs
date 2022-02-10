@@ -19,10 +19,10 @@
 use crate::constants::MR_PRIME_ITERS;
 use crate::utils::rug_integer;
 use bincode::serialize;
+use naom::crypto::sha3_256;
 use rug::integer::IsPrime;
 use rug::Integer;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use tracing::error;
@@ -40,13 +40,13 @@ pub fn construct_seed(
     last_winning_hashes: &BTreeSet<String>,
 ) -> Integer {
     // Transaction inputs (sOot)
-    let soot = hex::encode(Sha3_256::digest(&serialize(tx_inputs).unwrap()));
+    let soot = hex::encode(sha3_256::digest(&serialize(tx_inputs).unwrap()));
     // Miner participation applications (sOma)
-    let soma = hex::encode(Sha3_256::digest(&serialize(participant_list).unwrap()));
+    let soma = hex::encode(sha3_256::digest(&serialize(participant_list).unwrap()));
     // Winning PoWs from 2 blocks ago
-    let soms = hex::encode(Sha3_256::digest(&serialize(last_winning_hashes).unwrap()));
+    let soms = hex::encode(sha3_256::digest(&serialize(last_winning_hashes).unwrap()));
 
-    let final_seed = hex::encode(Sha3_256::digest(
+    let final_seed = hex::encode(sha3_256::digest(
         &serialize(&vec![soot, soma, soms]).unwrap(),
     ));
 
@@ -124,8 +124,8 @@ impl Unicorn {
     ///
     /// * `seed`    - Seed to set
     pub fn set_seed(&mut self, seed: Integer) -> String {
-        let u = hex::encode(Sha3_256::digest(&serialize(&seed.to_u64()).unwrap()));
-        let c = hex::encode(Sha3_256::digest(u.as_bytes()));
+        let u = hex::encode(sha3_256::digest(&serialize(&seed.to_u64()).unwrap()));
+        let c = hex::encode(sha3_256::digest(u.as_bytes()));
 
         self.seed = seed;
 
@@ -161,7 +161,7 @@ impl Unicorn {
             w.pow_mod_mut(&exponent, &self.modulus).unwrap();
         }
 
-        let g = hex::encode(Sha3_256::digest(&serialize(&w.to_u64()).unwrap()));
+        let g = hex::encode(sha3_256::digest(&serialize(&w.to_u64()).unwrap()));
         Some((w, g))
     }
 

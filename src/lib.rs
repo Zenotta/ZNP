@@ -12,7 +12,6 @@ mod compute_raft;
 pub mod configurations;
 mod constants;
 mod db_utils;
-mod hash_block;
 mod interfaces;
 pub mod key_creation;
 mod miner;

@@ -399,7 +399,7 @@ pub mod convert {
     use naom::crypto::sign_ed25519::{PublicKey, SecretKey, Signature};
     use naom::primitives::{
         asset::{Asset, DataAsset, TokenAmount},
-        block::{Block, BlockHeader},
+        block::{build_hex_txs_hash, Block, BlockHeader},
         druid::{DdeValues, DruidExpectation},
         transaction::{OutPoint, Transaction, TxIn, TxOut},
     };
@@ -408,20 +408,22 @@ pub mod convert {
 
     pub fn convert_block(old: old::naom::Block) -> Block {
         Block {
-            header: convert_block_header(old.header),
+            header: convert_block_header(old.header, &old.transactions),
             transactions: old.transactions,
         }
     }
 
-    pub fn convert_block_header(old: old::naom::BlockHeader) -> BlockHeader {
+    pub fn convert_block_header(old: old::naom::BlockHeader, old_txs: &[String]) -> BlockHeader {
+        let merkle_root = old.merkle_root_hash;
+        let txs_hash = build_hex_txs_hash(old_txs);
         BlockHeader {
             version: old.version,
             bits: old.bits,
-            nonce: old.nonce,
+            nonce_and_mining_tx_hash: Default::default(),
             b_num: old.b_num,
             seed_value: old.seed_value,
             previous_hash: old.previous_hash,
-            merkle_root_hash: old.merkle_root_hash,
+            txs_merkle_root_and_hash: (merkle_root, txs_hash),
         }
     }
 
@@ -614,7 +616,6 @@ pub mod convert {
             block_hash: old.block_hash,
             block_num: old.block_num,
             nonce: old.nonce,
-            merkle_hash: old.merkle_hash,
             mining_transactions: convert_transactions(old.mining_transactions),
             shutdown: false,
         }

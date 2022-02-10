@@ -1,26 +1,19 @@
-#![allow(unused)]
-use crate::hash_block;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::Unicorn;
 use crate::utils::rug_integer;
 use bytes::Bytes;
-use naom::crypto::sign_ed25519::PublicKey;
 use naom::primitives::asset::Asset;
 use naom::primitives::asset::TokenAmount;
-use naom::primitives::block::Block;
+use naom::primitives::block::{Block, BlockHeader};
 use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::TxIn;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
-use naom::utils::transaction_utils::construct_tx_in_signable_hash;
 use rug::Integer;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::error::Error;
-use std::future::Future;
+use std::fmt;
 use std::net::SocketAddr;
-use std::{error, fmt};
 
 /// Struct used for simplifying JSON deserialization on the client
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -94,7 +87,6 @@ pub struct Response {
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct StoredSerializingBlock {
     pub block: Block,
-    pub mining_tx_hash_and_nonce: (String, Vec<u8>),
 }
 
 /// Common info in all mined block that form a complete block.
@@ -102,7 +94,8 @@ pub struct StoredSerializingBlock {
 pub struct CommonBlockInfo {
     pub block: Block,
     pub block_txs: BTreeMap<String, Transaction>,
-    pub pow: WinningPoWInfo,
+    pub pow_p_value: u8,
+    pub pow_d_value: u8,
     pub unicorn: Unicorn,
     #[serde(with = "rug_integer")]
     pub unicorn_witness: Integer,
@@ -127,7 +120,6 @@ pub struct BlockStoredInfo {
     pub block_hash: String,
     pub block_num: u64,
     pub nonce: Vec<u8>,
-    pub merkle_hash: String,
     pub mining_transactions: BTreeMap<String, Transaction>,
     pub shutdown: bool,
 }
@@ -146,15 +138,6 @@ pub struct ProofOfWorkBlock {
     pub block: Block,
 }
 
-/// Winning PoW structure
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WinningPoWInfo {
-    pub nonce: Vec<u8>,
-    pub mining_tx: (String, Transaction),
-    pub p_value: u8,
-    pub d_value: u8,
-}
-
 impl Default for ProofOfWorkBlock {
     fn default() -> Self {
         Self::new()
@@ -169,6 +152,15 @@ impl ProofOfWorkBlock {
             block: Block::new(),
         }
     }
+}
+
+/// Winning PoW structure
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WinningPoWInfo {
+    pub nonce: Vec<u8>,
+    pub mining_tx: (String, Transaction),
+    pub p_value: u8,
+    pub d_value: u8,
 }
 
 /// Druid pool structure for checking and holding participants
@@ -210,7 +202,6 @@ pub fn node_type_as_str(node_type: NodeType) -> &'static str {
         NodeType::Storage => "Storage",
         NodeType::User => "User",
         NodeType::PreLaunch => "Prelaunch",
-        _ => "The requested node is an unknown node type",
     }
 }
 
@@ -347,18 +338,13 @@ impl fmt::Debug for StorageRequest {
         use StorageRequest::*;
 
         match *self {
-            GetBlockchainItem { ref key } => write!(f, "GetBlockchainItem"),
-            SendBlockchainItem { ref key, ref item } => write!(f, "SendBlockchainItem"),
-            GetHistory {
-                ref start_time,
-                ref end_time,
-            } => write!(f, "GetHistory"),
-            GetUnicornTable { ref n_last_items } => write!(f, "GetUnicornTable"),
-            SendPow { ref pow } => write!(f, "SendPoW"),
-            SendBlock { ref mined_block } => write!(f, "SendBlock"),
-            Store {
-                ref incoming_contract,
-            } => write!(f, "Store"),
+            GetBlockchainItem { .. } => write!(f, "GetBlockchainItem"),
+            SendBlockchainItem { .. } => write!(f, "SendBlockchainItem"),
+            GetHistory { .. } => write!(f, "GetHistory"),
+            GetUnicornTable { .. } => write!(f, "GetUnicornTable"),
+            SendPow { .. } => write!(f, "SendPoW"),
+            SendBlock { .. } => write!(f, "SendBlock"),
+            Store { .. } => write!(f, "Store"),
             Closing => write!(f, "Closing"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
@@ -428,7 +414,7 @@ pub trait StorageInterface {
 #[derive(Serialize, Deserialize, Clone)]
 pub enum MineRequest {
     SendBlock {
-        block: Vec<u8>,
+        block: BlockHeader,
         reward: TokenAmount,
     },
     SendRandomNum {
@@ -450,18 +436,10 @@ impl fmt::Debug for MineRequest {
         use MineRequest::*;
 
         match *self {
-            SendBlockchainItem { ref key, ref item } => write!(f, "SendBlockchainItem"),
-            SendBlock {
-                ref block,
-                ref reward,
-            } => write!(f, "SendBlock"),
-            SendRandomNum {
-                ref rnum,
-                ref win_coinbases,
-            } => write!(f, "SendRandomNum"),
-            SendTransactions {
-                ref tx_merkle_verification,
-            } => write!(f, "SendTransactions"),
+            SendBlockchainItem { .. } => write!(f, "SendBlockchainItem"),
+            SendBlock { .. } => write!(f, "SendBlock"),
+            SendRandomNum { .. } => write!(f, "SendRandomNum"),
+            SendTransactions { .. } => write!(f, "SendTransactions"),
             Closing => write!(f, "Closing"),
         }
     }
@@ -540,17 +518,11 @@ impl fmt::Debug for ComputeRequest {
                 write!(f, "Api::SendTransactions")
             }
 
-            SendUtxoRequest { ref address_list } => write!(f, "SendUtxoRequest"),
-            SendBlockStored(ref _info) => write!(f, "SendBlockStored"),
-            SendPoW {
-                ref block_num,
-                ref nonce,
-                ref coinbase,
-            } => write!(f, "SendPoW({})", block_num),
-            SendPartitionEntry {
-                ref partition_entry,
-            } => write!(f, "SendPartitionEntry"),
-            SendTransactions { ref transactions } => write!(f, "SendTransactions"),
+            SendUtxoRequest { .. } => write!(f, "SendUtxoRequest"),
+            SendBlockStored(_) => write!(f, "SendBlockStored"),
+            SendPoW { ref block_num, .. } => write!(f, "SendPoW({})", block_num),
+            SendPartitionEntry { .. } => write!(f, "SendPartitionEntry"),
+            SendTransactions { .. } => write!(f, "SendTransactions"),
             SendUserBlockNotificationRequest => write!(f, "SendUserBlockNotificationRequest"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
             Closing => write!(f, "Closing"),

@@ -6,8 +6,8 @@ use crate::interfaces::{BlockStoredInfo, CommonBlockInfo, MinedBlockExtraInfo};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use bincode::{deserialize, serialize};
+use naom::crypto::sha3_256;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
@@ -420,7 +420,7 @@ impl StorageConsensused {
     /// * `block` - RecievedBlock object that is being appended.
     pub fn append_received_block(&mut self, key: RaftContextKey, block: ReceivedBlock) {
         let block_ser = serialize(&block.common).unwrap();
-        let block_hash = Sha3_256::digest(&block_ser).to_vec();
+        let block_hash = sha3_256::digest(&block_ser).to_vec();
 
         let common = block.common;
         let node_info = block.per_node;

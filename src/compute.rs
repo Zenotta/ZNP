@@ -4,7 +4,6 @@ use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::{ComputeNodeConfig, ExtraNodeParams, TlsPrivateInfo};
 use crate::constants::{DB_PATH, PEER_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
-use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
     ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlock,
@@ -15,10 +14,10 @@ use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
-    check_druid_participants, concat_merkle_coinbase, create_receipt_asset_tx_from_sig,
-    format_parition_pow_address, generate_pow_random_num, serialize_hashblock_for_pow, to_api_keys,
-    validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
-    LocalEventSender, ResponseResult,
+    apply_mining_tx, check_druid_participants, create_receipt_asset_tx_from_sig,
+    format_parition_pow_address, generate_pow_random_num, to_api_keys, validate_pow_block,
+    validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender,
+    ResponseResult,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
@@ -1011,17 +1010,13 @@ impl ComputeNode {
         debug!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
         let header = block.header.clone();
-        let unicorn = header.previous_hash.unwrap_or_default();
-        let hashblock =
-            HashBlock::new_for_mining(unicorn, block.header.merkle_root_hash.clone(), header.b_num);
-        let block = serialize_hashblock_for_pow(&hashblock);
         let reward = self.node_raft.get_current_reward();
 
         self.node
             .send_to_all(
                 self.node_raft.get_mining_participants_iter(),
                 MineRequest::SendBlock {
-                    block,
+                    block: header,
                     reward: *reward,
                 },
             )
@@ -1066,23 +1061,23 @@ impl ComputeNode {
 
     /// Logs the winner of the block and changes the current block to a new block to be mined
     pub fn mining_block_mined(&mut self) {
-        let (block, block_txs) = self.node_raft.take_mining_block().unwrap();
+        let (mut block, mut block_txs) = self.node_raft.take_mining_block().unwrap();
         let (_, winning_pow) = self.node_raft.get_winning_miner().clone().unwrap();
         let unicorn = self.node_raft.get_current_unicorn().clone();
+
+        let mining_tx = winning_pow.mining_tx;
+        let nonce = winning_pow.nonce;
+        block.header = apply_mining_tx(block.header, nonce, mining_tx.0.clone());
+        block_txs.insert(mining_tx.0, mining_tx.1);
 
         let extra_info = MinedBlockExtraInfo {
             shutdown: self.coordinated_shutdown <= block.header.b_num,
         };
-        let pow = WinningPoWInfo {
-            nonce: winning_pow.nonce,
-            mining_tx: winning_pow.mining_tx,
-            p_value: winning_pow.p_value,
-            d_value: winning_pow.d_value,
-        };
         let common = CommonBlockInfo {
             block,
             block_txs,
-            pow,
+            pow_p_value: winning_pow.p_value,
+            pow_d_value: winning_pow.d_value,
             unicorn: unicorn.unicorn,
             unicorn_witness: unicorn.witness,
         };
@@ -1190,13 +1185,7 @@ impl ComputeNode {
         // Check if expected block
         let block_to_check = if let Some(mining_block) = pow_mining_block {
             info!(?address, "Received expected PoW");
-            let header = &mining_block.header;
-            HashBlock {
-                merkle_hash: header.merkle_root_hash.clone(),
-                prev_hash: header.previous_hash.clone().unwrap_or_default(),
-                nonce: nonce.clone(),
-                b_num: header.b_num,
-            }
+            mining_block.header.clone()
         } else {
             trace!(?address, "Received outdated PoW");
             return Response {
@@ -1216,9 +1205,8 @@ impl ComputeNode {
 
         // Perform validation
         let coinbase_hash = construct_tx_hash(&coinbase);
-        let merkle_for_pow =
-            concat_merkle_coinbase(&block_to_check.merkle_hash, &coinbase_hash).await;
-        if !validate_pow_block(&block_to_check.prev_hash, &merkle_for_pow, &nonce) {
+        let block_to_check = apply_mining_tx(block_to_check, nonce, coinbase_hash);
+        if !validate_pow_block(&block_to_check) {
             return Response {
                 success: false,
                 reason: "Invalid PoW for block",
@@ -1226,6 +1214,7 @@ impl ComputeNode {
         }
 
         // TODO: D and P will need to change with keccak prime intro
+        let (nonce, coinbase_hash) = block_to_check.nonce_and_mining_tx_hash;
         let pow_info = WinningPoWInfo {
             nonce,
             mining_tx: (coinbase_hash, coinbase),

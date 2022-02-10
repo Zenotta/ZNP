@@ -1,7 +1,6 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
-use crate::hash_block::*;
 use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, ProofOfWork, StoredSerializingBlock,
 };
@@ -9,10 +8,11 @@ use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
+use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
 use naom::primitives::{
     asset::{Asset, TokenAmount},
-    block::{build_merkle_tree, Block},
+    block::BlockHeader,
     transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
 };
 use naom::script::{lang::Script, StackEntry};
@@ -22,7 +22,6 @@ use naom::utils::transaction_utils::{
     get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
-use sha3::{Digest, Sha3_256};
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
@@ -346,24 +345,6 @@ pub fn format_parition_pow_address(addr: SocketAddr) -> String {
     format!("{}", addr)
 }
 
-/// Block to be used in Proof of Work
-///
-/// ### Arguments
-///
-/// * `block`    - &Block reference to be used in proof of work
-pub fn serialize_block_for_pow(block: &Block) -> Vec<u8> {
-    serialize(block).unwrap()
-}
-
-/// HashBlock to be used in Proof of Work
-///
-/// ### Arguments
-///
-/// * `block`    - &HashBlock reference to be used in proof of work
-pub fn serialize_hashblock_for_pow(block: &HashBlock) -> Vec<u8> {
-    serialize(block).unwrap()
-}
-
 /// Calculates the reward for the next block, to be placed within the coinbase tx
 ///
 /// ### Argeumtsn
@@ -391,16 +372,12 @@ pub fn get_total_coinbase_tokens(coinbase_tx: &BTreeMap<String, Transaction>) ->
 ///
 /// ### Arguments
 ///
-/// * `merkle_hash` - Merkle hash to concatenate onto
-/// * `cb_tx_hash`  - Coinbase transaction hash
-pub async fn concat_merkle_coinbase(merkle_hash: &str, cb_tx_hash: &str) -> String {
-    let merkle_result = build_merkle_tree(&[merkle_hash.to_string(), cb_tx_hash.to_string()]).await;
-
-    if let Some((merkle_tree, _)) = merkle_result {
-        hex::encode(merkle_tree.root())
-    } else {
-        "".to_string()
-    }
+/// * `header     ` - Header to update
+/// * `merkle_hash` - Nonce to use
+/// * `cb_tx_hash`  - Mining transaction hash
+pub fn apply_mining_tx(mut header: BlockHeader, nonce: Vec<u8>, tx_hash: String) -> BlockHeader {
+    header.nonce_and_mining_tx_hash = (nonce, tx_hash);
+    header
 }
 
 /// Generates a random sequence of values for a nonce
@@ -458,13 +435,9 @@ pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) 
 ///
 /// ### Arguments
 ///
-/// * `prev_hash`   - The hash of the previous block
-/// * `merkle_hash` - The merkle hash (+ coinbase)
-/// * `nonce`       - Nonce
-pub fn validate_pow_block(prev_hash: &str, merkle_hash: &str, nonce: &[u8]) -> bool {
-    let mut pow = nonce.to_owned().to_vec();
-    pow.extend_from_slice(merkle_hash.as_bytes());
-    pow.extend_from_slice(prev_hash.as_bytes());
+/// * `header`   - The header for PoW
+pub fn validate_pow_block(header: &BlockHeader) -> bool {
+    let pow = serialize(header).unwrap();
     validate_pow(&pow)
 }
 
@@ -474,7 +447,7 @@ pub fn validate_pow_block(prev_hash: &str, merkle_hash: &str, nonce: &[u8]) -> b
 ///
 /// * `pow`    - &u8 proof of work
 fn validate_pow(pow: &[u8]) -> bool {
-    let pow_hash = Sha3_256::digest(pow).to_vec();
+    let pow_hash = sha3_256::digest(pow).to_vec();
     pow_hash[0..MINING_DIFFICULTY].iter().all(|v| *v == 0)
 }
 

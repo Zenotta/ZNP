@@ -1,8 +1,8 @@
 use crate::active_raft::ActiveRaft;
 use crate::raft::RaftData;
 use bincode::{deserialize, serialize};
+use naom::crypto::sha3_256;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use tracing::{debug, warn};
@@ -206,7 +206,7 @@ fn check_deduplication(
             return None;
         }
 
-        let data_hash = Sha3_256::digest(item_data).to_vec();
+        let data_hash = sha3_256::digest(item_data).to_vec();
         if let Some((key, num)) = already_proposed_hashes.get(&data_hash) {
             debug!("check_deduplication found: key({:?}), b_num({})", key, num);
             None
