@@ -6,7 +6,7 @@ use crate::api::handlers::{
 use crate::api::routes;
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
 use crate::configurations::DbMode;
-use crate::constants::{BLOCK_PREPEND, FUND_KEY};
+use crate::constants::FUND_KEY;
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
     BlockchainItemMeta, ComputeApi, ComputeApiRequest, DruidDroplet, DruidPool, NodeType,
@@ -17,13 +17,13 @@ use crate::test_utils::{generate_rb_transactions, RbReceiverData, RbSenderData};
 use crate::threaded_call::ThreadedCallChannel;
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
-    apply_mining_tx, decode_pub_key, decode_secret_key, to_api_keys, tracing_log_try_init,
+    apply_mining_tx, construct_valid_block_pow_hash, decode_pub_key, decode_secret_key,
+    generate_pow_for_block, to_api_keys, tracing_log_try_init, validate_pow_block,
 };
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
 use naom::constants::{NETWORK_VERSION_TEMP, NETWORK_VERSION_V0};
-use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519::{self as sign};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
@@ -62,6 +62,8 @@ const COMMON_ADDRS: &[&str] = &[
     "1118536e3d5a13e347262b5023963111",
     "2228536e3d5a13e347262b5023963222",
 ];
+
+const BLOCK_NONCE: &str = "780c05806a3b70b15c9673396171674f";
 
 /*------- UTILS--------*/
 
@@ -131,26 +133,37 @@ fn from_utf8(data: &[u8]) -> &str {
 }
 
 /// Util function to create a stub DB containing a single block
-fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
-    let db = get_db_with_block_no_mutex();
+async fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
+    let db = get_db_with_block_no_mutex().await;
     Arc::new(Mutex::new(db))
 }
 
-fn get_wallet_db(passphrase: &str) -> WalletDb {
-    let simple_db = Some(get_db_with_block_no_mutex());
+async fn get_wallet_db(passphrase: &str) -> WalletDb {
+    let simple_db = Some(get_db_with_block_no_mutex().await);
     let passphrase = Some(passphrase.to_owned());
     WalletDb::new(DbMode::InMemory, simple_db, passphrase)
 }
 
-fn get_db_with_block_no_mutex() -> SimpleDb {
+async fn get_db_with_block_no_mutex() -> SimpleDb {
     let tx = Transaction::new();
     let tx_value = serialize(&tx).unwrap();
     let tx_json = serde_json::to_vec(&tx).unwrap();
     let tx_hash = construct_tx_hash(&tx);
+    let nonce = hex::decode(BLOCK_NONCE).unwrap();
 
     let mut block = Block::new();
     block.transactions.push(tx_hash.clone());
-    block.header = apply_mining_tx(block.header, vec![0, 1, 23], "test".to_string());
+    block.set_txs_merkle_root_and_hash().await;
+    block.header = apply_mining_tx(block.header, nonce, "test".to_string());
+
+    if !validate_pow_block(&block.header) {
+        block.header = generate_pow_for_block(block.header);
+        let new_nonce = hex::encode(&block.header.nonce_and_mining_tx_hash.0);
+        panic!(
+            "get_db_with_block_no_mutex: Out of date nonce: {} -> new({})",
+            BLOCK_NONCE, new_nonce
+        );
+    }
 
     let block_to_input = StoredSerializingBlock { block };
 
@@ -160,12 +173,7 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
     // Handle block insert
     let block_input = serialize(&block_to_input).unwrap();
     let block_json = serde_json::to_vec(&block_to_input).unwrap();
-    let block_hash = {
-        let hash_digest = sha3_256::digest(&block_input);
-        let mut hash_digest = hex::encode(hash_digest);
-        hash_digest.insert(0, BLOCK_PREPEND as char);
-        hash_digest
-    };
+    let block_hash = construct_valid_block_pow_hash(&block_to_input.block).unwrap();
 
     {
         let block_num = 0;
@@ -294,14 +302,14 @@ fn dp() -> DbgPaths {
 async fn test_get_latest_block() {
     let _ = tracing_log_try_init();
 
-    let db = get_db_with_block();
+    let db = get_db_with_block().await;
     let request = warp::test::request().method("GET").path("/latest_block");
 
     let filter = routes::latest_block(&mut dp(), db);
     let res = request.reply(&filter).await;
 
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[0,1,23],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}");
+    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}");
 }
 
 /// Test GET wallet keypairs
@@ -312,7 +320,7 @@ async fn test_get_export_keypairs() {
     //
     // Arrange
     //
-    let db = get_wallet_db("");
+    let db = get_wallet_db("").await;
     let (address, keys) = (
         COMMON_ADDR_STORE.0.to_string(),
         COMMON_ADDR_STORE.1.to_vec(),
@@ -351,7 +359,7 @@ async fn test_get_user_debug_data() {
     //
     // Arrange
     //
-    let db = get_wallet_db("");
+    let db = get_wallet_db("").await;
     let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13000).await;
@@ -386,7 +394,7 @@ async fn test_get_storage_debug_data() {
     //
     // Arrange
     //
-    let db = get_db_with_block();
+    let db = get_db_with_block().await;
     let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::Storage).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13010).await;
@@ -457,7 +465,7 @@ async fn test_get_miner_debug_data() {
     //
     // Arrange
     //
-    let db = get_wallet_db("");
+    let db = get_wallet_db("").await;
     let current_block = Default::default();
     let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
@@ -493,7 +501,7 @@ async fn test_get_miner_with_user_debug_data() {
     //
     // Arrange
     //
-    let db = get_wallet_db("");
+    let db = get_wallet_db("").await;
     let current_block = Default::default();
     let ks = to_api_keys(vec!["key".to_owned()]);
     let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
@@ -573,7 +581,7 @@ async fn test_get_wallet_info() {
     //
     // Arrange
     //
-    let db = get_wallet_db("");
+    let db = get_wallet_db("").await;
     let mut fund_store = db.get_fund_store();
     let out_point = OutPoint::new("tx_hash".to_string(), 0);
     let out_point_s = OutPoint::new("tx_hash_spent".to_string(), 0);
@@ -622,7 +630,7 @@ async fn test_get_payment_address() {
     //
     // Arrange
     //
-    let db = get_wallet_db("");
+    let db = get_wallet_db("").await;
     let request = warp::test::request()
         .method("GET")
         .path("/new_payment_address");
@@ -684,10 +692,10 @@ async fn test_get_utxo_set_addresses() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_block() {
     let expected_meta = success_json();
-    let expected_body = "{\"Block\":{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[0,1,23],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}}";
+    let expected_body = "{\"Block\":{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}}";
 
     test_post_blockchain_entry_by_key(
-        "b08ed47679b2f8395a4366553f3b2eb4d972b46513e8386b800a06b7351a56095",
+        "b0004e829238707b7a600a95d3089e320448f706c2c7f6b0427201cc384c7fbfc",
         expected_meta.clone(),
         expected_body,
     )
@@ -766,7 +774,7 @@ async fn test_post_blockchain_entry_by_key(
 ) {
     let _ = tracing_log_try_init();
 
-    let db = get_db_with_block();
+    let db = get_db_with_block().await;
     let filter = routes::blockchain_entry_by_key(&mut dp(), db);
 
     let res = warp::test::request()
@@ -786,7 +794,7 @@ async fn test_post_blockchain_entry_by_key(
 async fn test_post_block_info_by_nums() {
     let _ = tracing_log_try_init();
 
-    let db = get_db_with_block();
+    let db = get_db_with_block().await;
     let filter = routes::block_by_num(&mut dp(), db);
 
     let res = warp::test::request()
@@ -803,7 +811,7 @@ async fn test_post_block_info_by_nums() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "[[\"b08ed47679b2f8395a4366553f3b2eb4d972b46513e8386b800a06b7351a56095\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[0,1,23],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}],[\"\",\"\"],[\"b08ed47679b2f8395a4366553f3b2eb4d972b46513e8386b800a06b7351a56095\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[0,1,23],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"\",\"\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}]]");
+    assert_eq!(res.body(), "[[\"b0004e829238707b7a600a95d3089e320448f706c2c7f6b0427201cc384c7fbfc\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}],[\"\",\"\"],[\"b0004e829238707b7a600a95d3089e320448f706c2c7f6b0427201cc384c7fbfc\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}]]");
 }
 
 /// Test POST make payment
@@ -822,7 +830,7 @@ async fn test_post_make_payment() {
         passphrase: String::new(),
     };
 
-    let db = get_wallet_db(&encapsulated_data.passphrase);
+    let db = get_wallet_db(&encapsulated_data.passphrase).await;
     let request = warp::test::request()
         .method("POST")
         .path("/make_payment")
@@ -864,7 +872,7 @@ async fn test_post_make_ip_payment() {
         amount: TokenAmount(25),
         passphrase: String::new(),
     };
-    let db = get_wallet_db(&encapsulated_data.passphrase);
+    let db = get_wallet_db(&encapsulated_data.passphrase).await;
     let request = warp::test::request()
         .method("POST")
         .path("/make_ip_payment")
@@ -1001,7 +1009,7 @@ async fn test_post_request_donation() {
 async fn test_post_import_keypairs_success() {
     let _ = tracing_log_try_init();
 
-    let db = get_wallet_db("");
+    let db = get_wallet_db("").await;
     let mut addresses: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     addresses.insert(
         COMMON_ADDR_STORE.0.to_string(),
@@ -1413,7 +1421,7 @@ async fn test_post_change_passphrase() {
     //
     // Arrange
     //
-    let db = get_wallet_db("old_passphrase");
+    let db = get_wallet_db("old_passphrase").await;
     let (payment_address, expected_address_store) = db.generate_payment_address().await;
 
     let json_body = ChangePassphraseData {
@@ -1456,7 +1464,7 @@ async fn test_post_change_passphrase_failure() {
     //
     // Arrange
     //
-    let db = get_wallet_db("old");
+    let db = get_wallet_db("old").await;
     let json_body = ChangePassphraseData {
         old_passphrase: String::from("invalid_passphrase"),
         new_passphrase: String::from("new_passphrase"),
@@ -1495,7 +1503,7 @@ async fn test_post_block_nums_by_tx_hashes() {
     //
     // Arrange
     //
-    let db = get_db_with_block();
+    let db = get_db_with_block().await;
 
     let request = warp::test::request()
         .method("POST")

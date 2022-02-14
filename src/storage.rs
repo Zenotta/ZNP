@@ -1,8 +1,8 @@
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig, TlsPrivateInfo};
 use crate::constants::{
-    BLOCK_PREPEND, DB_PATH, INDEXED_BLOCK_HASH_PREFIX_KEY, INDEXED_TX_HASH_PREFIX_KEY,
-    LAST_BLOCK_HASH_KEY, NAMED_CONSTANT_PREPEND, PEER_LIMIT,
+    DB_PATH, INDEXED_BLOCK_HASH_PREFIX_KEY, INDEXED_TX_HASH_PREFIX_KEY, LAST_BLOCK_HASH_KEY,
+    NAMED_CONSTANT_PREPEND, PEER_LIMIT,
 };
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
@@ -14,12 +14,11 @@ use crate::raft::RaftCommit;
 use crate::storage_fetch::{FetchStatus, FetchedBlockChain, StorageFetch};
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::{
-    get_genesis_tx_in_display, to_api_keys, validate_pow_block, ApiKeys, LocalEvent,
+    construct_valid_block_pow_hash, get_genesis_tx_in_display, to_api_keys, ApiKeys, LocalEvent,
     LocalEventChannel, LocalEventSender, ResponseResult,
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::crypto::sha3_256;
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::error::Error;
@@ -620,12 +619,8 @@ impl StorageNode {
 
         let block_input = serialize(&stored_block).unwrap();
         let block_json = serde_json::to_vec(&stored_block).unwrap();
-        let block_hash = {
-            let hash_digest = sha3_256::digest(&block_input);
-            let mut hash_digest = hex::encode(hash_digest);
-            hash_digest.insert(0, BLOCK_PREPEND as char);
-            hash_digest
-        };
+        let block_hash = construct_valid_block_pow_hash(&stored_block.block)
+            .unwrap_or_else(|e| panic!("Block always validated before: {}", e));
 
         let (nonce, mining_tx_hash) = stored_block.block.header.nonce_and_mining_tx_hash.clone();
         let last_block_stored_info = BlockStoredInfo {
@@ -887,7 +882,8 @@ impl StorageNode {
             return None;
         };
 
-        if !validate_pow_block(&common.block.header) {
+        if let Err(e) = construct_valid_block_pow_hash(&common.block) {
+            debug!("Block received not added. PoW invalid: {}", e);
             return Some(Response {
                 success: false,
                 reason: "Block received not added. PoW invalid",
