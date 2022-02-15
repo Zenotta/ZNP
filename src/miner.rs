@@ -6,9 +6,9 @@ use crate::interfaces::{
     StorageRequest,
 };
 use crate::utils::{
-    self, apply_mining_tx, format_parition_pow_address, generate_pow_nonce,
-    get_paiments_for_wallet, to_api_keys, validate_pow_block, ApiKeys, DeserializedBlockchainItem,
-    LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RunningTaskOrResult,
+    self, apply_mining_tx, format_parition_pow_address, generate_pow_for_block,
+    get_paiments_for_wallet, to_api_keys, ApiKeys, DeserializedBlockchainItem, LocalEvent,
+    LocalEventChannel, LocalEventSender, ResponseResult, RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
@@ -812,12 +812,7 @@ impl MinerNode {
     /// * `info`      - Block Proof of work info
     fn generate_pow_for_block(mut info: BlockPoWInfo) -> task::JoinHandle<BlockPoWInfo> {
         task::spawn_blocking(move || {
-            // Mine Block with mining transaction
-            info.header.nonce_and_mining_tx_hash.0 = generate_pow_nonce();
-            while !validate_pow_block(&info.header) {
-                info.header.nonce_and_mining_tx_hash.0 = generate_pow_nonce();
-            }
-
+            info.header = generate_pow_for_block(info.header);
             info
         })
     }

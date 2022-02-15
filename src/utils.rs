@@ -1,6 +1,6 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
+use crate::constants::{BLOCK_PREPEND, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
 use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, ProofOfWork, StoredSerializingBlock,
 };
@@ -12,7 +12,7 @@ use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
 use naom::primitives::{
     asset::{Asset, TokenAmount},
-    block::BlockHeader,
+    block::{build_hex_txs_hash, Block, BlockHeader},
     transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
 };
 use naom::script::{lang::Script, StackEntry};
@@ -428,7 +428,47 @@ pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) 
     pow_body.extend(rand_num.iter().flat_map(|r| r.iter()).copied());
     pow_body.extend(&pow.nonce);
 
-    validate_pow(&pow_body)
+    validate_pow(&pow_body).is_some()
+}
+
+/// Generate Proof of Work for a block with a mining transaction
+///
+/// ### Arguments
+///
+/// * `header`   - The header for PoW
+pub fn generate_pow_for_block(mut header: BlockHeader) -> BlockHeader {
+    header.nonce_and_mining_tx_hash.0 = generate_pow_nonce();
+    while !validate_pow_block(&header) {
+        header.nonce_and_mining_tx_hash.0 = generate_pow_nonce();
+    }
+    header
+}
+
+/// Verify block is valid & consistent: Can be fully verified from PoW hash.
+/// Verify that PoW hash is valid: sufficient leading 0.
+/// Return the hex encoded hash with prefix
+///
+/// ### Arguments
+///
+/// * `block`   - The block to extract hash from
+pub fn construct_valid_block_pow_hash(block: &Block) -> Result<String, StringError> {
+    if build_hex_txs_hash(&block.transactions) != block.header.txs_merkle_root_and_hash.1 {
+        trace!(
+            "Transactions inconsistent with header: {:?}",
+            &block.transactions
+        );
+        return Err(StringError(
+            "Transactions inconsistent with header".to_owned(),
+        ));
+    }
+
+    let hash_digest = validate_pow_block_hash(&block.header).ok_or_else(|| {
+        StringError("Only block passing validate_pow_block are accepted".to_owned())
+    })?;
+
+    let mut hash_digest = hex::encode(hash_digest);
+    hash_digest.insert(0, BLOCK_PREPEND as char);
+    Ok(hash_digest)
 }
 
 /// Validate Proof of Work for a block with a mining transaction
@@ -437,6 +477,15 @@ pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) 
 ///
 /// * `header`   - The header for PoW
 pub fn validate_pow_block(header: &BlockHeader) -> bool {
+    validate_pow_block_hash(header).is_some()
+}
+
+/// Validate Proof of Work for a block with a mining transaction returning the PoW hash
+///
+/// ### Arguments
+///
+/// * `header`   - The header for PoW
+fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
     let pow = serialize(header).unwrap();
     validate_pow(&pow)
 }
@@ -446,9 +495,13 @@ pub fn validate_pow_block(header: &BlockHeader) -> bool {
 /// ### Arguments
 ///
 /// * `pow`    - &u8 proof of work
-fn validate_pow(pow: &[u8]) -> bool {
+fn validate_pow(pow: &[u8]) -> Option<Vec<u8>> {
     let pow_hash = sha3_256::digest(pow).to_vec();
-    pow_hash[0..MINING_DIFFICULTY].iter().all(|v| *v == 0)
+    if pow_hash[0..MINING_DIFFICULTY].iter().all(|v| *v == 0) {
+        Some(pow_hash)
+    } else {
+        None
+    }
 }
 
 /// Get the paiment info from the given transactions

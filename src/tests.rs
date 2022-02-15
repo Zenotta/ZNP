@@ -2,7 +2,7 @@
 
 use crate::compute::ComputeNode;
 use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
+use crate::constants::{NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
     ComputeRequest, DruidPool, MinedBlock, MinedBlockExtraInfo, Response, StorageRequest,
@@ -17,12 +17,13 @@ use crate::test_utils::{
 };
 use crate::user::UserNode;
 use crate::utils::{
-    apply_mining_tx, calculate_reward, create_valid_create_transaction_with_ins_outs,
-    create_valid_transaction_with_ins_outs, decode_pub_key, decode_secret_key,
-    get_sanction_addresses, tracing_log_try_init, validate_pow_block, LocalEvent, StringError,
+    apply_mining_tx, calculate_reward, construct_valid_block_pow_hash,
+    create_valid_create_transaction_with_ins_outs, create_valid_transaction_with_ins_outs,
+    decode_pub_key, decode_secret_key, generate_pow_for_block, get_sanction_addresses,
+    tracing_log_try_init, LocalEvent, StringError,
 };
 use crate::wallet::AssetValues;
-use bincode::{deserialize, serialize};
+use bincode::{deserialize, deserialize_from};
 use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519 as sign;
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
@@ -35,9 +36,9 @@ use naom::utils::transaction_utils::{
     construct_address, construct_coinbase_tx, construct_receipt_create_tx, construct_tx_hash,
     construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
 };
-use rand::{self, Rng};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
@@ -746,7 +747,7 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let transactions = valid_transactions(true);
     let transactions_h = transactions.keys().cloned().collect::<Vec<_>>();
     let transactions_utxo = to_utxo_set(&transactions);
-    let (_, block_info0) = complete_first_block(&BTreeMap::new()).await;
+    let (_, block_info0) = complete_first_block(&network.collect_initial_uxto_txs()).await;
     let block0_mining_tx = complete_block_mining_txs(&block_info0);
     let block0_mining_utxo = to_utxo_set(&block0_mining_tx);
 
@@ -1125,7 +1126,7 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
 
     let transactions = valid_transactions(true);
-    let (_, block_info0) = complete_first_block(&BTreeMap::new()).await;
+    let (_, block_info0) = complete_first_block(&network.collect_initial_uxto_txs()).await;
     let (expected1, block_info1) = complete_block(1, Some("0"), &transactions).await;
     let (_expected3, wrong_block3) = complete_block(3, Some("0"), &BTreeMap::new()).await;
     let block1_mining_tx = complete_block_mining_txs(&block_info1);
@@ -3394,6 +3395,26 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
         let stored_value = s.get_stored_value(block_hash)?;
         let stored_value =
             checked_blockchain_item_data(stored_value, BlockchainItemType::Block).unwrap();
+        {
+            // Check match expected block_hash:
+            let mut reader = Cursor::new(stored_value.as_slice());
+            let header = match deserialize_from::<_, BlockHeader>(&mut reader) {
+                Err(e) => return Some(format!("error: {:?}", e)),
+                Ok(v) => v,
+            };
+
+            let (header_ser, txs_ser) = stored_value.split_at(reader.position() as usize);
+            let header_hash = "b".to_owned() + &hex::encode(sha3_256::digest(header_ser));
+            let txs_hash = hex::encode(sha3_256::digest(txs_ser));
+
+            if block_hash != header_hash || txs_hash != header.txs_merkle_root_and_hash.1 {
+                return Some(format!(
+                    "error: {}!={} or {}!={}",
+                    block_hash, header_hash, txs_hash, header.txs_merkle_root_and_hash.1
+                ));
+            }
+        }
+
         match deserialize::<StoredSerializingBlock>(&stored_value) {
             Err(e) => return Some(format!("error: {:?}", e)),
             Ok(v) => v,
@@ -4018,7 +4039,7 @@ async fn construct_mining_common_info(
     let tx = construct_coinbase_tx(block_num, amount, addr);
     let hash = construct_tx_hash(&tx);
     block.header = apply_mining_tx(block.header, Vec::new(), hash.clone());
-    block.header = generate_pow_for_block(block.header).await;
+    block.header = generate_pow_for_block(block.header);
     block_txs.insert(hash, tx);
 
     CommonBlockInfo {
@@ -4080,6 +4101,7 @@ async fn complete_block(
     block.header.b_num = block_num;
     block.header.previous_hash = previous_hash.map(|v| v.to_string());
     block.transactions = block_txs.keys().cloned().collect();
+    block.set_txs_merkle_root_and_hash().await;
 
     let addr = hex::encode(vec![block_num as u8, 1_u8]);
     let common = construct_mining_common_info(block.clone(), block_txs.clone(), addr).await;
@@ -4093,30 +4115,10 @@ async fn complete_block(
         block: complete.common.block.clone(),
     };
 
-    let hash_key = {
-        let hash_input = serialize(&stored).unwrap();
-        let hash_digest = sha3_256::digest(&hash_input);
-        let mut hash_digest = hex::encode(hash_digest);
-        hash_digest.insert(0, BLOCK_PREPEND as char);
-        hash_digest
-    };
+    let hash_key = construct_valid_block_pow_hash(&stored.block).unwrap();
     let complete_str = format!("{:?}", complete);
 
     ((hash_key, complete_str), complete)
-}
-
-async fn generate_pow_for_block(mut header: BlockHeader) -> BlockHeader {
-    header.nonce_and_mining_tx_hash.0 = generate_nonce();
-    while !validate_pow_block(&header) {
-        header.nonce_and_mining_tx_hash.0 = generate_nonce();
-    }
-    header
-}
-
-/// Generates a random sequence of values for a nonce
-fn generate_nonce() -> Vec<u8> {
-    let mut rng = rand::thread_rng();
-    (0..16).map(|_| rng.gen_range(0, 200)).collect()
 }
 
 fn basic_network_config(initial_port: u16) -> NetworkConfig {

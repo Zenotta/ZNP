@@ -392,7 +392,7 @@ impl ComputeRaft {
                 if self.consensused.has_block_stored_info_ready() {
                     // First block complete:
                     self.consensused.apply_ready_block_stored_info();
-                    self.consensused.generate_first_block();
+                    self.consensused.generate_first_block().await;
                     self.consensused.start_participant_intake();
                     self.set_next_propose_mining_event_timeout_at();
                     self.event_processed_generate_snapshot();
@@ -954,12 +954,12 @@ impl ComputeConsensused {
     }
 
     /// Processes the very first block with utxo_set
-    pub fn generate_first_block(&mut self) {
+    pub async fn generate_first_block(&mut self) {
         let next_block_tx = self.initial_utxo_txs.take().unwrap();
-        let next_block = Block {
-            transactions: next_block_tx.keys().cloned().collect(),
-            ..Default::default()
-        };
+
+        let mut next_block = Block::new();
+        next_block.transactions = next_block_tx.keys().cloned().collect();
+        next_block.set_txs_merkle_root_and_hash().await;
 
         self.set_committed_mining_block(next_block, next_block_tx)
     }
