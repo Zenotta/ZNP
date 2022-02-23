@@ -1,21 +1,25 @@
 use crate::api::errors;
+use crate::api::responses::{
+    api_format_asset, common_error_reply, common_success_reply, json_embed, json_embed_block,
+    json_embed_transaction, json_serialize_embed, APIAsset, APICreateResponseContent, CallResponse,
+    CallResponseWithData, JsonReply,
+};
 use crate::comms_handler::Node;
 use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
     node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
-    BlockchainItemType, ComputeApi, ComputeApiRequest, DebugData, DruidPool, NodeType,
-    OutPointData, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
+    BlockchainItemType, ComputeApi, DebugData, DruidPool, OutPointData, StoredSerializingBlock,
+    UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_stored_value_from_db, indexed_block_hash_key};
 use crate::threaded_call::{self, ThreadedCallSender};
 use crate::utils::{decode_pub_key, decode_signature};
 use crate::wallet::{WalletDb, WalletDbError};
-use crate::ComputeRequest;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::crypto::sign_ed25519::PublicKey;
-use naom::primitives::asset::TokenAmount;
+use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::druid::DdeValues;
 use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
@@ -25,7 +29,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::str;
 use std::sync::{Arc, Mutex};
-use tracing::{error, trace};
+use tracing::{debug, error, trace};
 
 pub type DbgPaths = Vec<&'static str>;
 
@@ -75,6 +79,11 @@ pub struct CreateReceiptAssetData {
     pub script_public_key: Option<String>, /* Not used by user Node */
     pub public_key: Option<String>,        /* Not used by user Node */
     pub signature: Option<String>,         /* Not used by user Node */
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateReceiptAssetDataUser {
+    pub receipt_amount: u64,
 }
 
 /// Information needed for the creaion of TxIn script.
@@ -141,20 +150,6 @@ pub struct FetchPendingtResult {
     pub pending_transactions: DruidPool,
 }
 
-/// A JSON formatted reply.
-pub struct JsonReply(Vec<u8>);
-
-impl warp::reply::Reply for JsonReply {
-    #[inline]
-    fn into_response(self) -> warp::reply::Response {
-        use warp::http::header::{HeaderValue, CONTENT_TYPE};
-        let mut res = warp::reply::Response::new(self.0.into());
-        res.headers_mut()
-            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        res
-    }
-}
-
 //======= GET HANDLERS =======//
 
 /// Gets the state of the connected wallet and returns it.
@@ -162,10 +157,14 @@ impl warp::reply::Reply for JsonReply {
 pub async fn get_wallet_info(
     wallet_db: WalletDb,
     extra: Option<String>,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse { route, call_id };
+
     let fund_store = match wallet_db.get_fund_store_err() {
         Ok(fund) => fund,
-        Err(_) => return Err(warp::reject::custom(errors::ErrorCannotAccessWallet)),
+        Err(_) => return r.into_err(&errors::ErrorCannotAccessWallet),
     };
 
     let mut addresses = AddressesWithOutPoints::new();
@@ -192,11 +191,15 @@ pub async fn get_wallet_info(
         addresses,
     };
 
-    Ok(warp::reply::json(&send_val))
+    r.into_ok(json_serialize_embed(send_val))
 }
 
 /// Gets all present keys and sends them out for export
-pub async fn get_export_keypairs(wallet_db: WalletDb) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn get_export_keypairs(
+    wallet_db: WalletDb,
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let known_addr = wallet_db.get_known_addresses();
     let mut addresses = BTreeMap::new();
 
@@ -204,35 +207,49 @@ pub async fn get_export_keypairs(wallet_db: WalletDb) -> Result<impl warp::Reply
         addresses.insert(addr.clone(), wallet_db.get_address_store_encrypted(&addr));
     }
 
-    Ok(warp::reply::json(&Addresses { addresses }))
+    Ok(common_success_reply(
+        call_id,
+        route,
+        json_serialize_embed(addresses),
+    ))
 }
 
 /// Gets a newly generated payment address
-pub async fn get_new_payment_address(
+pub async fn get_payment_address(
     wallet_db: WalletDb,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let (address, _) = wallet_db.generate_payment_address().await;
 
-    Ok(warp::reply::json(&address))
+    Ok(common_success_reply(
+        call_id,
+        route,
+        json_serialize_embed(address),
+    ))
 }
 
 /// Gets the latest block information
 pub async fn get_latest_block(
     db: Arc<Mutex<SimpleDb>>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    get_json_reply_stored_value_from_db(db, LAST_BLOCK_HASH_KEY, false)
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
+    get_json_reply_stored_value_from_db(db, LAST_BLOCK_HASH_KEY, false, call_id, route)
 }
 
 /// Gets the debug info for a speficied node type
 ///
-/// Contains an optional field for an auxiliary `Node`
-/// , i.e a Miner node may or may not have additional User
+/// Contains an optional field for an auxiliary `Node`,
+/// i.e a Miner node may or may not have additional User
 /// node capabilities- providing additional debug data.
-pub async fn get_debug_data(
+pub async fn get_debug_data<'a>(
     debug_paths: DbgPaths,
     node: Node,
     aux_node: Option<Node>,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &'a str,
+    call_id: &'a str,
+) -> Result<JsonReply, JsonReply> {
     let node_type = node_type_as_str(node.get_node_type());
     let node_peers = node.get_peer_list().await;
     let node_api = debug_paths.into_iter().map(|p| p.to_string()).collect();
@@ -253,28 +270,48 @@ pub async fn get_debug_data(
             node_peers,
         },
     };
-    Ok(warp::reply::json(&data))
+
+    Ok(common_success_reply(
+        call_id,
+        route,
+        json_serialize_embed(data),
+    ))
 }
 
 /// Get to fetch information about the current mining block
 pub async fn get_current_mining_block(
     current_block: CurrentBlockWithMutex,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let data: Option<BlockPoWReceived> = current_block.lock().unwrap().clone();
-    Ok(warp::reply::json(&data))
+    Ok(common_success_reply(
+        call_id,
+        route,
+        json_serialize_embed(data),
+    ))
 }
 
 /// Get all addresses for unspent tokens on the UTXO set
 pub async fn get_utxo_addresses(
     mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let addresses = make_api_threaded_call(
         &mut threaded_calls,
         |c| c.get_committed_utxo_tracked_set().get_all_addresses(),
-        "get_utxo_addresses",
+        call_id,
+        route,
+        "Can't access UTXO",
     )
     .await?;
-    Ok(warp::reply::json(&addresses))
+
+    Ok(common_success_reply(
+        call_id,
+        route,
+        json_serialize_embed(addresses),
+    ))
 }
 
 //======= POST HANDLERS =======//
@@ -283,27 +320,40 @@ pub async fn get_utxo_addresses(
 pub async fn post_blockchain_entry_by_key(
     db: Arc<Mutex<SimpleDb>>,
     key: String,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    get_json_reply_stored_value_from_db(db, &key, true)
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
+    get_json_reply_stored_value_from_db(db, &key, true, call_id, route)
 }
 
 /// Post to retrieve block information by number
 pub async fn post_block_by_num(
     db: Arc<Mutex<SimpleDb>>,
     block_nums: Vec<u64>,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let keys: Vec<_> = block_nums
         .iter()
         .map(|num| indexed_block_hash_key(*num))
         .collect();
-    get_json_reply_blocks_from_db(db, keys)
+    get_json_reply_blocks_from_db(db, keys, route, call_id)
 }
 
 /// Post to import new keypairs to the connected wallet
 pub async fn post_import_keypairs(
     db: WalletDb,
     keypairs: Addresses,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
+    let response_keys: Vec<String> = keypairs.addresses.keys().cloned().collect();
+    let r = CallResponseWithData {
+        route,
+        call_id,
+        data: json_serialize_embed(response_keys),
+    };
+
     for (addr, address_set) in keypairs.addresses.iter() {
         match db
             .save_encrypted_address_to_wallet(addr.clone(), address_set.clone())
@@ -311,14 +361,12 @@ pub async fn post_import_keypairs(
         {
             Ok(_) => {}
             Err(_e) => {
-                return Err(warp::reject::custom(
-                    errors::ErrorCannotSaveAddressesToWallet,
-                ))
+                return r.into_err(&errors::ErrorCannotAccessUserNode);
             }
         }
     }
 
-    Ok(warp::reply::json(&"Key/s saved successfully".to_owned()))
+    r.into_ok()
 }
 
 ///Post make a new payment from the connected wallet
@@ -326,24 +374,35 @@ pub async fn post_make_payment(
     db: WalletDb,
     peer: Node,
     encapsulated_data: EncapsulatedPayment,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let EncapsulatedPayment {
         address,
         amount,
         passphrase,
     } = encapsulated_data;
 
+    let r = CallResponse { route, call_id };
+
     let request = match db.test_passphrase(passphrase).await {
-        Ok(_) => UserRequest::UserApi(UserApiRequest::MakePayment { address, amount }),
-        Err(e) => return Err(wallet_db_error(e)),
+        Ok(_) => UserRequest::UserApi(UserApiRequest::MakePayment {
+            address: address.clone(),
+            amount,
+        }),
+        Err(e) => {
+            return r.into_err(&wallet_db_error(e));
+        }
     };
 
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
         error!("route:make_payment error: {:?}", e);
-        return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
+        return r.into_err(&errors::ErrorCannotAccessUserNode);
     }
 
-    Ok(warp::reply::json(&"Payment processing".to_owned()))
+    r.into_ok(json_serialize_embed(construct_make_payment_map(
+        address, amount,
+    )))
 }
 
 ///Post make a new payment from the connected wallet using an ip address
@@ -351,95 +410,123 @@ pub async fn post_make_ip_payment(
     db: WalletDb,
     peer: Node,
     encapsulated_data: EncapsulatedPayment,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    trace!("in the payment");
-
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let EncapsulatedPayment {
         address,
         amount,
         passphrase,
     } = encapsulated_data;
 
-    let payment_peer: SocketAddr = address
-        .parse::<SocketAddr>()
-        .map_err(|_| warp::reject::custom(errors::ErrorCannotParseAddress))?;
+    let r = CallResponse { route, call_id };
+
+    let payment_peer: SocketAddr = match address.parse::<SocketAddr>() {
+        Ok(addr) => addr,
+        Err(_) => {
+            return r.into_err(&errors::ErrorCannotParseAddress);
+        }
+    };
 
     let request = match db.test_passphrase(passphrase).await {
         Ok(_) => UserRequest::UserApi(UserApiRequest::MakeIpPayment {
             payment_peer,
             amount,
         }),
-        Err(e) => return Err(wallet_db_error(e)),
+        Err(e) => {
+            return r.into_err(&wallet_db_error(e));
+        }
     };
 
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
         error!("route:make_payment error: {:?}", e);
-        return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
+        return r.into_err(&errors::ErrorCannotAccessUserNode);
     }
 
-    Ok(warp::reply::json(&"Payment processing".to_owned()))
+    r.into_ok(json_serialize_embed(construct_make_payment_map(
+        address.clone(),
+        amount,
+    )))
 }
 
 ///Post make a donation request from the user node at specified ip address
 pub async fn post_request_donation(
     peer: Node,
     address: String,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    trace!("in request donation");
-
-    let paying_peer: SocketAddr = address
-        .parse::<SocketAddr>()
-        .map_err(|_| warp::reject::custom(errors::ErrorCannotParseAddress))?;
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse { route, call_id };
+    let paying_peer: SocketAddr = match address.parse::<SocketAddr>() {
+        Ok(addr) => addr,
+        Err(_) => {
+            return r.into_err(&errors::ErrorCannotParseAddress);
+        }
+    };
 
     let request = UserRequest::UserApi(UserApiRequest::RequestDonation { paying_peer });
 
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
-        error!("route:equest_donation error: {:?}", e);
-        return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
+        error!("route:request_donation error: {:?}", e);
+        return r.into_err(&errors::ErrorCannotAccessUserNode);
     }
 
-    Ok(warp::reply::json(&"Donation processing".to_owned()))
+    r.into_ok(json_serialize_embed("null"))
 }
 
 /// Post to update running total of connected wallet
 pub async fn post_update_running_total(
     peer: Node,
     addresses: PublicKeyAddresses,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
         address_list: UtxoFetchType::AnyOf(addresses.address_list),
     });
+    let r = CallResponse { route, call_id };
 
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
         error!("route:update_running_total error: {:?}", e);
-        return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
+        return r.into_err(&errors::ErrorCannotAccessUserNode);
     }
 
-    Ok(warp::reply::json(&"Running total updated".to_owned()))
+    r.into_ok(json_serialize_embed("null"))
 }
 
 /// Post to fetch the balance for given addresses in UTXO
 pub async fn post_fetch_utxo_balance(
     mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     addresses: PublicKeyAddresses,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let balances = make_api_threaded_call(
         &mut threaded_calls,
         move |c| {
             c.get_committed_utxo_tracked_set()
                 .get_balance_for_addresses(&addresses.address_list)
         },
-        "post_fetch_utxo_balance",
+        call_id,
+        route,
+        "Cannot fetch UTXO balance",
     )
     .await?;
-    Ok(warp::reply::json(&balances))
+
+    Ok(common_success_reply(
+        call_id,
+        route,
+        json_serialize_embed(balances),
+    ))
 }
 
 //POST fetch pending transaction from a computet node
 pub async fn post_fetch_druid_pending(
     mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     fetch_input: FetchPendingData,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let pending_transactions = make_api_threaded_call(
         &mut threaded_calls,
         move |c| {
@@ -449,19 +536,45 @@ pub async fn post_fetch_druid_pending(
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect::<DruidPool>()
         },
-        "post_fetch_pending",
+        call_id,
+        route,
+        "Cannot fetch pending transactions",
     )
     .await?;
-    Ok(warp::reply::json(&FetchPendingtResult {
-        pending_transactions,
-    }))
+
+    Ok(common_success_reply(
+        call_id,
+        route,
+        json_serialize_embed(pending_transactions),
+    ))
 }
 
-/// Post to create a receipt asset transaction on EITHER Compute or User node type
-pub async fn post_create_receipt_asset(
+/// Post to create a receipt asset transaction on User node
+pub async fn post_create_receipt_asset_user(
     peer: Node,
+    receipt_data: CreateReceiptAssetDataUser,
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
+    let CreateReceiptAssetDataUser { receipt_amount } = receipt_data;
+    let request = UserRequest::UserApi(UserApiRequest::SendCreateReceiptRequest { receipt_amount });
+    let r = CallResponse { route, call_id };
+
+    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+        error!("route:create_receipt_asset error: {:?}", e);
+        return r.into_err(&errors::ErrorCannotAccessUserNode);
+    }
+
+    r.into_ok(json_serialize_embed(receipt_amount))
+}
+
+/// Post to create a receipt asset transaction on Compute node
+pub async fn post_create_receipt_asset(
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     create_receipt_asset_data: CreateReceiptAssetData,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let CreateReceiptAssetData {
         receipt_amount,
         script_public_key,
@@ -469,20 +582,22 @@ pub async fn post_create_receipt_asset(
         signature,
     } = create_receipt_asset_data;
 
-    let node_type = peer.get_node_type();
-
     let all_some = script_public_key.is_some() && public_key.is_some() && signature.is_some();
-    let all_none = script_public_key.is_none() && public_key.is_none() && signature.is_none();
 
-    if node_type == NodeType::User && all_none {
-        // Create receipt tx on the user node
-        let request =
-            UserRequest::UserApi(UserApiRequest::SendCreateReceiptRequest { receipt_amount });
-        if let Err(e) = peer.inject_next_event(peer.address(), request) {
-            error!("route:post_create_receipt_asset error: {:?}", e);
-            return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
-        }
-    } else if node_type == NodeType::Compute && all_some {
+    // Response content
+    let create_info = APICreateResponseContent::new(
+        "receipt".to_string(),
+        receipt_amount,
+        script_public_key.clone().unwrap_or_default(),
+    );
+
+    let r = CallResponseWithData {
+        route,
+        call_id,
+        data: json_serialize_embed(create_info),
+    };
+
+    if all_some {
         // Create receipt tx on the compute node
         let (script_public_key, public_key, signature) = (
             script_public_key.unwrap_or_default(),
@@ -490,81 +605,141 @@ pub async fn post_create_receipt_asset(
             signature.unwrap_or_default(),
         );
 
-        let request = ComputeRequest::ComputeApi(ComputeApiRequest::SendCreateReceiptRequest {
-            receipt_amount,
-            script_public_key,
-            public_key,
-            signature,
-        });
+        let compute_resp = make_api_threaded_call(
+            &mut threaded_calls,
+            move |c| {
+                c.create_receipt_asset_tx(receipt_amount, script_public_key, public_key, signature)
+            },
+            call_id,
+            route,
+            "Cannot access Compute Node",
+        )
+        .await?;
 
-        if let Err(e) = peer.inject_next_event(peer.address(), request) {
-            error!("route:post_create_receipt_asset error: {:?}", e);
-            return Err(warp::reject::custom(errors::ErrorCannotAccessComputeNode));
+        match compute_resp {
+            Some(resp) => match resp.success {
+                true => return r.into_ok(),
+                false => return r.into_err(&resp.reason),
+            },
+            None => return r.into_err(&errors::ErrorCannotAccessComputeNode),
         }
-    } else {
-        return Err(warp::reject::custom(errors::ErrorInvalidJSONStructure));
     }
-    Ok(warp::reply::json(&"Creating receipt asset".to_owned()))
+
+    debug!(
+        "route:post_create_receipt_asset error: {:?}",
+        "Invalid JSON structure"
+    );
+
+    r.into_err(&errors::ErrorInvalidJSONStructure)
 }
 
 /// Post transactions to compute node
 pub async fn post_create_transactions(
-    peer: Node,
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     data: Vec<CreateTransaction>,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse { route, call_id };
     let transactions = {
         let mut transactions = Vec::new();
         for tx in data {
-            let tx = to_transaction(tx)?;
+            let tx = match to_transaction(tx) {
+                Ok(tx) => tx,
+                Err(e) => {
+                    debug!("route:post_create_transactions error: {:?}", e);
+                    return r.into_err(&errors::ErrorInvalidJSONStructure);
+                }
+            };
             transactions.push(tx);
         }
         transactions
     };
 
-    let request = ComputeRequest::ComputeApi(ComputeApiRequest::SendTransactions { transactions });
+    // Construct response
+    let ctx_map = construct_ctx_map(&transactions);
 
-    if let Err(e) = peer.inject_next_event(peer.address(), request) {
-        error!("route:post_create_transactions error: {:?}", e);
-        return Err(warp::reject::custom(errors::ErrorCannotAccessComputeNode));
+    // Send request to compute node
+    let compute_resp = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| c.receive_transactions(transactions),
+        call_id,
+        route,
+        "Cannot access Compute Node",
+    )
+    .await?;
+
+    // If the creation failed for some reason
+    if !compute_resp.success {
+        debug!(
+            "route:post_create_transactions error: {:?}",
+            compute_resp.reason
+        );
+        return r.into_err(&compute_resp.reason);
     }
 
-    Ok(warp::reply::json(&"Creating Transactions".to_owned()))
+    r.into_ok(json_serialize_embed(ctx_map))
 }
 
 // POST to change wallet passphrase
 pub async fn post_change_wallet_passphrase(
     mut db: WalletDb,
     passphrase_struct: ChangePassphraseData,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let ChangePassphraseData {
         old_passphrase,
         new_passphrase,
     } = passphrase_struct;
 
-    db.change_wallet_passphrase(old_passphrase, new_passphrase)
-        .await
-        .map_err(wallet_db_error)?;
+    let r = CallResponse { route, call_id };
 
-    Ok(warp::reply::json(
-        &"Passphrase changed successfully".to_owned(),
-    ))
+    match db
+        .change_wallet_passphrase(old_passphrase, new_passphrase)
+        .await
+    {
+        Ok(_) => r.into_ok(json_serialize_embed("null")),
+        Err(e) => r.into_err(&wallet_db_error(e)),
+    }
 }
 
-// POST to check for address presence
+// POST to check for transaction presence
 pub async fn post_blocks_by_tx_hashes(
     db: Arc<Mutex<SimpleDb>>,
     tx_hashes: Vec<String>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    get_json_reply_block_nums_by_tx_hashes_from_db(db, tx_hashes)
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
+    let block_nums: Vec<u64> = tx_hashes
+        .into_iter()
+        .filter_map(
+            |tx_hash| match get_stored_value_from_db(db.clone(), tx_hash) {
+                Some(BlockchainItem {
+                    item_meta: BlockchainItemMeta::Tx { block_num, .. },
+                    ..
+                }) => Some(block_num),
+                _ => None,
+            },
+        )
+        .collect();
+    Ok(common_success_reply(
+        call_id,
+        route,
+        json_serialize_embed(block_nums),
+    ))
 }
 
 //POST create a new payment address from a computet node
 pub async fn post_payment_address_construction(
     data: AddressConstructData,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let pub_key = data.pub_key;
     let pub_key_hex = data.pub_key_hex;
     let version = data.version;
+    let r = CallResponse { route, call_id };
 
     let pub_key = pub_key.or_else(|| pub_key_hex.and_then(|k| hex::decode(k).ok()));
     let pub_key = pub_key.filter(|k| !k.is_empty());
@@ -572,18 +747,19 @@ pub async fn post_payment_address_construction(
 
     if let Some(pub_key) = pub_key {
         let data: String = construct_address_for(&pub_key, version);
-        return Ok(warp::reply::json(&data));
+        return r.into_ok(json_serialize_embed(data));
     }
-    Ok(warp::reply::json(&String::from("")))
+
+    r.into_ok(json_serialize_embed("null"))
 }
 
 //======= Helpers =======//
 
 /// Filters through wallet errors which are internal vs errors caused by user input
-pub fn wallet_db_error(err: WalletDbError) -> warp::Rejection {
+pub fn wallet_db_error(err: WalletDbError) -> Box<dyn std::fmt::Display> {
     match err {
-        WalletDbError::PassphraseError => warp::reject::custom(errors::ErrorInvalidPassphrase),
-        _ => warp::reject::custom(errors::InternalError),
+        WalletDbError::PassphraseError => Box::new(errors::ErrorInvalidPassphrase),
+        _ => Box::new(errors::InternalError),
     }
 }
 
@@ -653,15 +829,23 @@ fn get_json_reply_stored_value_from_db(
     db: Arc<Mutex<SimpleDb>>,
     key: &str,
     wrap: bool,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let item = get_stored_value_from_db(db, key.as_bytes())
-        .ok_or_else(|| warp::reject::custom(errors::ErrorNoDataFoundForKey))?;
+    call_id: &str,
+    route: &str,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse { route, call_id };
+    let item = get_stored_value_from_db(db, key.as_bytes()).ok_or_else(|| {
+        r.clone()
+            .into_err(&errors::ErrorNoDataFoundForKey)
+            .unwrap_err()
+    })?;
 
-    match (wrap, item.item_meta.as_type()) {
-        (true, BlockchainItemType::Block) => Ok(json_embed_block(item.data_json)),
-        (true, BlockchainItemType::Tx) => Ok(json_embed_transaction(item.data_json)),
-        (false, _) => Ok(json_embed(&[&item.data_json])),
-    }
+    let json_content = match (wrap, item.item_meta.as_type()) {
+        (true, BlockchainItemType::Block) => json_embed_block(item.data_json),
+        (true, BlockchainItemType::Tx) => json_embed_transaction(item.data_json),
+        (false, _) => json_embed(&[&item.data_json]),
+    };
+
+    r.into_ok(json_content)
 }
 
 /// Fetches JSON blocks. Blocks which for whatever reason are
@@ -669,7 +853,9 @@ fn get_json_reply_stored_value_from_db(
 pub fn get_json_reply_blocks_from_db(
     db: Arc<Mutex<SimpleDb>>,
     keys: Vec<String>,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    route: &str,
+    call_id: &str,
+) -> Result<JsonReply, JsonReply> {
     let key_values: Vec<_> = keys
         .into_iter()
         .map(|key| {
@@ -690,55 +876,51 @@ pub fn get_json_reply_blocks_from_db(
     key_values.insert(0, &b"["[..]);
     key_values.push(&b"]"[..]);
 
-    Ok(json_embed(&key_values))
-}
-
-/// Fetches stored block numbers that contain provided `tx_hash` values.
-/// Unretrievable transactions will be ignored.
-pub fn get_json_reply_block_nums_by_tx_hashes_from_db(
-    db: Arc<Mutex<SimpleDb>>,
-    tx_hashes: Vec<String>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let block_nums: Vec<u64> = tx_hashes
-        .into_iter()
-        .filter_map(
-            |tx_hash| match get_stored_value_from_db(db.clone(), tx_hash) {
-                Some(BlockchainItem {
-                    item_meta: BlockchainItemMeta::Tx { block_num, .. },
-                    ..
-                }) => Some(block_num),
-                _ => None,
-            },
-        )
-        .collect();
-    Ok(warp::reply::json(&block_nums))
-}
-
-/// Embed block into Block enum
-pub fn json_embed_block(value: Vec<u8>) -> JsonReply {
-    json_embed(&[b"{\"Block\":", &value, b"}"])
-}
-
-/// Embed transaction into Transaction enum
-pub fn json_embed_transaction(value: Vec<u8>) -> JsonReply {
-    json_embed(&[b"{\"Transaction\":", &value, b"}"])
-}
-
-/// Embed JSON into wrapping JSON
-pub fn json_embed(value: &[&[u8]]) -> JsonReply {
-    JsonReply(value.iter().copied().flatten().copied().collect())
+    Ok(common_success_reply(
+        call_id,
+        route,
+        json_embed(&key_values),
+    ))
 }
 
 /// Threaded call for API
 pub async fn make_api_threaded_call<'a, T: ?Sized, R: Send + Sized + 'static>(
     tx: &mut ThreadedCallSender<T>,
     f: impl FnOnce(&mut T) -> R + Send + Sized + 'static,
-    tag: &str,
-) -> Result<R, warp::Rejection> {
+    call_id: &str,
+    route: &str,
+    tag: &'static str,
+) -> Result<R, JsonReply> {
     threaded_call::make_threaded_call(tx, f, tag)
         .await
         .map_err(|e| {
             trace!("make_api_threaded_call error: {} ({})", e, tag);
-            warp::reject::custom(errors::InternalError)
+            common_error_reply(call_id, errors::ErrorGeneric::new(tag), route, None)
         })
+}
+
+/// Constructs the mapping of output address to asset for `create_transactions`
+pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, APIAsset> {
+    let mut tx_info = BTreeMap::new();
+
+    for tx in transactions {
+        for out in &tx.outputs {
+            let address = out.script_public_key.clone().unwrap_or_default();
+            let asset = api_format_asset(out.value.clone());
+
+            tx_info.insert(address, asset);
+        }
+    }
+
+    tx_info
+}
+
+/// Constructs the mapping of output address to asset for `make_payment`
+pub fn construct_make_payment_map(
+    to_address: String,
+    amount: TokenAmount,
+) -> BTreeMap<String, APIAsset> {
+    let mut tx_info = BTreeMap::new();
+    tx_info.insert(to_address, api_format_asset(Asset::Token(amount)));
+    tx_info
 }

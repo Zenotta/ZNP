@@ -113,13 +113,13 @@ enum CfgModif {
 
 #[test]
 fn will_get_sanctioned_addresses() {
-    let addresses = get_sanction_addresses(SANC_LIST_TEST.to_string(), &"US".to_string());
+    let addresses = get_sanction_addresses(SANC_LIST_TEST.to_string(), "US");
     assert!(addresses.contains(&"gjlkhflgkhdfklg".to_string()));
 
-    let no_ju_addresses = get_sanction_addresses(SANC_LIST_TEST.to_string(), &"UK".to_string());
+    let no_ju_addresses = get_sanction_addresses(SANC_LIST_TEST.to_string(), "UK");
     assert_eq!(no_ju_addresses, Vec::<String>::new());
 
-    let no_fs_addresses = get_sanction_addresses("/blah.json".to_string(), &"UK".to_string());
+    let no_fs_addresses = get_sanction_addresses("/blah.json".to_string(), "UK");
     assert_eq!(no_fs_addresses, Vec::<String>::new());
 }
 
@@ -2599,8 +2599,7 @@ async fn compute_create_receipt_asset_tx(
     signature: String,
 ) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    c.create_receipt_asset_tx(receipt_amount, script_public_key, public_key, signature)
-        .await;
+    c.create_receipt_asset_tx(receipt_amount, script_public_key, public_key, signature);
 }
 
 async fn make_receipt_based_payment_act(

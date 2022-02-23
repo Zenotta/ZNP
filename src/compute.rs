@@ -828,15 +828,12 @@ impl ComputeNode {
                 script_public_key,
                 public_key,
                 signature,
-            } => {
-                self.create_receipt_asset_tx(
-                    receipt_amount,
-                    script_public_key,
-                    public_key,
-                    signature,
-                )
-                .await
-            }
+            } => self.create_receipt_asset_tx(
+                receipt_amount,
+                script_public_key,
+                public_key,
+                signature,
+            ),
             SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
         }
     }
@@ -1298,7 +1295,7 @@ impl ComputeNode {
     /// * `script_public_key`   - Public address key
     /// * `public_key`          - Public key
     /// * `signature`           - Signature
-    pub async fn create_receipt_asset_tx(
+    pub fn create_receipt_asset_tx(
         &mut self,
         receipt_amount: u64,
         script_public_key: String,
@@ -1325,48 +1322,12 @@ impl ComputeNode {
     pub fn get_node(&self) -> &Node {
         &self.node
     }
-}
 
-impl ComputeInterface for ComputeNode {
-    fn fetch_utxo_set(&mut self, peer: SocketAddr, address_list: UtxoFetchType) -> Response {
-        self.fetched_utxo_set = match address_list {
-            UtxoFetchType::All => Some((peer, self.get_committed_utxo_set_to_send())),
-            UtxoFetchType::AnyOf(addresses) => {
-                let utxo_set = self.get_committed_utxo_set();
-                let utxo_tracked_set = self.get_committed_utxo_tracked_set_to_send();
-                let utxo_subset: UtxoSet = addresses
-                    .iter()
-                    .filter_map(|v| utxo_tracked_set.get_pk_cache_vec(v))
-                    .flatten()
-                    .filter_map(|op| {
-                        utxo_set
-                            .get_key_value(op)
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                    })
-                    .collect();
-                Some((peer, utxo_subset))
-            }
-        };
-        Response {
-            success: true,
-            reason: "Received UTXO fetch request",
-        }
-    }
-
-    fn partition(&self, _uuids: Vec<&'static str>) -> Response {
-        Response {
-            success: false,
-            reason: "Not implemented yet",
-        }
-    }
-
-    fn get_service_levels(&self) -> Response {
-        Response {
-            success: false,
-            reason: "Not implemented yet",
-        }
-    }
-
+    /// Receive incoming transactions
+    ///
+    /// ### Arguments
+    ///
+    /// * `transactions` - Transactions to be processed
     fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
         let transactions_len = transactions.len();
         if !self.node_raft.tx_pool_can_accept(transactions_len) {
@@ -1425,6 +1386,47 @@ impl ComputeInterface for ComputeNode {
             reason: "Transactions added to tx pool",
         }
     }
+}
+
+impl ComputeInterface for ComputeNode {
+    fn fetch_utxo_set(&mut self, peer: SocketAddr, address_list: UtxoFetchType) -> Response {
+        self.fetched_utxo_set = match address_list {
+            UtxoFetchType::All => Some((peer, self.get_committed_utxo_set_to_send())),
+            UtxoFetchType::AnyOf(addresses) => {
+                let utxo_set = self.get_committed_utxo_set();
+                let utxo_tracked_set = self.get_committed_utxo_tracked_set_to_send();
+                let utxo_subset: UtxoSet = addresses
+                    .iter()
+                    .filter_map(|v| utxo_tracked_set.get_pk_cache_vec(v))
+                    .flatten()
+                    .filter_map(|op| {
+                        utxo_set
+                            .get_key_value(op)
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                    })
+                    .collect();
+                Some((peer, utxo_subset))
+            }
+        };
+        Response {
+            success: true,
+            reason: "Received UTXO fetch request",
+        }
+    }
+
+    fn partition(&self, _uuids: Vec<&'static str>) -> Response {
+        Response {
+            success: false,
+            reason: "Not implemented yet",
+        }
+    }
+
+    fn get_service_levels(&self) -> Response {
+        Response {
+            success: false,
+            reason: "Not implemented yet",
+        }
+    }
 
     fn execute_contract(&self, _contract: Contract) -> Response {
         Response {
@@ -1445,6 +1447,20 @@ impl ComputeApi for ComputeNode {
 
     fn get_pending_druid_pool(&self) -> &DruidPool {
         self.get_pending_druid_pool()
+    }
+
+    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
+        self.receive_transactions(transactions)
+    }
+
+    fn create_receipt_asset_tx(
+        &mut self,
+        receipt_amount: u64,
+        script_public_key: String,
+        public_key: String,
+        signature: String,
+    ) -> Option<Response> {
+        self.create_receipt_asset_tx(receipt_amount, script_public_key, public_key, signature)
     }
 }
 

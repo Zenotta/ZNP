@@ -319,7 +319,7 @@ pub async fn create_and_save_fake_to_wallet(
     let (receiver_addr, _) = wallet_db.generate_payment_address().await;
 
     let (t_hash, _payment_tx) = create_valid_transaction(
-        &"00000".to_owned(),
+        "00000",
         0,
         &receiver_addr,
         &address_keys.public_key,

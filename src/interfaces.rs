@@ -542,13 +542,6 @@ pub trait ComputeInterface {
     /// Returns the internal service level data
     fn get_service_levels(&self) -> Response;
 
-    /// Receives transactions to be bundled into blocks
-    ///
-    /// ### Arguments
-    ///
-    /// * `transactions` - Transactions to be added into blocks.
-    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response;
-
     /// Executes a received and approved contract
     ///
     /// ### Arguments
@@ -563,8 +556,25 @@ pub trait ComputeInterface {
 pub trait ComputeApi {
     /// Get the UTXO tracked set
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet;
+
     /// Get pending DRUID pool
     fn get_pending_druid_pool(&self) -> &DruidPool;
+
+    /// Receives transactions to be bundled into blocks
+    ///
+    /// ### Arguments
+    ///
+    /// * `transactions` - Transactions to be added into blocks.
+    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response;
+
+    /// Creates a new set of receipt assets
+    fn create_receipt_asset_tx(
+        &mut self,
+        receipt_amount: u64,
+        script_public_key: String,
+        public_key: String,
+        signature: String,
+    ) -> Option<Response>;
 }
 
 ///============ USER NODE ============///
