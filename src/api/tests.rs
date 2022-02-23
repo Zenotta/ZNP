@@ -1,7 +1,7 @@
 use crate::api::handlers::{
     AddressConstructData, Addresses, ChangePassphraseData, CreateReceiptAssetData,
-    CreateTransaction, CreateTxIn, CreateTxInScript, DbgPaths, EncapsulatedPayment,
-    FetchPendingData, PublicKeyAddresses,
+    CreateReceiptAssetDataUser, CreateTransaction, CreateTxIn, CreateTxInScript, DbgPaths,
+    EncapsulatedPayment, FetchPendingData, PublicKeyAddresses,
 };
 use crate::api::routes;
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
@@ -9,7 +9,7 @@ use crate::configurations::DbMode;
 use crate::constants::FUND_KEY;
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
-    BlockchainItemMeta, ComputeApi, ComputeApiRequest, DruidDroplet, DruidPool, NodeType,
+    BlockchainItemMeta, ComputeApi, ComputeApiRequest, DruidDroplet, DruidPool, NodeType, Response,
     StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
@@ -17,8 +17,8 @@ use crate::test_utils::{generate_rb_transactions, RbReceiverData, RbSenderData};
 use crate::threaded_call::ThreadedCallChannel;
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
-    apply_mining_tx, construct_valid_block_pow_hash, decode_pub_key, decode_secret_key,
-    generate_pow_for_block, to_api_keys, tracing_log_try_init, validate_pow_block,
+    apply_mining_tx, construct_valid_block_pow_hash, decode_secret_key, generate_pow_for_block,
+    to_api_keys, tracing_log_try_init, validate_pow_block,
 };
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
@@ -27,13 +27,11 @@ use naom::constants::{NETWORK_VERSION_TEMP, NETWORK_VERSION_V0};
 use naom::crypto::sign_ed25519::{self as sign};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
+use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
 use naom::utils::transaction_utils::{
-    construct_payment_tx_ins, construct_tx_hash, construct_tx_in_signable_asset_hash,
-    construct_tx_in_signable_hash,
+    construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
 };
-use serde_json::json;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -125,6 +123,30 @@ impl ComputeApi for ComputeTest {
     }
     fn get_pending_druid_pool(&self) -> &DruidPool {
         &self.druid_pool
+    }
+
+    fn receive_transactions(&mut self, _transactions: Vec<Transaction>) -> Response {
+        let reason: &'static str = "";
+
+        Response {
+            success: true,
+            reason,
+        }
+    }
+
+    fn create_receipt_asset_tx(
+        &mut self,
+        _receipt_amount: u64,
+        _script_public_key: String,
+        _public_key: String,
+        _signature: String,
+    ) -> Option<Response> {
+        let reason: &'static str = "";
+
+        Some(Response {
+            success: true,
+            reason,
+        })
     }
 }
 
@@ -309,7 +331,7 @@ async fn test_get_latest_block() {
     let res = request.reply(&filter).await;
 
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}");
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"latest_block\",\"content\":{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}}");
 }
 
 /// Test GET wallet keypairs
@@ -337,18 +359,12 @@ async fn test_get_export_keypairs() {
     //
     let filter = routes::export_keypairs(&mut dp(), db);
     let res = request.reply(&filter).await;
-    let expected_addresses = serde_json::to_string(&json!({
-        "addresses":{
-            address: keys
-        }
-    }))
-    .unwrap();
 
     //
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_addresses.as_bytes());
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"export_keypairs\",\"content\":{\"4348536e3d5a13e347262b5023963edf\":[195,253,191,157,40,253,233,186,96,35,27,83,83,224,191,126,133,101,235,168,233,122,174,109,18,247,175,139,253,55,164,187,238,175,251,110,53,47,158,241,103,144,49,65,247,147,145,140,12,129,123,19,187,121,31,163,16,231,248,38,243,200,34,91,4,241,40,42,97,236,37,180,26,16,34,171,12,92,4,8,53,193,181,209,97,76,164,76,0,122,44,120,212,27,145,224,20,207,215,134,23,178,170,157,218,55,14,64,185,128,63,131,194,24,6,228,34,50,252,118,94,153,105,236,92,122,169,219,119,9,250,255,20,40,148,74,182,73,180,83,10,240,193,201,45,5,205,34,188,174,229,96]}}");
 }
 
 /// Test get user debug data
@@ -378,7 +394,7 @@ async fn test_get_user_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"new_payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13000\",\"127.0.0.1:13000\",\"Compute\"]]}";
+    let expected_string = "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13000\",\"127.0.0.1:13000\",\"Compute\"]]}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -413,7 +429,7 @@ async fn test_get_storage_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"latest_block\",\"blockchain_entry_by_key\",\"block_by_tx_hashes\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13010\",\"127.0.0.1:13010\",\"Compute\"]]}";
+    let expected_string = "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"latest_block\",\"blockchain_entry\",\"check_transaction_presence\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13010\",\"127.0.0.1:13010\",\"Compute\"]]}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -449,7 +465,7 @@ async fn test_get_compute_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"fetch_pending\",\"create_receipt_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]]}";
+    let expected_string = "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"fetch_pending\",\"create_receipt_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]]}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -485,7 +501,7 @@ async fn test_get_miner_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Miner\",\"node_api\":[\"wallet_info\",\"export_keypairs\",\"import_keypairs\",\"new_payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13030\",\"127.0.0.1:13030\",\"Compute\"]]}";
+    let expected_string = "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Miner\",\"node_api\":[\"wallet_info\",\"export_keypairs\",\"import_keypairs\",\"payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13030\",\"127.0.0.1:13030\",\"Compute\"]]}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -524,7 +540,7 @@ async fn test_get_miner_with_user_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Miner/User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"new_payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13040\",\"127.0.0.1:13040\",\"Compute\"],[\"127.0.0.1:13041\",\"127.0.0.1:13041\",\"Storage\"]]}";
+    let expected_string = "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Miner/User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13040\",\"127.0.0.1:13040\",\"Compute\"],[\"127.0.0.1:13041\",\"127.0.0.1:13041\",\"Storage\"]]}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -616,10 +632,10 @@ async fn test_get_wallet_info() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":11}}]}}");
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 
     assert_eq!((r_s.status(), r_s.headers().clone()), success_json());
-    assert_eq!(r_s.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}");
+    assert_eq!(r_s.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 }
 
 /// Test GET new payment address
@@ -631,23 +647,21 @@ async fn test_get_payment_address() {
     // Arrange
     //
     let db = get_wallet_db("").await;
-    let request = warp::test::request()
-        .method("GET")
-        .path("/new_payment_address");
+    let request = warp::test::request().method("GET").path("/payment_address");
 
     //
     // Act
     //
-    let filter = routes::new_payment_address(&mut dp(), db.clone());
+    let filter = routes::payment_address(&mut dp(), db.clone());
     let res = request.reply(&filter).await;
     let store_address = db.get_known_addresses().pop().unwrap();
-    let expected_store_address = serde_json::to_string(&json!(store_address)).unwrap();
+    let expected = format!("{{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"payment_address\",\"content\":\"{}\"}}", store_address);
 
     //
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_store_address.as_bytes());
+    assert_eq!(res.body(), &expected);
 }
 
 /// Test GET all addresses on the UTXO set
@@ -682,7 +696,7 @@ async fn test_get_utxo_set_addresses() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "[\"public_address_1\",\"public_address_2\",\"public_address_3\"]"
+        "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"utxo_addresses\",\"content\":[\"public_address_1\",\"public_address_2\",\"public_address_3\"]}"
     );
 }
 
@@ -692,7 +706,7 @@ async fn test_get_utxo_set_addresses() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_block() {
     let expected_meta = success_json();
-    let expected_body = "{\"Block\":{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}}";
+    let expected_body = "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"blockchain_entry\",\"content\":{\"Block\":{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}}}";
 
     test_post_blockchain_entry_by_key(
         "b0004e829238707b7a600a95d3089e320448f706c2c7f6b0427201cc384c7fbfc",
@@ -713,17 +727,11 @@ async fn test_post_blockchain_entry_by_key_block() {
 async fn test_post_blockchain_entry_by_key_tx() {
     let expected_meta = success_json();
     let expected_body =
-        "{\"Transaction\":{\"inputs\":[],\"outputs\":[],\"version\":2,\"druid_info\":null}}";
+    "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"blockchain_entry\",\"content\":{\"Transaction\":{\"inputs\":[],\"outputs\":[],\"version\":2,\"druid_info\":null}}}";
 
     test_post_blockchain_entry_by_key(
         "g98d0ab9304ca82f098a86ad6251803b",
         expected_meta.clone(),
-        expected_body,
-    )
-    .await;
-    test_post_blockchain_entry_by_key(
-        "nIndexedTxHashKey_0000000000000000_00000001",
-        expected_meta,
         expected_body,
     )
     .await;
@@ -732,13 +740,8 @@ async fn test_post_blockchain_entry_by_key_tx() {
 /// Test POST for get blockchain with wrong key
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_failure() {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "content-type",
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-    let expected_meta = (StatusCode::from_u16(500).unwrap(), headers);
-    let expected_body = "Unhandled rejection: ErrorNoDataFoundForKey";
+    let expected_meta = success_json();
+    let expected_body = "{\"id\":\"\",\"status\":\"Error\",\"reason\":\"Entry not found in blockchain\",\"route\":\"blockchain_entry\",\"content\":\"null\"}";
 
     test_post_blockchain_entry_by_key(
         "b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a00000000",
@@ -779,7 +782,7 @@ async fn test_post_blockchain_entry_by_key(
 
     let res = warp::test::request()
         .method("POST")
-        .path("/blockchain_entry_by_key")
+        .path("/blockchain_entry")
         .header("Content-Type", "application/json")
         .json(&key)
         .reply(&filter)
@@ -811,7 +814,7 @@ async fn test_post_block_info_by_nums() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "[[\"b0004e829238707b7a600a95d3089e320448f706c2c7f6b0427201cc384c7fbfc\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}],[\"\",\"\"],[\"b0004e829238707b7a600a95d3089e320448f706c2c7f6b0427201cc384c7fbfc\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}]]");
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"block_by_num\",\"content\":[[\"b0004e829238707b7a600a95d3089e320448f706c2c7f6b0427201cc384c7fbfc\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}],[\"\",\"\"],[\"b0004e829238707b7a600a95d3089e320448f706c2c7f6b0427201cc384c7fbfc\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}]]}");
 }
 
 /// Test POST make payment
@@ -848,7 +851,7 @@ async fn test_post_make_payment() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "\"Payment processing\"");
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"make_payment\",\"content\":{\"4348536e3d5a13e347262b5023963edf\":{\"asset\":\"token\",\"amount\":25,\"metadata\":null}}}");
 
     // Frame expected
     let (address, amount) = (encapsulated_data.address, encapsulated_data.amount);
@@ -890,7 +893,7 @@ async fn test_post_make_ip_payment() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "\"Payment processing\"");
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"make_ip_payment\",\"content\":{\"127.0.0.1:12345\":{\"asset\":\"token\",\"amount\":25,\"metadata\":null}}}");
 
     // Frame expected
     let (payment_peer, amount) = (
@@ -954,7 +957,7 @@ async fn test_address_construction() {
     //
     // Assert
     //
-    let expected = "\"ca0abdcd2826a77218af0914601ee34c7ff44127aab9d0671267b25a7d36946a\"";
+    let expected = "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"address_construction\",\"content\":\"ca0abdcd2826a77218af0914601ee34c7ff44127aab9d0671267b25a7d36946a\"}";
 
     assert_eq!((res1.status(), res1.headers().clone()), success_json());
     assert_eq!(res1.body(), expected);
@@ -963,7 +966,7 @@ async fn test_address_construction() {
     assert_eq!(res2.body(), expected);
 
     assert_eq!((res3.status(), res3.headers().clone()), success_json());
-    assert_eq!(res3.body(), "\"56d5b6da467e6c588966967ef5405dd2\"");
+    assert_eq!(res3.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"address_construction\",\"content\":\"56d5b6da467e6c588966967ef5405dd2\"}");
 }
 
 /// Test POST make ip payment with correct address
@@ -996,7 +999,7 @@ async fn test_post_request_donation() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "\"Donation processing\"");
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"request_donation\",\"content\":\"null\"}");
 
     // Frame expected
     let expected_frame = user_api_request_as_frame(UserApiRequest::RequestDonation { paying_peer });
@@ -1035,7 +1038,7 @@ async fn test_post_import_keypairs_success() {
     assert_eq!(wallet_addresses_before, Vec::<String>::new());
     assert_eq!(wallet_addresses_after, vec![COMMON_ADDR_STORE.0]);
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "\"Key/s saved successfully\"");
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"import_keypairs\",\"content\":[\"4348536e3d5a13e347262b5023963edf\"]}");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1071,7 +1074,7 @@ async fn test_post_fetch_balance() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"total\":{\"tokens\":25200,\"receipts\":0},\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":25200}}]}}"
+        "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"fetch_balance\",\"content\":{\"total\":{\"tokens\":25200,\"receipts\":0},\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":25200}}]}}}"
     );
 }
 
@@ -1108,7 +1111,7 @@ async fn test_post_fetch_pending() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"pending_transactions\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g274712ea22292d1a60446dc93566e96\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":null},{\"value\":{\"Receipt\":1},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":2,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}},\"g7f6fdc695f1127b466c39f049179aae\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":2,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Receipt\":1}}]}}}}}}");
+        "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"fetch_pending\",\"content\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g274712ea22292d1a60446dc93566e96\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":null},{\"value\":{\"Receipt\":1},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":2,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}},\"g7f6fdc695f1127b466c39f049179aae\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":2,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Receipt\":1}}]}}}}}}");
 }
 
 /// Test POST update running total successful
@@ -1142,7 +1145,7 @@ async fn test_post_update_running_total() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "\"Running total updated\"");
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"update_running_total\",\"content\":\"null\"}");
 
     // Expected Frame
     let expected_frame =
@@ -1175,7 +1178,7 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     //
     // Arrange
     //
-    let (mut self_node, self_socket) = new_self_node(NodeType::Compute).await;
+    let compute = ComputeTest::new(Vec::new());
 
     let previous_out = OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0);
     let signable_data = construct_tx_in_signable_hash(&previous_out);
@@ -1194,7 +1197,13 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
                 address_version,
             }),
         }],
-        outputs: vec![],
+        outputs: vec![TxOut {
+            value: Asset::Token(TokenAmount(1)),
+            script_public_key: Some(COMMON_ADDRS[0].to_owned()),
+            drs_block_hash: None,
+            drs_tx_hash: None,
+            locktime: 0,
+        }],
         version: 1,
         druid_info: None,
     }];
@@ -1202,41 +1211,24 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     let request = warp::test::request()
         .method("POST")
         .path("/create_transactions")
-        .remote_addr(self_socket)
         .header("Content-Type", "application/json")
         .json(&json_body.clone());
 
     //
     // Act
     //
-    let filter = routes::create_transactions(&mut dp(), self_node.clone());
+    let filter = routes::create_transactions(&mut dp(), compute.threaded_calls.tx.clone());
+    let handle = compute.spawn();
     let res = request.reply(&filter).await;
+    let _compute = handle.await.unwrap();
 
     //
     // Assert
     //
     assert_eq!(
         ((res.status(), res.headers().clone()), from_utf8(res.body())),
-        (success_json(), "\"Creating Transactions\"")
+        (success_json(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"create_transactions\",\"content\":{\"0008536e3d5a13e347262b5023963000\":{\"asset\":\"token\",\"amount\":1,\"metadata\":null}}}")
     );
-
-    // Expected Frame
-    let expected_frame = compute_api_request_as_frame(ComputeApiRequest::SendTransactions {
-        transactions: vec![Transaction {
-            inputs: construct_payment_tx_ins(vec![TxConstructor {
-                previous_out,
-                signatures: vec![raw_signature],
-                pub_keys: vec![decode_pub_key(COMMON_PUB_KEY).unwrap()],
-                address_version,
-            }]),
-            outputs: vec![],
-            version: 1,
-            druid_info: None,
-        }],
-    });
-
-    let actual_frame = next_event_frame(&mut self_node).await;
-    assert_eq!(expected_frame, actual_frame);
 }
 
 /// Test POST create receipt asset on compute node successfully
@@ -1247,7 +1239,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
     //
     // Arrange
     //
-    let (mut self_node, self_socket) = new_self_node(NodeType::Compute).await;
+    let compute = ComputeTest::new(Vec::new());
 
     let asset_hash = construct_tx_in_signable_asset_hash(&Asset::Receipt(1));
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
@@ -1263,33 +1255,22 @@ async fn test_post_create_receipt_asset_tx_compute() {
     let request = warp::test::request()
         .method("POST")
         .path("/create_receipt_asset")
-        .remote_addr(self_socket)
         .header("Content-Type", "application/json")
         .json(&json_body.clone());
 
     //
     // Act
     //
-    let filter = routes::create_receipt_asset(&mut dp(), self_node.clone());
+    let filter = routes::create_receipt_asset(&mut dp(), compute.threaded_calls.tx.clone());
+    let handle = compute.spawn();
     let res = request.reply(&filter).await;
+    let _compute = handle.await.unwrap();
 
     //
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "\"Creating receipt asset\"");
-
-    // Expected Frame
-    let expected_frame =
-        compute_api_request_as_frame(ComputeApiRequest::SendCreateReceiptRequest {
-            receipt_amount: json_body.receipt_amount,
-            script_public_key: json_body.script_public_key.unwrap(),
-            public_key: json_body.public_key.unwrap(),
-            signature: json_body.signature.unwrap(),
-        });
-
-    let actual_frame = next_event_frame(&mut self_node).await;
-    assert_eq!(expected_frame, actual_frame);
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"create_receipt_asset\",\"content\":{\"asset\":\"receipt\",\"amount\":1,\"to_address\":\"13bd3351b78beb2d0dadf2058dcc926c\"}}");
 }
 
 /// Test POST create receipt asset on user node successfully
@@ -1302,12 +1283,7 @@ async fn test_post_create_receipt_asset_tx_user() {
     //
     let (mut self_node, self_socket) = new_self_node(NodeType::User).await;
 
-    let json_body = CreateReceiptAssetData {
-        receipt_amount: 1,
-        script_public_key: None,
-        public_key: None,
-        signature: None,
-    };
+    let json_body = CreateReceiptAssetDataUser { receipt_amount: 1 };
 
     let request = warp::test::request()
         .method("POST")
@@ -1319,14 +1295,14 @@ async fn test_post_create_receipt_asset_tx_user() {
     //
     // Act
     //
-    let filter = routes::create_receipt_asset(&mut dp(), self_node.clone());
+    let filter = routes::create_receipt_asset_user(&mut dp(), self_node.clone());
     let res = request.reply(&filter).await;
 
     //
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "\"Creating receipt asset\"");
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"create_receipt_asset\",\"content\":1}");
 
     // Expected Frame
     let expected_frame = user_api_request_as_frame(UserApiRequest::SendCreateReceiptRequest {
@@ -1345,7 +1321,7 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     //
     // Arrange
     //
-    let (self_node, self_socket) = new_self_node(NodeType::Compute).await;
+    let compute = ComputeTest::new(Vec::new());
 
     let json_body = CreateReceiptAssetData {
         receipt_amount: 1,
@@ -1358,59 +1334,20 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     let request = warp::test::request()
         .method("POST")
         .path("/create_receipt_asset")
-        .remote_addr(self_socket)
         .header("Content-Type", "application/json")
         .json(&json_body.clone());
 
     //
     // Act
     //
-    let filter = routes::create_receipt_asset(&mut dp(), self_node.clone());
+    let filter = routes::create_receipt_asset(&mut dp(), compute.threaded_calls.tx.clone());
     let res = request.reply(&filter).await;
 
     //
     // Assert
     //
-    assert_eq!((res.status(), res.headers().clone()), fail_plain(500));
-    assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidJSONStructure");
-}
-
-/// Test POST create receipt asset on user node failure
-#[tokio::test(flavor = "current_thread")]
-async fn test_post_create_receipt_asset_tx_user_failure() {
-    let _ = tracing_log_try_init();
-
-    //
-    // Arrange
-    //
-    let (self_node, self_socket) = new_self_node(NodeType::User).await;
-
-    let json_body = CreateReceiptAssetData {
-        receipt_amount: 1,
-        // These fields should be empty for user node
-        script_public_key: Some(String::new()),
-        public_key: Some(String::new()),
-        signature: Some(String::new()),
-    };
-
-    let request = warp::test::request()
-        .method("POST")
-        .path("/create_receipt_asset")
-        .remote_addr(self_socket)
-        .header("Content-Type", "application/json")
-        .json(&json_body.clone());
-
-    //
-    // Act
-    //
-    let filter = routes::create_receipt_asset(&mut dp(), self_node.clone());
-    let res = request.reply(&filter).await;
-
-    //
-    // Assert
-    //
-    assert_eq!((res.status(), res.headers().clone()), fail_plain(500));
-    assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidJSONStructure");
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Error\",\"reason\":\"Invalid JSON structure\",\"route\":\"create_receipt_asset\",\"content\":{\"asset\":\"receipt\",\"amount\":1,\"to_address\":\"\"}}");
 }
 
 /// Test POST change passphrase successfully
@@ -1453,7 +1390,7 @@ async fn test_post_change_passphrase() {
 
     assert!(matches!(actual, Ok(())), "{:?}", actual);
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "\"Passphrase changed successfully\"");
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"change_passphrase\",\"content\":\"null\"}");
 }
 
 /// Test POST change passphrase failure
@@ -1491,8 +1428,8 @@ async fn test_post_change_passphrase_failure() {
         "{:?}",
         actual
     );
-    assert_eq!((res.status(), res.headers().clone()), fail_plain(500));
-    assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidPassphrase");
+    assert_eq!((res.status(), res.headers().clone()), success_json()); // TODO: Convert to fail_plain
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Error\",\"reason\":\"Invalid passphrase\",\"route\":\"change_passphrase\",\"content\":\"null\"}");
 }
 
 /// Test POST fetch block hashes for blocks that contain given `tx_hashes`
@@ -1507,9 +1444,9 @@ async fn test_post_block_nums_by_tx_hashes() {
 
     let request = warp::test::request()
         .method("POST")
-        .path("/block_by_tx_hashes")
+        .path("/check_transaction_presence")
         .header("Content-Type", "application/json")
-        .json(&vec!["g98d0ab9304ca82f098a86ad6251803b"]);
+        .json(&vec!["g393e26d47ede87b84808c1a5664ea41"]);
 
     //
     // Act
@@ -1521,5 +1458,5 @@ async fn test_post_block_nums_by_tx_hashes() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "[0]");
+    assert_eq!(res.body(), "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"check_transaction_presence\",\"content\":[]}");
 }

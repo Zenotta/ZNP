@@ -2,6 +2,7 @@
 
 pub mod errors;
 pub mod handlers;
+pub mod responses;
 pub mod routes;
 #[cfg(test)]
 mod tests;

@@ -21,30 +21,66 @@ impl warp::reject::Reject for ErrorGeneric {}
 pub struct ErrorInvalidPassphrase;
 impl warp::reject::Reject for ErrorInvalidPassphrase {}
 
+impl std::fmt::Display for ErrorInvalidPassphrase {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Invalid passphrase")
+    }
+}
+
 /// API error struct for invalid HTTP body content
 #[derive(Debug)]
 pub struct ErrorInvalidJSONStructure;
 impl warp::reject::Reject for ErrorInvalidJSONStructure {}
+
+impl std::fmt::Display for ErrorInvalidJSONStructure {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Invalid JSON structure")
+    }
+}
 
 /// API error struct for inability to parse an IP address from a string
 #[derive(Debug)]
 pub struct ErrorCannotParseAddress;
 impl warp::reject::Reject for ErrorCannotParseAddress {}
 
+impl std::fmt::Display for ErrorCannotParseAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Cannot parse provided address")
+    }
+}
+
 /// API error struct for inability to access wallet
 #[derive(Debug)]
 pub struct ErrorCannotAccessWallet;
 impl warp::reject::Reject for ErrorCannotAccessWallet {}
+
+impl std::fmt::Display for ErrorCannotAccessWallet {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Cannot access wallet")
+    }
+}
 
 /// API error struct for inability to access user node
 #[derive(Debug)]
 pub struct ErrorCannotAccessUserNode;
 impl warp::reject::Reject for ErrorCannotAccessUserNode {}
 
+impl std::fmt::Display for ErrorCannotAccessUserNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Cannot access user node")
+    }
+}
+
 /// API error struct for inability to access compute node
 #[derive(Debug)]
 pub struct ErrorCannotAccessComputeNode;
 impl warp::reject::Reject for ErrorCannotAccessComputeNode {}
+
+impl std::fmt::Display for ErrorCannotAccessComputeNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Cannot access compute node")
+    }
+}
 
 /// API error struct for inability to access peer user node
 #[derive(Debug)]
@@ -56,10 +92,26 @@ impl warp::reject::Reject for ErrorCannotAccessPeerUserNode {}
 pub struct ErrorCannotSaveAddressesToWallet;
 impl warp::reject::Reject for ErrorCannotSaveAddressesToWallet {}
 
+#[derive(Debug)]
+pub struct ErrorCannotFetchBalance;
+impl warp::reject::Reject for ErrorCannotFetchBalance {}
+
+impl std::fmt::Display for ErrorCannotFetchBalance {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Cannot fetch balances")
+    }
+}
+
 /// API error struct for trying to access non-existent data
 #[derive(Debug)]
 pub struct ErrorNoDataFoundForKey;
 impl warp::reject::Reject for ErrorNoDataFoundForKey {}
+
+impl std::fmt::Display for ErrorNoDataFoundForKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Entry not found in blockchain")
+    }
+}
 
 /// API error for struct ambiguous code 500 internal errors.
 ///
@@ -67,6 +119,12 @@ impl warp::reject::Reject for ErrorNoDataFoundForKey {}
 #[derive(Debug)]
 pub struct InternalError;
 impl warp::reject::Reject for InternalError {}
+
+impl std::fmt::Display for InternalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Internal error")
+    }
+}
 
 /// API error for Unauthorized requests.
 #[derive(Debug)]
