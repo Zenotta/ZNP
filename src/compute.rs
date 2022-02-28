@@ -1399,7 +1399,7 @@ impl ComputeInterface for ComputeNode {
                     .iter()
                     .filter_map(|v| utxo_tracked_set.get_pk_cache_vec(v))
                     .flatten()
-                    .filter_map(|op| {
+                    .filter_map(|(_, op)| {
                         utxo_set
                             .get_key_value(op)
                             .map(|(k, v)| (k.clone(), v.clone()))
