@@ -5,8 +5,9 @@ use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTx
 use crate::constants::{NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
-    ComputeRequest, DruidPool, MinedBlock, MinedBlockExtraInfo, Response, StorageRequest,
-    StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet, WinningPoWInfo,
+    ComputeApi, ComputeRequest, DruidPool, MinedBlock, MinedBlockExtraInfo, Response,
+    StorageRequest, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
+    WinningPoWInfo,
 };
 use crate::miner::MinerNode;
 use crate::storage::{all_ordered_stored_block_tx_hashes, StorageNode};
@@ -15,6 +16,7 @@ use crate::test_utils::{
     generate_rb_transactions, get_test_tls_spec, node_join_all_checked, remove_all_node_dbs,
     Network, NetworkConfig, NodeType, RbReceiverData, RbSenderData,
 };
+use crate::tracked_utxo::TrackedUtxoBalance;
 use crate::user::UserNode;
 use crate::utils::{
     apply_mining_tx, calculate_reward, construct_valid_block_pow_hash,
@@ -2531,9 +2533,16 @@ pub async fn make_multiple_receipt_based_payments_raft_1_node() {
 
         infos.push(user_get_wallet_asset_totals_for_tx(&mut network, from, to).await);
     }
+    create_block_act_with(&mut network, Cfg::IgnoreStorage, CfgNum::All, 4).await;
 
     let all_wallet_assets_actual: Vec<_> = all_gathered_wallet_asset_info.into_iter().collect();
-    let all_wallet_assets_expected = vec![
+
+    let users_utxo_balance_actual = (
+        compute_get_utxo_balance_for_user(&mut network, "compute1", "user1").await,
+        compute_get_utxo_balance_for_user(&mut network, "compute1", "user2").await,
+    );
+
+    let all_assets_expected = vec![
         (
             ("user1", "user2"),
             vec![
@@ -2570,11 +2579,16 @@ pub async fn make_multiple_receipt_based_payments_raft_1_node() {
         ),
     ];
 
+    let users_utxo_balance_expected = (
+        AssetValues::new(TokenAmount(12), 5),
+        AssetValues::new(TokenAmount(10), 10),
+    );
+
     //
     // Assert
     //
-
-    assert_eq!(all_wallet_assets_actual, all_wallet_assets_expected);
+    assert_eq!(all_wallet_assets_actual, all_assets_expected);
+    assert_eq!(users_utxo_balance_actual, users_utxo_balance_expected);
 
     test_step_complete(network).await;
 }
@@ -3195,6 +3209,27 @@ async fn compute_local_druid_pool(
     c.get_local_druid_pool().clone()
 }
 
+async fn compute_get_utxo_balance_for_user(
+    network: &mut Network,
+    compute: &str,
+    user: &str,
+) -> AssetValues {
+    let addresses = user_get_all_known_addresses(network, user).await;
+    compute_get_utxo_balance_for_addresses(network, compute, addresses)
+        .await
+        .get_asset_values()
+}
+
+async fn compute_get_utxo_balance_for_addresses(
+    network: &mut Network,
+    compute: &str,
+    addresses: Vec<String>,
+) -> TrackedUtxoBalance {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_committed_utxo_tracked_set()
+        .get_balance_for_addresses(&addresses)
+}
+
 async fn compute_all_inject_next_event(
     network: &mut Network,
     from_group: &[String],
@@ -3666,6 +3701,11 @@ async fn user_get_received_utxo_set_keys(network: &mut Network, user: &str) -> V
 async fn user_update_running_total(network: &mut Network, user: &str) {
     let mut u = network.user(user).unwrap().lock().await;
     u.update_running_total().await;
+}
+
+async fn user_get_all_known_addresses(network: &mut Network, user: &str) -> Vec<String> {
+    let u = network.user(user).unwrap().lock().await;
+    u.get_wallet_db().get_known_addresses()
 }
 
 async fn user_trigger_update_wallet_from_utxo_set(

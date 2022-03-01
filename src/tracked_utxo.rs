@@ -13,6 +13,12 @@ pub struct TrackedUtxoBalance {
     address_list: AddressesWithOutPoints,
 }
 
+impl TrackedUtxoBalance {
+    pub fn get_asset_values(&self) -> AssetValues {
+        self.total
+    }
+}
+
 /// Invariant: `pk_cache` contains exactly all relevant mapping for `base`
 #[derive(Default, Clone, Debug)]
 pub struct TrackedUtxoSet {
@@ -51,20 +57,14 @@ impl TrackedUtxoSet {
 
     /// Remove base 'UtxoSet' and pk_cache entry concurrently
     pub fn remove_tracked_utxo_entry<'a>(&mut self, key: &'a OutPoint) -> Option<&'a OutPoint> {
-        self.base
-            .remove(key)?
-            .script_public_key
-            .map(|spk| {
-                if let Some(pk_cache_entry) = self.pk_cache.get_mut(&spk) {
-                    pk_cache_entry.retain(|op| op.t_hash != key.t_hash);
-                    if pk_cache_entry.is_empty() {
-                        self.pk_cache.remove(&spk);
-                    }
-                    return Some(key);
-                }
-                None
-            })
-            .flatten()
+        self.base.remove(key)?.script_public_key.and_then(|spk| {
+            let pk_cache_entry = self.pk_cache.get_mut(&spk)?;
+            pk_cache_entry.retain(|op| op.t_hash != key.t_hash);
+            if pk_cache_entry.is_empty() {
+                self.pk_cache.remove(&spk);
+            }
+            Some(key)
+        })
     }
 
     /// Calculates the balance of `OutPoint`s based on provided addresses
@@ -115,9 +115,7 @@ pub fn extend_pk_cache_vec<'a>(
     pk_cache: &mut HashMap<String, Vec<OutPoint>>,
     spk: impl Iterator<Item = (String, OutPoint)> + 'a,
 ) {
-    spk.for_each(|(spk, op)| {
-        pk_cache.entry(spk).or_default().push(op);
-    });
+    spk.for_each(|(spk, op)| pk_cache.entry(spk).or_default().push(op));
 }
 
 impl Deref for TrackedUtxoSet {
