@@ -480,6 +480,7 @@ pub fn user_node_routes(
     let routes = wallet_info(dp, db.clone())
         .or(make_payment(dp, db.clone(), node.clone()))
         .or(make_ip_payment(dp, db.clone(), node.clone()))
+        .or(request_donation(dp, node.clone()))
         .or(export_keypairs(dp, db.clone()))
         .or(import_keypairs(dp, db.clone()))
         .or(update_running_total(dp, node.clone()))

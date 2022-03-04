@@ -394,7 +394,7 @@ async fn test_get_user_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13000\",\"127.0.0.1:13000\",\"Compute\"]]}}";
+    let expected_string = "{\"id\":\"\",\"status\":\"Success\",\"reason\":\"null\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13000\",\"127.0.0.1:13000\",\"Compute\"]]}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
