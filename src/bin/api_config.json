@@ -1,5 +1,8 @@
 {
     "api_keys": [
         "any_key"
-    ]
+    ],
+    "routes_pow": {
+        "create_transactions": 2
+    }
 }

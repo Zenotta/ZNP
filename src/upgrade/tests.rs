@@ -434,7 +434,7 @@ async fn upgrade_restart_network_common(
             actual_count.push(count);
             actual_last_bnum.push(last_bnum);
 
-            let (db, _, _, _) = storage.api_inputs();
+            let (db, _, _, _, _) = storage.api_inputs();
             let db = db.lock().unwrap();
             info!(
                 "dump_db {}: count:{} b_num:{:?}, \n{}",
@@ -664,6 +664,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         user_auto_donate: 0,
         user_test_auto_gen_setup: Default::default(),
         tls_config: get_test_tls_spec(),
+        routes_pow: Default::default(),
     }
     .with_groups(1, 1)
 }

@@ -7,8 +7,9 @@ use crate::interfaces::{
 };
 use crate::utils::{
     self, apply_mining_tx, format_parition_pow_address, generate_pow_for_block,
-    get_paiments_for_wallet, to_api_keys, ApiKeys, DeserializedBlockchainItem, LocalEvent,
-    LocalEventChannel, LocalEventSender, ResponseResult, RunningTaskOrResult,
+    get_paiments_for_wallet, to_api_keys, to_route_pow_infos, ApiKeys, DeserializedBlockchainItem,
+    LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
+    RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
@@ -128,7 +129,7 @@ pub struct MinerNode {
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, SocketAddr)>,
     mining_block_task: RunningTaskOrResult<BlockPoWInfo>,
     blockchain_item_received: Option<(String, BlockchainItem, SocketAddr)>,
-    api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys),
+    api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, RoutesPoWInfo),
 }
 
 impl MinerNode {
@@ -167,6 +168,7 @@ impl MinerNode {
             .then(|| tcp_tls_config.clone_private_info());
         let api_keys = to_api_keys(config.api_keys.clone());
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Miner).await?;
+        let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
 
         Ok(MinerNode {
             node,
@@ -182,7 +184,7 @@ impl MinerNode {
             mining_partition_task: Default::default(),
             mining_block_task: Default::default(),
             blockchain_item_received: Default::default(),
-            api_info: (api_addr, api_tls_info, api_keys),
+            api_info: (api_addr, api_tls_info, api_keys, api_pow_info),
         }
         .load_local_db()
         .await?)
@@ -198,8 +200,9 @@ impl MinerNode {
         Option<TlsPrivateInfo>,
         ApiKeys,
         CurrentBlockWithMutex,
+        RoutesPoWInfo,
     ) {
-        let (api_addr, api_tls_info, api_keys) = self.api_info.clone();
+        let (api_addr, api_tls_info, api_keys, api_pow_info) = self.api_info.clone();
         (
             self.wallet_db.clone(),
             self.node.clone(),
@@ -207,6 +210,7 @@ impl MinerNode {
             api_tls_info,
             api_keys,
             self.current_block.clone(),
+            api_pow_info,
         )
     }
 

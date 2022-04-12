@@ -89,6 +89,7 @@ pub struct NetworkConfig {
     pub user_auto_donate: u64,
     pub user_test_auto_gen_setup: UserAutoGenTxSetup,
     pub tls_config: TestTlsSpec,
+    pub routes_pow: BTreeMap<String, usize>,
 }
 
 /// Node info to create node
@@ -1034,6 +1035,7 @@ async fn init_miner(
         passphrase: config.passphrase.clone(),
         miner_api_port: 3004,
         miner_api_use_tls: true,
+        routes_pow: config.routes_pow.clone(),
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);
@@ -1072,6 +1074,7 @@ async fn init_storage(
         storage_api_use_tls: true,
         storage_raft_tick_timeout: 200 / config.test_duration_divider,
         storage_catchup_duration: 2000 / config.test_duration_divider,
+        routes_pow: Default::default(),
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Storage {}", info);
@@ -1118,6 +1121,7 @@ async fn init_compute(
         sanction_list: Vec::new(),
         compute_api_port: 3002,
         compute_api_use_tls: true,
+        routes_pow: Default::default(),
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Compute {}", info);
@@ -1158,6 +1162,7 @@ async fn init_user(
         passphrase: config.passphrase.clone(),
         user_auto_donate: config.user_auto_donate,
         user_test_auto_gen_setup: config.user_test_auto_gen_setup.clone(),
+        routes_pow: Default::default(),
     };
 
     let info = format!("{} -> {}", name, node_info.node_spec.address);

@@ -1,132 +1,72 @@
-/// Generic error
-#[derive(Debug)]
-pub struct ErrorGeneric {
-    pub name: &'static str,
+use warp::hyper::StatusCode;
+
+#[derive(Debug, Clone)]
+pub struct ApiError {
+    pub code: StatusCode,
+    pub message: ApiErrorType,
+    pub id: String,
+    pub route: String,
 }
-impl ErrorGeneric {
-    pub fn new(name: &'static str) -> Self {
-        ErrorGeneric { name }
+#[derive(Debug, Clone)]
+pub enum ApiErrorType {
+    Generic(String),
+    InvalidPassphrase,
+    InvalidRequestBody,
+    CannotParseAddress,
+    CannotAccessWallet,
+    CannotAccessUserNode,
+    CannotAccessComputeNode,
+    CannotAccessPeerUserNode,
+    CannotSaveAddressesToWallet,
+    CannotFetchBalance,
+    NoDataFoundForKey,
+    InternalError,
+    Unauthorized,
+    MethodNotFound,
+    MethodNotAllowed,
+    BadRequest,
+}
+
+impl ApiError {
+    pub fn new(code: StatusCode, message: ApiErrorType, id: String, route: String) -> Self {
+        ApiError {
+            code,
+            message,
+            id,
+            route,
+        }
     }
 }
-impl ::std::fmt::Display for ErrorGeneric {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-        write!(f, "Generic error: {:?}", self.name)
-    }
-}
-impl ::std::error::Error for ErrorGeneric {}
-impl warp::reject::Reject for ErrorGeneric {}
 
-/// API error struct for invalid passphrase entered
-#[derive(Debug)]
-pub struct ErrorInvalidPassphrase;
-impl warp::reject::Reject for ErrorInvalidPassphrase {}
-
-impl std::fmt::Display for ErrorInvalidPassphrase {
+impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Invalid passphrase")
+        write!(f, "{}", self.message)
     }
 }
 
-/// API error struct for invalid HTTP body content
-#[derive(Debug)]
-pub struct ErrorInvalidJSONStructure;
-impl warp::reject::Reject for ErrorInvalidJSONStructure {}
+impl warp::reject::Reject for ApiError {}
 
-impl std::fmt::Display for ErrorInvalidJSONStructure {
+impl std::fmt::Display for ApiErrorType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Invalid JSON structure")
+        match &self {
+            ApiErrorType::Generic(message) => write!(f, "Generic error: {}", message),
+            ApiErrorType::InvalidPassphrase => write!(f, "Invalid passphrase"),
+            ApiErrorType::InvalidRequestBody => write!(f, "Invalid request body"),
+            ApiErrorType::CannotParseAddress => write!(f, "Cannot parse address"),
+            ApiErrorType::CannotAccessWallet => write!(f, "Cannot access wallet"),
+            ApiErrorType::CannotAccessUserNode => write!(f, "Cannot access user node"),
+            ApiErrorType::CannotAccessComputeNode => write!(f, "Cannot access compute node"),
+            ApiErrorType::CannotAccessPeerUserNode => write!(f, "Cannot access peer user node"),
+            ApiErrorType::CannotSaveAddressesToWallet => {
+                write!(f, "Cannot save address to wallet")
+            }
+            ApiErrorType::CannotFetchBalance => write!(f, "Cannot fetch balance"),
+            ApiErrorType::NoDataFoundForKey => write!(f, "No data found for key"),
+            ApiErrorType::InternalError => write!(f, "Internal Error"),
+            ApiErrorType::Unauthorized => write!(f, "Unauthorized"),
+            ApiErrorType::MethodNotFound => write!(f, "Method not found"),
+            ApiErrorType::MethodNotAllowed => write!(f, "Method not allowed"),
+            ApiErrorType::BadRequest => write!(f, "Bad request"),
+        }
     }
 }
-
-/// API error struct for inability to parse an IP address from a string
-#[derive(Debug)]
-pub struct ErrorCannotParseAddress;
-impl warp::reject::Reject for ErrorCannotParseAddress {}
-
-impl std::fmt::Display for ErrorCannotParseAddress {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Cannot parse provided address")
-    }
-}
-
-/// API error struct for inability to access wallet
-#[derive(Debug)]
-pub struct ErrorCannotAccessWallet;
-impl warp::reject::Reject for ErrorCannotAccessWallet {}
-
-impl std::fmt::Display for ErrorCannotAccessWallet {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Cannot access wallet")
-    }
-}
-
-/// API error struct for inability to access user node
-#[derive(Debug)]
-pub struct ErrorCannotAccessUserNode;
-impl warp::reject::Reject for ErrorCannotAccessUserNode {}
-
-impl std::fmt::Display for ErrorCannotAccessUserNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Cannot access user node")
-    }
-}
-
-/// API error struct for inability to access compute node
-#[derive(Debug)]
-pub struct ErrorCannotAccessComputeNode;
-impl warp::reject::Reject for ErrorCannotAccessComputeNode {}
-
-impl std::fmt::Display for ErrorCannotAccessComputeNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Cannot access compute node")
-    }
-}
-
-/// API error struct for inability to access peer user node
-#[derive(Debug)]
-pub struct ErrorCannotAccessPeerUserNode;
-impl warp::reject::Reject for ErrorCannotAccessPeerUserNode {}
-
-/// API error struct for inability to save addresses to wallet
-#[derive(Debug)]
-pub struct ErrorCannotSaveAddressesToWallet;
-impl warp::reject::Reject for ErrorCannotSaveAddressesToWallet {}
-
-#[derive(Debug)]
-pub struct ErrorCannotFetchBalance;
-impl warp::reject::Reject for ErrorCannotFetchBalance {}
-
-impl std::fmt::Display for ErrorCannotFetchBalance {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Cannot fetch balances")
-    }
-}
-
-/// API error struct for trying to access non-existent data
-#[derive(Debug)]
-pub struct ErrorNoDataFoundForKey;
-impl warp::reject::Reject for ErrorNoDataFoundForKey {}
-
-impl std::fmt::Display for ErrorNoDataFoundForKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Entry not found in blockchain")
-    }
-}
-
-/// API error for struct ambiguous code 500 internal errors.
-///
-/// TODO: Decide how much information on the internal error should be displayed to the client
-#[derive(Debug)]
-pub struct InternalError;
-impl warp::reject::Reject for InternalError {}
-
-impl std::fmt::Display for InternalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Internal error")
-    }
-}
-
-/// API error for Unauthorized requests.
-#[derive(Debug)]
-pub struct Unauthorized;
-impl warp::reject::Reject for Unauthorized {}

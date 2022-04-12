@@ -78,7 +78,7 @@ struct PreLaunchNodeConfigSelected {
     pub pre_launch_nodes: Vec<NodeSpec>,
     /// Db spec
     pub db_spec: SimpleDbSpec,
-    /// Raft db sepc
+    /// Raft db spec
     pub raft_db_spec: SimpleDbSpec,
 }
 
@@ -284,8 +284,8 @@ impl PreLaunchNode {
         exit: &mut E,
     ) -> Option<Result<Response>> {
         loop {
-            // State machines are not keept between iterations or calls.
-            // All selection calls (between = and =>), need to be dropable
+            // State machines are not kept between iterations or calls.
+            // All selection calls (between = and =>), need to be droppable
             // i.e they should only await a channel.
             tokio::select! {
                 event = self.node.next_event() => {
@@ -344,7 +344,7 @@ impl PreLaunchNode {
         }
     }
 
-    /// Hanldes a new incoming message from a peer.
+    /// Handles a new incoming message from a peer.
     ///
     /// ### Arguments
     ///
@@ -405,7 +405,7 @@ impl PreLaunchNode {
                 .iter()
                 .map(|v| (v.column.as_ref(), v.key.as_ref(), v.data.as_ref())),
         ) {
-            error!("Received invalid itesm: {:?}", e);
+            error!("Received invalid item: {:?}", e);
             return Some(Response {
                 success: false,
                 reason: "Received Invalid Db Items",

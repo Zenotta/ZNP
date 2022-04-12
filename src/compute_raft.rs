@@ -1580,6 +1580,7 @@ mod test {
             sanction_list: Vec::new(),
             compute_api_use_tls: true,
             compute_api_port: 3003,
+            routes_pow: Default::default(),
         };
         let mut node = ComputeRaft::new(&compute_config, Default::default()).await;
         node.set_key_run(0);

@@ -14,8 +14,8 @@ use crate::raft::RaftCommit;
 use crate::storage_fetch::{FetchStatus, FetchedBlockChain, StorageFetch};
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::{
-    construct_valid_block_pow_hash, get_genesis_tx_in_display, to_api_keys, ApiKeys, LocalEvent,
-    LocalEventChannel, LocalEventSender, ResponseResult,
+    construct_valid_block_pow_hash, get_genesis_tx_in_display, to_api_keys, to_route_pow_infos,
+    ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -127,7 +127,7 @@ pub struct StorageNode {
     db: Arc<Mutex<SimpleDb>>,
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
-    api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys),
+    api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, RoutesPoWInfo),
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
     blockchain_item_fetched: Option<(String, BlockchainItem, SocketAddr)>,
@@ -163,6 +163,7 @@ impl StorageNode {
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
         let catchup_fetch = StorageFetch::new(&config, addr);
+        let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
 
         let db = {
             let raw_db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take());
@@ -180,7 +181,7 @@ impl StorageNode {
             node_raft,
             catchup_fetch,
             db,
-            api_info: (api_addr, api_tls_info, api_keys),
+            api_info: (api_addr, api_tls_info, api_keys, api_pow_info),
             local_events: Default::default(),
             compute_addr,
             whitelisted: Default::default(),
@@ -203,9 +204,10 @@ impl StorageNode {
         SocketAddr,
         Option<TlsPrivateInfo>,
         ApiKeys,
+        RoutesPoWInfo,
     ) {
-        let (api_addr, api_tls, api_keys) = self.api_info.clone();
-        (self.db.clone(), api_addr, api_tls, api_keys)
+        let (api_addr, api_tls, api_keys, api_pow_info) = self.api_info.clone();
+        (self.db.clone(), api_addr, api_tls, api_keys, api_pow_info)
     }
 
     ///Adds a uses data as the payload to create a frame, from the peer address, in the node object of this class.

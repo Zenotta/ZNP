@@ -48,7 +48,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     // Warp API
     let warp_handle = tokio::spawn({
-        let (db, api_addr, api_tls, api_keys) = api_inputs;
+        let (db, api_addr, api_tls, api_keys, api_pow_info) = api_inputs;
 
         println!("Warp API started on port {:?}", api_addr.port());
         println!();
@@ -58,7 +58,12 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         let node_conn_debug = node_conn.clone();
 
         async move {
-            let serve = warp::serve(routes::storage_node_routes(api_keys, db, node_conn_debug));
+            let serve = warp::serve(routes::storage_node_routes(
+                api_keys,
+                api_pow_info,
+                db,
+                node_conn_debug,
+            ));
             if let Some(api_tls) = api_tls {
                 serve
                     .tls()
@@ -180,6 +185,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings.set_default("storage_raft", 0).unwrap();
     settings.set_default("storage_api_port", 3001).unwrap();
     settings.set_default("storage_api_use_tls", true).unwrap();
+
     settings
         .set_default("storage_raft_tick_timeout", 10)
         .unwrap();
