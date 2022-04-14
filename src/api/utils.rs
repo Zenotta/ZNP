@@ -46,16 +46,12 @@ pub fn map_api_res(
     r.map_ok_or_else(Ok, Ok)
 }
 
-// Extract x-request-id header from a request
-pub fn extract_id() -> impl Filter<Extract = (String,), Error = Rejection> + Copy {
-    warp::header::<String>("x-request-id")
-}
-
 // Authorizes a request based on API keys as well as PoW requirements for the route
+// Successfull authorization will extract the x-request-id header value
 pub fn auth_request(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
-) -> impl Filter<Extract = (), Error = Rejection> + Clone {
+) -> impl Filter<Extract = (String,), Error = Rejection> + Clone {
     warp::path::full()
         .and(warp::header::headers_cloned())
         .and_then(move |path: FullPath, headers: HeaderMap| {
@@ -109,10 +105,9 @@ pub fn auth_request(
                 }
 
                 // No PoW required
-                Ok(())
+                Ok(id.to_owned())
             }
         })
-        .untuple_one()
         .or_else(move |err| async move { Err(err) })
 }
 

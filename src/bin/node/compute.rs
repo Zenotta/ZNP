@@ -63,8 +63,8 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
         async move {
             let serve = warp::serve(routes::compute_node_routes(
-                routes_pow,
                 api_keys,
+                routes_pow,
                 threaded_calls_tx,
                 peer,
             ));

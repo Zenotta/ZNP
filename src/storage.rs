@@ -176,7 +176,7 @@ impl StorageNode {
             raft_peers.chain(compute).collect()
         };
 
-        Ok(StorageNode {
+        StorageNode {
             node,
             node_raft,
             catchup_fetch,
@@ -188,7 +188,7 @@ impl StorageNode {
             shutdown_group,
             blockchain_item_fetched: Default::default(),
         }
-        .load_local_db()?)
+        .load_local_db()
     }
 
     /// Returns the storage node's public endpoint.

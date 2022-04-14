@@ -230,7 +230,7 @@ impl Node {
 
         let tcp_tls_connector = TcpTlsConnector::new(config)?;
 
-        Ok(Self {
+        Self {
             network_version,
             listener_address,
             listener_stop_and_join_handles: Arc::new(Mutex::new(None)),
@@ -246,7 +246,7 @@ impl Node {
             connect_to_handshake_contacts: false,
         }
         .listen(listener)
-        .await?)
+        .await
     }
 
     fn is_compatible(&self, node_type: NodeType, network_version: u32) -> bool {

@@ -171,7 +171,7 @@ impl ComputeNode {
         let api_keys = to_api_keys(config.api_keys.clone());
         let api_info = (api_addr, api_tls_info, api_keys, api_pow_info, node.clone());
 
-        Ok(ComputeNode {
+        ComputeNode {
             node,
             node_raft,
             db,
@@ -192,7 +192,7 @@ impl ComputeNode {
             api_info,
             fetched_utxo_set: None,
         }
-        .load_local_db()?)
+        .load_local_db()
     }
 
     /// Returns the compute node's public endpoint.

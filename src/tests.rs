@@ -2769,7 +2769,7 @@ fn node_all<T: Clone>(nodes: &[String], value: T) -> Vec<T> {
 
 fn node_select(nodes: &[String], cfg_num: CfgNum) -> Vec<String> {
     let len = node_select_len(nodes, cfg_num);
-    nodes.iter().cloned().take(len).collect()
+    nodes.iter().take(len).cloned().collect()
 }
 
 fn node_combined_select(

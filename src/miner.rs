@@ -170,7 +170,7 @@ impl MinerNode {
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Miner).await?;
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
 
-        Ok(MinerNode {
+        MinerNode {
             node,
             local_events: Default::default(),
             wallet_db,
@@ -187,7 +187,7 @@ impl MinerNode {
             api_info: (api_addr, api_tls_info, api_keys, api_pow_info),
         }
         .load_local_db()
-        .await?)
+        .await
     }
 
     /// Info needed to run the API point.
