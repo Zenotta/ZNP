@@ -2769,7 +2769,7 @@ fn node_all<T: Clone>(nodes: &[String], value: T) -> Vec<T> {
 
 fn node_select(nodes: &[String], cfg_num: CfgNum) -> Vec<String> {
     let len = node_select_len(nodes, cfg_num);
-    nodes.iter().cloned().take(len).collect()
+    nodes.iter().take(len).cloned().collect()
 }
 
 fn node_combined_select(
@@ -4180,6 +4180,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         user_auto_donate: 0,
         user_test_auto_gen_setup: Default::default(),
         tls_config: Default::default(),
+        routes_pow: Default::default(),
     }
 }
 

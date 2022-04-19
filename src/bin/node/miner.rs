@@ -131,8 +131,8 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
             // User / Miner combined warp API
             let warp_handle = tokio::spawn({
                 let (
-                    (db, user_node, api_addr, api_tls, api_keys),
-                    (_, miner_node, _, _, _, current_block),
+                    (db, user_node, api_addr, api_tls, api_keys, api_pow_info),
+                    (_, miner_node, _, _, _, current_block, _),
                 ) = api_inputs;
 
                 println!("Warp API started on port {:?}", api_addr.port());
@@ -144,6 +144,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                 async move {
                     let serve = warp::serve(routes::miner_node_with_user_routes(
                         api_keys,
+                        api_pow_info,
                         current_block,
                         db,
                         miner_node,
@@ -183,7 +184,8 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         None => {
             // Miner warp API
             let warp_handle = tokio::spawn({
-                let (db, miner_node, api_addr, api_tls, api_keys, current_block) = miner_api_inputs;
+                let (db, miner_node, api_addr, api_tls, api_keys, current_block, api_pow_info) =
+                    miner_api_inputs;
 
                 println!("Warp API started on port {:?}", api_addr.port());
                 println!();
@@ -194,6 +196,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                 async move {
                     let serve = warp::serve(routes::miner_node_routes(
                         api_keys,
+                        api_pow_info,
                         current_block,
                         db,
                         miner_node,
@@ -362,6 +365,7 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
     settings.set_default("user_compute_node_idx", 0).unwrap();
     settings.set_default("peer_user_node_idx", 0).unwrap();
     settings.set_default("user_auto_donate", 0).unwrap();
+
     settings
         .set_default(
             "user_test_auto_gen_setup",

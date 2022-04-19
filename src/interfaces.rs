@@ -669,12 +669,15 @@ impl fmt::Debug for UserRequest {
     }
 }
 ///============ PRE-LAUNCH NODE ============///
-///
+
+/// API Debug Data Struct
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DebugData {
     pub node_type: String,
-    pub node_api: Vec<String>,
+    #[serde(borrow)]
+    pub node_api: Vec<&'static str>,
     pub node_peers: Vec<(String, SocketAddr, String)>,
+    pub routes_pow: BTreeMap<String, usize>,
 }
 
 /// Encapsulates storage requests

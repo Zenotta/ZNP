@@ -52,7 +52,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     // Warp API
     let warp_handle = tokio::spawn({
-        let (api_addr, api_tls, api_keys, peer) = api_inputs;
+        let (api_addr, api_tls, api_keys, routes_pow, peer) = api_inputs;
         let threaded_calls_tx = threaded_calls_tx;
 
         println!("Warp API started on port {:?}", api_addr.port());
@@ -64,6 +64,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         async move {
             let serve = warp::serve(routes::compute_node_routes(
                 api_keys,
+                routes_pow,
                 threaded_calls_tx,
                 peer,
             ));
@@ -199,6 +200,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings.set_default("jurisdiction", "US").unwrap();
     settings.set_default("compute_node_idx", 0).unwrap();
     settings.set_default("compute_raft", 0).unwrap();
+
     settings
         .set_default("compute_raft_tick_timeout", 10)
         .unwrap();

@@ -78,7 +78,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     // Warp API
     let warp_handle = tokio::spawn({
-        let (db, node, api_addr, api_tls, api_keys) = api_inputs;
+        let (db, node, api_addr, api_tls, api_keys, api_pow_info) = api_inputs;
 
         println!("Warp API started on port {:?}", api_addr.port());
         println!();
@@ -87,7 +87,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         bind_address.set_port(api_addr.port());
 
         async move {
-            let serve = warp::serve(routes::user_node_routes(api_keys, db, node));
+            let serve = warp::serve(routes::user_node_routes(api_keys, api_pow_info, db, node));
             if let Some(api_tls) = api_tls {
                 serve
                     .tls()
@@ -238,6 +238,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings.set_default("user_compute_node_idx", 0).unwrap();
     settings.set_default("peer_user_node_idx", 0).unwrap();
     settings.set_default("user_auto_donate", 0).unwrap();
+
     settings
         .set_default(
             "user_test_auto_gen_setup",

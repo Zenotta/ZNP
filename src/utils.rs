@@ -36,6 +36,7 @@ use tokio::task;
 use tokio::time::Instant;
 use tracing::{trace, warn};
 
+pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
 pub type ApiKeys = Arc<Mutex<HashSet<String>>>;
 pub type LocalEventSender = MpscTracingSender<LocalEvent>;
 pub type LocalEventReceiver = mpsc::Receiver<LocalEvent>;
@@ -494,14 +495,24 @@ fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
 ///
 /// ### Arguments
 ///
-/// * `pow`    - &u8 proof of work
-fn validate_pow(pow: &[u8]) -> Option<Vec<u8>> {
+/// * `mining_difficulty`    - usize mining difficulty
+/// * `pow`                  - &u8 proof of work
+pub fn validate_pow_for_diff(mining_difficulty: usize, pow: &[u8]) -> Option<Vec<u8>> {
     let pow_hash = sha3_256::digest(pow).to_vec();
-    if pow_hash[0..MINING_DIFFICULTY].iter().all(|v| *v == 0) {
+    if pow_hash[0..mining_difficulty].iter().all(|v| *v == 0) {
         Some(pow_hash)
     } else {
         None
     }
+}
+
+/// Check the hash of given data reach MINING_DIFFICULTY
+///
+/// ### Arguments
+///
+/// * `pow`    - &u8 proof of work
+fn validate_pow(pow: &[u8]) -> Option<Vec<u8>> {
+    validate_pow_for_diff(MINING_DIFFICULTY, pow)
 }
 
 /// Get the paiment info from the given transactions
@@ -1011,6 +1022,11 @@ pub fn create_receipt_asset_tx_from_sig(
 /// Confert to ApiKeys data structure
 pub fn to_api_keys(api_keys: Vec<String>) -> ApiKeys {
     Arc::new(Mutex::new(api_keys.into_iter().collect()))
+}
+
+/// Confert to ApiKeys data structure
+pub fn to_route_pow_infos(route_pow_infos: BTreeMap<String, usize>) -> RoutesPoWInfo {
+    Arc::new(Mutex::new(route_pow_infos.into_iter().collect()))
 }
 
 /// Check to see if DDE transaction participants match

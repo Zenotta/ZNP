@@ -1,17 +1,37 @@
+use crate::api::errors::ApiErrorType;
 use naom::primitives::asset::Asset;
 use serde::Serialize;
+use warp::hyper::StatusCode;
 
 /*------- JSON HANDLING --------*/
 
 /// A JSON formatted reply.
 #[derive(Debug, Clone)]
-pub struct JsonReply(Vec<u8>);
+pub struct JsonReply {
+    data: Vec<u8>,
+    status_code: StatusCode,
+}
+
+impl JsonReply {
+    pub fn new(data: Vec<u8>) -> Self {
+        JsonReply {
+            data,
+            status_code: StatusCode::OK,
+        }
+    }
+
+    pub fn with_code(mut self, status_code: StatusCode) -> Self {
+        self.status_code = status_code;
+        self
+    }
+}
 
 impl warp::reply::Reply for JsonReply {
     #[inline]
     fn into_response(self) -> warp::reply::Response {
         use warp::http::header::{HeaderValue, CONTENT_TYPE};
-        let mut res = warp::reply::Response::new(self.0.into());
+        let res = warp::reply::Response::new(self.data.into());
+        let mut res = warp::reply::with_status(res, self.status_code).into_response();
         res.headers_mut()
             .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         res
@@ -30,12 +50,12 @@ pub fn json_embed_transaction(value: Vec<u8>) -> JsonReply {
 
 /// Embed serialized JSON into wrapping JSON
 pub fn json_serialize_embed<T: Serialize>(value: T) -> JsonReply {
-    JsonReply(serde_json::to_vec(&value).unwrap())
+    JsonReply::new(serde_json::to_vec(&value).unwrap())
 }
 
 /// Embed JSON into wrapping JSON
 pub fn json_embed(value: &[&[u8]]) -> JsonReply {
-    JsonReply(value.iter().copied().flatten().copied().collect())
+    JsonReply::new(value.iter().copied().flatten().copied().collect())
 }
 
 /*------- API RESPONSE HANDLING --------*/
@@ -47,35 +67,44 @@ pub struct CallResponse<'a> {
     pub call_id: &'a str,
 }
 
-impl CallResponse<'_> {
-    pub fn into_err(self, err: &dyn std::fmt::Display) -> Result<JsonReply, JsonReply> {
-        Err(common_error_reply(self.call_id, err, self.route, None))
+impl<'a> CallResponse<'a> {
+    pub fn new(route: &'a str, call_id: &'a str) -> Self {
+        CallResponse { route, call_id }
     }
 
-    pub fn into_ok(self, info: JsonReply) -> Result<JsonReply, JsonReply> {
-        Ok(common_success_reply(self.call_id, self.route, info))
+    pub fn into_err_internal(self, api_error_type: ApiErrorType) -> Result<JsonReply, JsonReply> {
+        self.into_err(StatusCode::INTERNAL_SERVER_ERROR, api_error_type)
     }
-}
 
-#[derive(Debug)]
-pub struct CallResponseWithData<'a> {
-    pub route: &'a str,
-    pub call_id: &'a str,
-    pub data: JsonReply,
-}
+    pub fn into_err_bad_req(self, api_error_type: ApiErrorType) -> Result<JsonReply, JsonReply> {
+        self.into_err(StatusCode::BAD_REQUEST, api_error_type)
+    }
 
-impl CallResponseWithData<'_> {
-    pub fn into_err(self, err: &dyn std::fmt::Display) -> Result<JsonReply, JsonReply> {
+    pub fn into_err_with_data(
+        self,
+        status: StatusCode,
+        api_error_type: ApiErrorType,
+        data: JsonReply,
+    ) -> Result<JsonReply, JsonReply> {
         Err(common_error_reply(
+            status,
+            api_error_type,
             self.call_id,
-            err,
             self.route,
-            Some(self.data),
+            data,
         ))
     }
 
-    pub fn into_ok(self) -> Result<JsonReply, JsonReply> {
-        Ok(common_success_reply(self.call_id, self.route, self.data))
+    pub fn into_err(
+        self,
+        status: StatusCode,
+        api_error_type: ApiErrorType,
+    ) -> Result<JsonReply, JsonReply> {
+        self.into_err_with_data(status, api_error_type, json_serialize_embed("null"))
+    }
+
+    pub fn into_ok(self, reason: &str, data: JsonReply) -> Result<JsonReply, JsonReply> {
+        Ok(common_success_reply(self.call_id, self.route, reason, data))
     }
 }
 
@@ -140,12 +169,11 @@ impl APICreateResponseContent {
 pub fn common_reply(
     id: &str,
     status: APIResponseStatus,
-    reason: Option<&str>,
+    reason: &str,
     route: &str,
-    json_content: JsonReply,
+    content: JsonReply,
 ) -> JsonReply {
     let status = format!("{}", status);
-    let reason = reason.unwrap_or("null");
     json_embed(&[
         b"{\"id\":\"",
         id.as_bytes(),
@@ -156,7 +184,7 @@ pub fn common_reply(
         b"\",\"route\":\"",
         route.as_bytes(),
         b"\",\"content\":",
-        &json_content.0,
+        &content.data,
         b"}",
     ])
 }
@@ -168,8 +196,14 @@ pub fn common_reply(
 /// * `id` - The ID of the API call. Provided by client
 /// * `route` - The route of the API call, as client confirmation
 /// * `json_content` - Content of the API call, as JSON
-pub fn common_success_reply(id: &str, route: &str, json_content: JsonReply) -> JsonReply {
-    common_reply(id, APIResponseStatus::Success, None, route, json_content)
+pub fn common_success_reply(
+    id: &str,
+    route: &str,
+    reason: &str,
+    json_content: JsonReply,
+) -> JsonReply {
+    common_reply(id, APIResponseStatus::Success, reason, route, json_content)
+        .with_code(StatusCode::OK)
 }
 
 /// Handles common error replies
@@ -180,21 +214,21 @@ pub fn common_success_reply(id: &str, route: &str, json_content: JsonReply) -> J
 /// * `error` - The reason for the API call's failure
 /// * `route` - The route of the API call, as client confirmation
 /// * `json_content` - Content of the API call, as JSON
-pub fn common_error_reply<E: std::fmt::Display>(
-    id: &str,
-    error: E,
+pub fn common_error_reply(
+    status: StatusCode,
+    error_type: ApiErrorType,
+    call_id: &str,
     route: &str,
-    json_content: Option<JsonReply>,
+    data: JsonReply,
 ) -> JsonReply {
-    let json_content_to_use = optional_content_default(json_content);
-
     common_reply(
-        id,
+        call_id,
         APIResponseStatus::Error,
-        Some(&format!("{}", error)),
+        &format!("{}", error_type),
         route,
-        json_content_to_use,
+        data,
     )
+    .with_code(status)
 }
 
 /// Converts a NAOM asset into a JSON reply structure

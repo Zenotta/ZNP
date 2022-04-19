@@ -136,6 +136,8 @@ pub struct ComputeNodeConfig {
     pub jurisdiction: String,
     /// Node's address sanction list
     pub sanction_list: Vec<String>,
+    // Routes that require PoW validation and their corresponding difficulties
+    pub routes_pow: BTreeMap<String, usize>,
 }
 
 /// Configuration option for a storage node
@@ -165,6 +167,8 @@ pub struct StorageNodeConfig {
     pub storage_raft_tick_timeout: usize,
     /// Timeout for fetch catchup
     pub storage_catchup_duration: usize,
+    // Routes that require PoW validation and their corresponding difficulties
+    pub routes_pow: BTreeMap<String, usize>,
 }
 
 /// Configuration option for a storage node
@@ -196,6 +200,8 @@ pub struct MinerNodeConfig {
     pub miner_api_use_tls: bool,
     /// Option of the passphrase used for encryption
     pub passphrase: Option<String>,
+    // Routes that require PoW validation and their corresponding difficulties
+    pub routes_pow: BTreeMap<String, usize>,
 }
 
 /// Configuration option for a user node
@@ -234,6 +240,8 @@ pub struct UserNodeConfig {
     pub user_auto_donate: u64,
     /// Configuration options for auto generating transactions for test
     pub user_test_auto_gen_setup: UserAutoGenTxSetup,
+    // Routes that require PoW validation and their corresponding difficulties
+    pub routes_pow: BTreeMap<String, usize>,
 }
 
 /// Configuration option for a pre-launch node
