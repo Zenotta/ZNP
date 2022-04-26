@@ -5,7 +5,9 @@ use super::{
 };
 use crate::utils::{validate_pow_for_diff, ApiKeys, RoutesPoWInfo, StringError};
 use futures::Future;
+use moka::future::{Cache, CacheBuilder};
 use std::convert::Infallible;
+use std::time::Duration;
 use tracing::log::error;
 use warp::{
     hyper::{HeaderMap, StatusCode},
@@ -33,17 +35,22 @@ pub fn warp_path(
 }
 
 // Maps a StringError to JsonReply error for bad requests.
-pub fn map_string_err(r: CallResponse, e: StringError, s: StatusCode) -> JsonReply {
-    r.into_err(s, ApiErrorType::Generic(e.to_string()))
+pub fn map_string_err(r: CallResponse<'_>, e: StringError, s: StatusCode) -> JsonReply {
+    r.clone()
+        .into_err(s, ApiErrorType::Generic(e.to_string()))
         .unwrap_err() // Should panic if result is not Err
 }
 
 // Map API response from Result<JsonReply, JsonReply> to Result<warp::Reply, warp::Rejection>
-pub fn map_api_res(
+//Adds responses to a cache
+pub fn map_api_res_and_cache(
+    call_id: String,
+    cache: ReplyCache,
     r: impl Future<Output = Result<JsonReply, JsonReply>>,
 ) -> impl Future<Output = Result<impl warp::Reply, warp::Rejection>> {
     use futures::future::TryFutureExt;
-    r.map_ok_or_else(Ok, Ok)
+    let r_2 = get_or_insert_cache_value(call_id, cache, r);
+    r_2.map_ok_or_else(Ok, Ok)
 }
 
 // Authorizes a request based on API keys as well as PoW requirements for the route
@@ -152,4 +159,51 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
         &error.route,
         json_serialize_embed("null"),
     ))
+}
+
+//Cache data type, live time and maximum size
+pub type ReplyCache = Cache<String, Result<JsonReply, JsonReply>>;
+pub const CACHE_LIVE_TIME: u64 = 60 * 60;
+pub const MAX_RESPONSE_CACHE_SIZE: u64 = 10000;
+
+//Create a cache with items that expire and are removed after a set period of time
+pub fn create_new_cache(time_to_live: u64) -> ReplyCache {
+    CacheBuilder::new(MAX_RESPONSE_CACHE_SIZE)
+        //Time to live: each element is valid for time_to_live seconds - deleted time_to_live seconds after insertion
+        .time_to_live(Duration::from_secs(time_to_live))
+        // Create the cache.
+        .build()
+}
+
+//gets cache value from BTreeMap. Clears old values if 24 hours has passed since the last clear.
+//ReplyCache is a moka::future::cache of type <String, Result<JsonReply, JsonReply>>
+fn get_cache_value(call_id: &str, cache: &ReplyCache) -> Option<Result<JsonReply, JsonReply>> {
+    cache.get(&String::from(call_id))
+}
+
+//inserts cache value into BTreeMap. Clears old values if 24 hours has passed since the last clear.
+//ReplyCache is a moka::future::cache of type <String, Result<JsonReply, JsonReply>>
+async fn insert_cache_value(
+    call_id: &str,
+    response: Result<JsonReply, JsonReply>,
+    cache: &ReplyCache,
+) -> Result<JsonReply, JsonReply> {
+    if !call_id.is_empty() {
+        let _ = cache.insert(String::from(call_id), response.clone()).await;
+    }
+
+    response
+}
+
+pub async fn get_or_insert_cache_value(
+    call_id: String,
+    cache: ReplyCache,
+    r: impl Future<Output = Result<JsonReply, JsonReply>>,
+) -> Result<JsonReply, JsonReply> {
+    let fetched_value = get_cache_value(&call_id, &cache);
+    if let Some(value) = fetched_value {
+        return value;
+    }
+
+    insert_cache_value(&call_id, r.await, &cache).await
 }

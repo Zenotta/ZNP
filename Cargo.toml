@@ -19,6 +19,7 @@ futures-util = "0.3.15"
 hex = "0.4.2"
 merkletree = "0.21.0"
 merkle-log = "0.0.3"
+moka = { version = "0.8.1", features = ["future"] }
 naom = { path = "../naom" }
 keccak_prime = { path = "../keccak-prime" }
 protobuf = "~2.0"

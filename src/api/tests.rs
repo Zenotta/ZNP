@@ -4,8 +4,9 @@ use crate::api::handlers::{
     EncapsulatedPayment, FetchPendingData, PublicKeyAddresses,
 };
 use crate::api::routes;
-use crate::api::utils::ANY_API_KEY;
-use crate::api::utils::{auth_request, handle_rejection};
+use crate::api::utils::{
+    auth_request, create_new_cache, handle_rejection, ANY_API_KEY, CACHE_LIVE_TIME,
+};
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
 use crate::configurations::DbMode;
 use crate::constants::FUND_KEY;
@@ -37,6 +38,8 @@ use naom::utils::transaction_utils::{
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use warp::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::Filter;
 
@@ -333,9 +336,10 @@ async fn test_get_latest_block() {
         .header("x-request-id", COMMON_REQ_ID)
         .path("/latest_block");
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter =
-        routes::latest_block(&mut dp(), db, Default::default(), ks).recover(handle_rejection);
+    let filter = routes::latest_block(&mut dp(), db, Default::default(), ks, cache)
+        .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
     assert_eq!((res.status(), res.headers().clone()), success_json());
@@ -364,14 +368,14 @@ async fn test_get_export_keypairs() {
         .method("GET")
         .header("x-request-id", COMMON_REQ_ID)
         .path("/export_keypairs");
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter =
-        routes::export_keypairs(&mut dp(), db, Default::default(), ks).recover(handle_rejection);
+    let filter = routes::export_keypairs(&mut dp(), db, Default::default(), ks, cache)
+        .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
     //
@@ -770,18 +774,20 @@ async fn test_get_wallet_info() {
         .method("GET")
         .header("x-request-id", COMMON_REQ_ID)
         .path("/wallet_info");
+
+    let com_req_id_plus_1 = "2ae7bc9cba924e3cb73c0249893078d8";
     let request_spent = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-request-id", com_req_id_plus_1)
         .path("/wallet_info/spent");
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
-
     let filter =
-        routes::wallet_info(&mut dp(), db, Default::default(), ks).recover(handle_rejection);
+        routes::wallet_info(&mut dp(), db, Default::default(), ks, cache).recover(handle_rejection);
     let res = request.reply(&filter).await;
     let r_s = request_spent.reply(&filter).await;
 
@@ -791,6 +797,88 @@ async fn test_get_wallet_info() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 
+    assert_eq!((r_s.status(), r_s.headers().clone()), success_json());
+    assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+}
+
+/// Test cache
+#[tokio::test(flavor = "current_thread")]
+async fn test_cache() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let db = get_wallet_db("").await;
+    let mut fund_store = db.get_fund_store();
+    let out_point = OutPoint::new("tx_hash".to_string(), 0);
+    let out_point_s = OutPoint::new("tx_hash_spent".to_string(), 0);
+    let asset = Asset::token_u64(11);
+    fund_store.store_tx(out_point.clone(), asset.clone());
+    fund_store.store_tx(out_point_s.clone(), asset.clone());
+    fund_store.spend_tx(&out_point_s);
+
+    db.set_db_value(FUND_KEY, serialize(&fund_store).unwrap())
+        .await;
+
+    db.save_transaction_to_wallet(out_point, "public_address".to_string())
+        .await
+        .unwrap();
+    db.save_transaction_to_wallet(out_point_s, "public_address_spent".to_string())
+        .await
+        .unwrap();
+
+    let request = warp::test::request()
+        .method("GET")
+        .header("x-request-id", COMMON_REQ_ID)
+        .path("/wallet_info");
+    let request_spent = warp::test::request()
+        .method("GET")
+        .header("x-request-id", COMMON_REQ_ID)
+        .path("/wallet_info/spent");
+    let com_req_id_plus_1 = "2ae7bc9cba924e3cb73c0249893078d8";
+    let request_spent_diff_id = warp::test::request()
+        .method("GET")
+        .header("x-request-id", com_req_id_plus_1)
+        .path("/wallet_info/spent");
+
+    let cache = create_new_cache(1);
+    let two_sec = Duration::from_secs(2);
+    //
+    // Act
+    //
+    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+
+    let filter =
+        routes::wallet_info(&mut dp(), db, Default::default(), ks, cache).recover(handle_rejection);
+    let res = request.reply(&filter).await;
+    let r_s = request_spent.reply(&filter).await;
+    let r_s_diff_id = request_spent_diff_id.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+
+    //test saved value is returned when the id is the same
+    assert_eq!((r_s.status(), r_s.headers().clone()), success_json());
+    assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+
+    //differnt id used
+    assert_eq!(
+        (r_s_diff_id.status(), r_s_diff_id.headers().clone()),
+        success_json()
+    );
+    assert_eq!(r_s_diff_id.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+
+    thread::sleep(two_sec);
+    //repeat with same id after value expires
+    let request_spent = warp::test::request()
+        .method("GET")
+        .header("x-request-id", COMMON_REQ_ID)
+        .path("/wallet_info/spent");
+    let r_s = request_spent.reply(&filter).await;
     assert_eq!((r_s.status(), r_s.headers().clone()), success_json());
     assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 }
@@ -808,13 +896,13 @@ async fn test_get_payment_address() {
         .method("GET")
         .header("x-request-id", COMMON_REQ_ID)
         .path("/payment_address");
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter = routes::payment_address(&mut dp(), db.clone(), Default::default(), ks)
+    let filter = routes::payment_address(&mut dp(), db.clone(), Default::default(), ks, cache)
         .recover(handle_rejection);
     let res = request.reply(&filter).await;
     let store_address = db.get_known_addresses().pop().unwrap();
@@ -852,12 +940,14 @@ async fn test_get_utxo_set_addresses() {
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::utxo_addresses(
         &mut dp(),
         compute.threaded_calls.tx.clone(),
         Default::default(),
         ks,
+        cache,
     )
     .recover(handle_rejection);
     let handle = compute.spawn();
@@ -953,8 +1043,9 @@ async fn test_post_blockchain_entry_by_key(
 
     let db = get_db_with_block().await;
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter = routes::blockchain_entry_by_key(&mut dp(), db, Default::default(), ks)
+    let filter = routes::blockchain_entry_by_key(&mut dp(), db, Default::default(), ks, cache)
         .recover(handle_rejection);
 
     let res = warp::test::request()
@@ -976,8 +1067,9 @@ async fn test_post_block_info_by_nums() {
 
     let db = get_db_with_block().await;
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
-    let filter =
-        routes::block_by_num(&mut dp(), db, Default::default(), ks).recover(handle_rejection);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+    let filter = routes::block_by_num(&mut dp(), db, Default::default(), ks, cache)
+        .recover(handle_rejection);
 
     let res = warp::test::request()
         .method("POST")
@@ -1026,8 +1118,16 @@ async fn test_post_make_payment() {
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
-    let filter = routes::make_payment(&mut dp(), db, self_node.clone(), Default::default(), ks)
-        .recover(handle_rejection);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+    let filter = routes::make_payment(
+        &mut dp(),
+        db,
+        self_node.clone(),
+        Default::default(),
+        ks,
+        cache,
+    )
+    .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
     //
@@ -1066,14 +1166,21 @@ async fn test_post_make_ip_payment() {
         .header("Content-Type", "application/json")
         .header("x-request-id", COMMON_REQ_ID)
         .json(&encapsulated_data);
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter = routes::make_ip_payment(&mut dp(), db, self_node.clone(), Default::default(), ks)
-        .recover(handle_rejection);
+    let filter = routes::make_ip_payment(
+        &mut dp(),
+        db,
+        self_node.clone(),
+        Default::default(),
+        ks,
+        cache,
+    )
+    .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
     //
@@ -1126,7 +1233,7 @@ async fn test_address_construction() {
         ..Default::default()
     };
 
-    let request = || {
+    let request1 = || {
         warp::test::request()
             .method("POST")
             .path("/address_construction")
@@ -1134,29 +1241,48 @@ async fn test_address_construction() {
             .header("Content-Type", "application/json")
     };
 
+    let com_req_id_plus_1 = "2ae7bc9cba924e3cb73c0249893078d8";
+    let request2 = || {
+        warp::test::request()
+            .method("POST")
+            .path("/address_construction")
+            .header("x-request-id", com_req_id_plus_1)
+            .header("Content-Type", "application/json")
+    };
+
+    let com_req_id_plus_2 = "2ae7bc9cba924e3cb73c0249893078d9";
+    let request3 = || {
+        warp::test::request()
+            .method("POST")
+            .path("/address_construction")
+            .header("x-request-id", com_req_id_plus_2)
+            .header("Content-Type", "application/json")
+    };
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
-    let filter =
-        routes::address_construction(&mut dp(), Default::default(), ks).recover(handle_rejection);
-    let res1 = request().json(&address1).reply(&filter).await;
-    let res2 = request().json(&address2).reply(&filter).await;
-    let res3 = request().json(&address3).reply(&filter).await;
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+    let filter = routes::address_construction(&mut dp(), Default::default(), ks, cache)
+        .recover(handle_rejection);
+    let res1 = request1().json(&address1).reply(&filter).await;
+    let res2 = request2().json(&address2).reply(&filter).await;
+    let res3 = request3().json(&address3).reply(&filter).await;
 
     //
     // Assert
     //
-    let expected = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Address successfully constructed\",\"route\":\"address_construction\",\"content\":\"ca0abdcd2826a77218af0914601ee34c7ff44127aab9d0671267b25a7d36946a\"}";
+    let expected1 = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Address successfully constructed\",\"route\":\"address_construction\",\"content\":\"ca0abdcd2826a77218af0914601ee34c7ff44127aab9d0671267b25a7d36946a\"}";
+    let expected2 = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Address successfully constructed\",\"route\":\"address_construction\",\"content\":\"ca0abdcd2826a77218af0914601ee34c7ff44127aab9d0671267b25a7d36946a\"}";
 
     assert_eq!((res1.status(), res1.headers().clone()), success_json());
-    assert_eq!(res1.body(), expected);
+    assert_eq!(res1.body(), expected1);
 
     assert_eq!((res2.status(), res2.headers().clone()), success_json());
-    assert_eq!(res2.body(), expected);
+    assert_eq!(res2.body(), expected2);
 
     assert_eq!((res3.status(), res3.headers().clone()), success_json());
-    assert_eq!(res3.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Address successfully constructed\",\"route\":\"address_construction\",\"content\":\"56d5b6da467e6c588966967ef5405dd2\"}");
+    assert_eq!(res3.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d9\",\"status\":\"Success\",\"reason\":\"Address successfully constructed\",\"route\":\"address_construction\",\"content\":\"56d5b6da467e6c588966967ef5405dd2\"}");
 }
 
 /// Test POST make ip payment with correct address
@@ -1179,14 +1305,15 @@ async fn test_post_request_donation() {
         .header("x-request-id", COMMON_REQ_ID)
         .header("Content-Type", "application/json")
         .json(&address);
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter = routes::request_donation(&mut dp(), self_node.clone(), Default::default(), ks)
-        .recover(handle_rejection);
+    let filter =
+        routes::request_donation(&mut dp(), self_node.clone(), Default::default(), ks, cache)
+            .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
     //
@@ -1214,8 +1341,9 @@ async fn test_post_import_keypairs_success() {
     );
     let imported_addresses = Addresses { addresses };
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter = routes::import_keypairs(&mut dp(), db.clone(), Default::default(), ks)
+    let filter = routes::import_keypairs(&mut dp(), db.clone(), Default::default(), ks, cache)
         .recover(handle_rejection);
     let wallet_addresses_before = db.get_known_addresses();
 
@@ -1258,17 +1386,18 @@ async fn test_post_fetch_balance() {
         .header("Content-Type", "application/json")
         .header("x-request-id", COMMON_REQ_ID)
         .json(&addresses);
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::fetch_balance(
         &mut dp(),
         compute.threaded_calls.tx.clone(),
         Default::default(),
         ks,
+        cache,
     )
     .recover(handle_rejection);
     let handle = compute.spawn();
@@ -1304,17 +1433,18 @@ async fn test_post_fetch_pending() {
         .header("Content-Type", "application/json")
         .header("x-request-id", COMMON_REQ_ID)
         .json(&druids);
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::fetch_pending(
         &mut dp(),
         compute.threaded_calls.tx.clone(),
         Default::default(),
         ks,
+        cache,
     )
     .recover(handle_rejection);
     let handle = compute.spawn();
@@ -1351,14 +1481,15 @@ async fn test_post_update_running_total() {
         .header("Content-Type", "application/json")
         .header("x-request-id", COMMON_REQ_ID)
         .json(&addresses);
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter = routes::update_running_total(&mut dp(), self_node.clone(), Default::default(), ks)
-        .recover(handle_rejection);
+    let filter =
+        routes::update_running_total(&mut dp(), self_node.clone(), Default::default(), ks, cache)
+            .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
     //
@@ -1434,17 +1565,18 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
         .header("Content-Type", "application/json")
         .header("x-request-id", COMMON_REQ_ID)
         .json(&json_body.clone());
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::create_transactions(
         &mut dp(),
         compute.threaded_calls.tx.clone(),
         Default::default(),
         ks,
+        cache,
     )
     .recover(handle_rejection);
     let handle = compute.spawn();
@@ -1487,17 +1619,18 @@ async fn test_post_create_receipt_asset_tx_compute() {
         .header("Content-Type", "application/json")
         .header("x-request-id", COMMON_REQ_ID)
         .json(&json_body.clone());
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::create_receipt_asset(
         &mut dp(),
         compute.threaded_calls.tx.clone(),
         Default::default(),
         ks,
+        cache,
     )
     .recover(handle_rejection);
     let handle = compute.spawn();
@@ -1530,14 +1663,19 @@ async fn test_post_create_receipt_asset_tx_user() {
         .header("Content-Type", "application/json")
         .header("x-request-id", COMMON_REQ_ID)
         .json(&json_body.clone());
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
-    let filter =
-        routes::create_receipt_asset_user(&mut dp(), self_node.clone(), Default::default(), ks)
-            .recover(handle_rejection);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+    let filter = routes::create_receipt_asset_user(
+        &mut dp(),
+        self_node.clone(),
+        Default::default(),
+        ks,
+        cache,
+    )
+    .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
     //
@@ -1579,16 +1717,17 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
         .header("Content-Type", "application/json")
         .header("x-request-id", COMMON_REQ_ID)
         .json(&json_body.clone());
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::create_receipt_asset(
         &mut dp(),
         compute.threaded_calls.tx.clone(),
         Default::default(),
         ks,
+        cache,
     )
     .recover(handle_rejection);
     let res = request.reply(&filter).await;
@@ -1625,13 +1764,13 @@ async fn test_post_change_passphrase() {
         .header("Content-Type", "application/json")
         .header("x-request-id", COMMON_REQ_ID)
         .json(&json_body.clone());
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter = routes::change_passphrase(&mut dp(), db.clone(), Default::default(), ks)
+    let filter = routes::change_passphrase(&mut dp(), db.clone(), Default::default(), ks, cache)
         .recover(handle_rejection);
     let res = request.reply(&filter).await;
     let actual = db.test_passphrase(String::from("new_passphrase")).await;
@@ -1670,12 +1809,12 @@ async fn test_post_change_passphrase_failure() {
         .header("Content-Type", "application/json")
         .header("x-request-id", COMMON_REQ_ID)
         .json(&json_body.clone());
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
-    let filter = routes::change_passphrase(&mut dp(), db.clone(), Default::default(), ks)
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+    let filter = routes::change_passphrase(&mut dp(), db.clone(), Default::default(), ks, cache)
         .recover(handle_rejection);
     let actual = db.test_passphrase(String::from("new_passphrase")).await;
     let res = request.reply(&filter).await;
@@ -1711,12 +1850,12 @@ async fn test_post_block_nums_by_tx_hashes() {
         .header("Content-Type", "application/json")
         .header("x-request-id", COMMON_REQ_ID)
         .json(&vec!["g393e26d47ede87b84808c1a5664ea41"]);
-
     //
     // Act
     //
     let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
-    let filter = routes::blocks_by_tx_hashes(&mut dp(), db, Default::default(), ks)
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+    let filter = routes::blocks_by_tx_hashes(&mut dp(), db, Default::default(), ks, cache)
         .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
