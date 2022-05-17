@@ -17,13 +17,13 @@ use crate::utils::{
     apply_mining_tx, check_druid_participants, create_receipt_asset_tx_from_sig,
     format_parition_pow_address, generate_pow_random_num, to_api_keys, to_route_pow_infos,
     validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
-    LocalEventSender, ResponseResult, RoutesPoWInfo,
+    LocalEventSender, ResponseResult, RoutesPoWInfo, StringError,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction::{DrsTxHashSpec, Transaction};
 use naom::utils::druid_utils::druid_expectations_are_met;
 use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
@@ -64,6 +64,7 @@ pub enum ComputeError {
     Network(CommsError),
     Serialization(bincode::Error),
     AsyncTask(task::JoinError),
+    GenericError(StringError),
 }
 
 impl fmt::Display for ComputeError {
@@ -73,6 +74,7 @@ impl fmt::Display for ComputeError {
             Self::Network(err) => write!(f, "Network error: {}", err),
             Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
             Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Self::GenericError(err) => write!(f, "Generic error: {}", err),
         }
     }
 }
@@ -84,6 +86,7 @@ impl Error for ComputeError {
             Self::Network(ref e) => Some(e),
             Self::AsyncTask(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
+            Self::GenericError(ref e) => Some(e),
         }
     }
 }
@@ -103,6 +106,12 @@ impl From<bincode::Error> for ComputeError {
 impl From<task::JoinError> for ComputeError {
     fn from(other: task::JoinError) -> Self {
         Self::AsyncTask(other)
+    }
+}
+
+impl From<StringError> for ComputeError {
+    fn from(other: StringError) -> Self {
+        Self::GenericError(other)
     }
 }
 
@@ -843,12 +852,20 @@ impl ComputeNode {
                 script_public_key,
                 public_key,
                 signature,
-            } => self.create_receipt_asset_tx(
+                drs_tx_hash_spec,
+            } => match self.create_receipt_asset_tx(
                 receipt_amount,
                 script_public_key,
                 public_key,
                 signature,
-            ),
+                drs_tx_hash_spec,
+            ) {
+                Ok((tx, _)) => Some(self.receive_transactions(vec![tx])),
+                Err(e) => {
+                    error!("Error creating receipt asset transaction: {:?}", e);
+                    None
+                }
+            },
             SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
         }
     }
@@ -1316,21 +1333,17 @@ impl ComputeNode {
         script_public_key: String,
         public_key: String,
         signature: String,
-    ) -> Option<Response> {
+        drs_tx_hash_spec: DrsTxHashSpec,
+    ) -> Result<(Transaction, String)> {
         let b_num = self.node_raft.get_current_block_num();
-        match create_receipt_asset_tx_from_sig(
+        Ok(create_receipt_asset_tx_from_sig(
             b_num,
             receipt_amount,
             script_public_key,
             public_key,
             signature,
-        ) {
-            Ok(tx) => Some(self.receive_transactions(vec![tx])),
-            Err(e) => {
-                error!("Error creating receipt asset transaction: {:?}", e);
-                None
-            }
-        }
+            drs_tx_hash_spec,
+        )?)
     }
 
     /// Get `Node` member
@@ -1474,8 +1487,15 @@ impl ComputeApi for ComputeNode {
         script_public_key: String,
         public_key: String,
         signature: String,
-    ) -> Option<Response> {
-        self.create_receipt_asset_tx(receipt_amount, script_public_key, public_key, signature)
+        drs_tx_hash_spec: DrsTxHashSpec,
+    ) -> Result<(Transaction, String)> {
+        self.create_receipt_asset_tx(
+            receipt_amount,
+            script_public_key,
+            public_key,
+            signature,
+            drs_tx_hash_spec,
+        )
     }
 }
 

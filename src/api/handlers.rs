@@ -1,10 +1,11 @@
 use crate::api::errors::ApiErrorType;
 use crate::api::responses::{
-    api_format_asset, json_embed, json_embed_block, json_embed_transaction, json_serialize_embed,
-    APIAsset, APICreateResponseContent, CallResponse, JsonReply,
+    json_embed, json_embed_block, json_embed_transaction, json_serialize_embed, APIAsset,
+    APICreateResponseContent, CallResponse, JsonReply,
 };
 use crate::api::utils::map_string_err;
 use crate::comms_handler::Node;
+use crate::compute::ComputeError;
 use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
@@ -17,11 +18,12 @@ use crate::storage::{get_stored_value_from_db, indexed_block_hash_key};
 use crate::threaded_call::{self, ThreadedCallSender};
 use crate::utils::{decode_pub_key, decode_signature, StringError};
 use crate::wallet::{WalletDb, WalletDbError};
+use crate::Response;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::crypto::sign_ed25519::PublicKey;
-use naom::primitives::asset::{Asset, TokenAmount};
+use naom::primitives::asset::{Asset, ReceiptAsset, TokenAmount};
 use naom::primitives::druid::DdeValues;
-use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
+use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
 use naom::utils::transaction_utils::construct_address_for;
 use serde::{Deserialize, Serialize};
@@ -52,7 +54,7 @@ pub struct Addresses {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WalletInfo {
     running_total: f64,
-    receipt_total: u64,
+    receipt_total: BTreeMap<String, u64>, /* DRS tx hash - amount */
     addresses: AddressesWithOutPoints,
 }
 
@@ -75,16 +77,18 @@ pub struct EncapsulatedPayment {
 /// This structure is used to create a receipt asset on EITHER
 /// the compute or user node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateReceiptAssetData {
+pub struct CreateReceiptAssetDataCompute {
     pub receipt_amount: u64,
-    pub script_public_key: Option<String>, /* Not used by user Node */
-    pub public_key: Option<String>,        /* Not used by user Node */
-    pub signature: Option<String>,         /* Not used by user Node */
+    pub drs_tx_hash_spec: DrsTxHashSpec,
+    pub script_public_key: String,
+    pub public_key: String,
+    pub signature: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateReceiptAssetDataUser {
     pub receipt_amount: u64,
+    pub drs_tx_hash_spec: DrsTxHashSpec,
 }
 
 /// Information needed for the creaion of TxIn script.
@@ -170,13 +174,13 @@ pub async fn get_wallet_info(
 
     let mut addresses = AddressesWithOutPoints::new();
     let txs = match extra.as_deref() {
-        Some("spent") => fund_store.spent_transactions(),
-        _ => fund_store.transactions(),
+        Some("spent") => fund_store.spent_transactions().clone(),
+        _ => fund_store.transactions().clone(),
     };
 
     for (out_point, asset) in txs {
         addresses
-            .entry(wallet_db.get_transaction_address(out_point))
+            .entry(wallet_db.get_transaction_address(&out_point))
             .or_insert_with(Vec::new)
             .push(OutPointData::new(out_point.clone(), asset.clone()));
     }
@@ -184,7 +188,7 @@ pub async fn get_wallet_info(
     let total = fund_store.running_total();
     let (running_total, receipt_total) = (
         total.tokens.0 as f64 / D_DISPLAY_PLACES,
-        total.receipts as u64,
+        total.receipts.clone(),
     );
     let send_val = WalletInfo {
         running_total,
@@ -563,8 +567,15 @@ pub async fn post_create_receipt_asset_user(
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
-    let CreateReceiptAssetDataUser { receipt_amount } = receipt_data;
-    let request = UserRequest::UserApi(UserApiRequest::SendCreateReceiptRequest { receipt_amount });
+    let CreateReceiptAssetDataUser {
+        receipt_amount,
+        drs_tx_hash_spec,
+    } = receipt_data;
+
+    let request = UserRequest::UserApi(UserApiRequest::SendCreateReceiptRequest {
+        receipt_amount,
+        drs_tx_hash_spec,
+    });
     let r = CallResponse::new(route, &call_id);
 
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
@@ -581,78 +592,56 @@ pub async fn post_create_receipt_asset_user(
 /// Post to create a receipt asset transaction on Compute node
 pub async fn post_create_receipt_asset(
     mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
-    create_receipt_asset_data: CreateReceiptAssetData,
+    create_receipt_asset_data: CreateReceiptAssetDataCompute,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
-    let CreateReceiptAssetData {
+    let CreateReceiptAssetDataCompute {
         receipt_amount,
+        drs_tx_hash_spec,
         script_public_key,
         public_key,
         signature,
     } = create_receipt_asset_data;
 
-    let all_some = script_public_key.is_some() && public_key.is_some() && signature.is_some();
-
-    // Response content
-    let create_info = APICreateResponseContent::new(
-        "receipt".to_string(),
-        receipt_amount,
-        script_public_key.clone().unwrap_or_default(),
-    );
-
     let r = CallResponse::new(route, &call_id);
-    let response_data = json_serialize_embed(create_info);
 
-    if all_some {
-        // Create receipt tx on the compute node
-        let (script_public_key, public_key, signature) = (
-            script_public_key.unwrap_or_default(),
-            public_key.unwrap_or_default(),
-            signature.unwrap_or_default(),
-        );
-
-        let compute_resp = make_api_threaded_call(
-            &mut threaded_calls,
-            move |c| {
-                c.create_receipt_asset_tx(receipt_amount, script_public_key, public_key, signature)
-            },
-            "Cannot access Compute Node",
-        )
-        .await
-        .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
-
-        match compute_resp {
-            Some(resp) => match resp.success {
-                true => return r.into_ok("Receipt asset(s) created", response_data),
-                false => {
-                    return r.into_err_with_data(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        ApiErrorType::Generic(resp.reason.to_owned()),
-                        response_data,
-                    )
-                }
-            },
-            None => {
-                return r.into_err_with_data(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    ApiErrorType::CannotAccessComputeNode,
-                    response_data,
-                )
-            }
-        }
-    }
-
-    debug!(
-        "route:post_create_receipt_asset error: {:?}",
-        "Invalid request body"
-    );
-
-    r.into_err_with_data(
-        StatusCode::BAD_REQUEST,
-        ApiErrorType::InvalidRequestBody,
-        response_data,
+    // Create receipt asset on the Compute node
+    let spk = script_public_key.clone();
+    let (tx_hash, compute_resp) = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| {
+            let (tx, tx_hash) = c
+                .create_receipt_asset_tx(
+                    receipt_amount,
+                    spk,
+                    public_key,
+                    signature,
+                    drs_tx_hash_spec,
+                )?;
+            let compute_resp = c.receive_transactions(vec![tx]);
+            Ok::<(String, Response), ComputeError>((tx_hash, compute_resp))
+        },
+        "Cannot access Compute Node",
     )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))? /* Error from threaded call */
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?; /* Error in transaction creation process */
+
+    match compute_resp.success {
+        true => {
+            // Response content
+            let receipt_asset = ReceiptAsset::new(receipt_amount, Some(tx_hash.clone()));
+            let api_asset = APIAsset::new(Asset::Receipt(receipt_asset), None);
+            let create_info = APICreateResponseContent::new(api_asset, script_public_key, tx_hash);
+            let response_data = json_serialize_embed(create_info);
+            r.into_ok("Receipt asset(s) created", response_data)
+        }
+        false => r.into_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorType::Generic(compute_resp.reason.to_owned()),
+        ),
+    }
 }
 
 /// Post transactions to compute node
@@ -921,7 +910,7 @@ pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, APIAs
     for tx in transactions {
         for out in &tx.outputs {
             let address = out.script_public_key.clone().unwrap_or_default();
-            let asset = api_format_asset(out.value.clone());
+            let asset = APIAsset::new(out.value.clone(), None);
 
             tx_info.insert(address, asset);
         }
@@ -936,6 +925,6 @@ pub fn construct_make_payment_map(
     amount: TokenAmount,
 ) -> BTreeMap<String, APIAsset> {
     let mut tx_info = BTreeMap::new();
-    tx_info.insert(to_address, api_format_asset(Asset::Token(amount)));
+    tx_info.insert(to_address, APIAsset::new(Asset::Token(amount), None));
     tx_info
 }

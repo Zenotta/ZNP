@@ -1368,6 +1368,7 @@ pub struct RbSenderData {
     pub sender_prev_out: OutPoint,
     pub sender_amount: TokenAmount,
     pub sender_half_druid: String,
+    pub sender_expected_drs: Option<String>,
 }
 
 pub struct RbReceiverData {
@@ -1390,6 +1391,7 @@ pub fn generate_rb_transactions(
         sender_prev_out,
         sender_amount,
         sender_half_druid,
+        sender_expected_drs,
     } = rb_sender_data;
 
     let RbReceiverData {
@@ -1437,6 +1439,7 @@ pub fn generate_rb_transactions(
         (vec![rb_send_tx_in], vec![TxOut::new()]),
         sender_half_druid,
         sender_pub_addr,
+        sender_expected_drs,
     );
 
     let (rb_receive_tx, rb_payment_response) = make_rb_payment_receipt_tx_and_response(
@@ -1451,4 +1454,13 @@ pub fn generate_rb_transactions(
     let t_s_hash = construct_tx_hash(&rb_send_tx);
 
     vec![(t_r_hash, rb_receive_tx), (t_s_hash, rb_send_tx)]
+}
+
+/// Create a `BTreeMap` struct from a vector of (drs_tx_hash, `Receipt` amount)
+///
+/// ### Arguments
+///
+/// * `receipts` - A vector of (drs_tx_hash, `Receipt` amount)
+pub fn map_receipts(details: Vec<(String, u64)>) -> BTreeMap<String, u64> {
+    details.into_iter().collect()
 }
