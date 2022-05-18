@@ -135,24 +135,29 @@ impl Default for APIResponseStatus {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct APIAsset {
-    asset: String,
-    amount: u64,
+    asset: Asset,
     metadata: Option<Vec<u8>>,
+}
+
+impl APIAsset {
+    pub fn new(asset: Asset, metadata: Option<Vec<u8>>) -> Self {
+        APIAsset { asset, metadata }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct APICreateResponseContent {
-    asset: String,
-    amount: u64,
+    asset: APIAsset,
     to_address: String,
+    tx_hash: String,
 }
 
 impl APICreateResponseContent {
-    pub fn new(asset: String, amount: u64, to_address: String) -> Self {
+    pub fn new(asset: APIAsset, to_address: String, tx_hash: String) -> Self {
         APICreateResponseContent {
             asset,
-            amount,
             to_address,
+            tx_hash,
         }
     }
 }
@@ -229,27 +234,6 @@ pub fn common_error_reply(
         data,
     )
     .with_code(status)
-}
-
-/// Converts a NAOM asset into a JSON reply structure
-pub fn api_format_asset(asset: Asset) -> APIAsset {
-    match asset {
-        Asset::Token(token_amount) => APIAsset {
-            asset: "token".to_string(),
-            amount: token_amount.0,
-            metadata: None,
-        },
-        Asset::Receipt(receipt_amount) => APIAsset {
-            asset: "receipt".to_string(),
-            amount: receipt_amount,
-            metadata: None,
-        },
-        Asset::Data(data) => APIAsset {
-            asset: "data".to_string(),
-            amount: data.amount,
-            metadata: Some(data.data),
-        },
-    }
 }
 
 /// Handles optional response content. Defaults to null if None provided

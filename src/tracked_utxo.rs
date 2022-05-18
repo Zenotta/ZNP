@@ -1,6 +1,6 @@
 use crate::interfaces::{AddressesWithOutPoints, OutPointData, UtxoSet};
 use crate::utils::{get_pk_with_out_point_cloned, get_pk_with_out_point_from_utxo_set_cloned};
-use crate::wallet::AssetValues;
+use naom::primitives::asset::AssetValues;
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::utils::transaction_utils::get_tx_out_with_out_point_cloned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -14,11 +14,10 @@ pub struct TrackedUtxoBalance {
 }
 
 impl TrackedUtxoBalance {
-    pub fn get_asset_values(&self) -> AssetValues {
-        self.total
+    pub fn get_asset_values(&self) -> &AssetValues {
+        &self.total
     }
 }
-
 /// Invariant: `pk_cache` contains exactly all relevant mapping for `base`
 #[derive(Default, Clone, Debug)]
 pub struct TrackedUtxoSet {
@@ -76,11 +75,12 @@ impl TrackedUtxoSet {
             if let Some(ops) = self.get_pk_cache_vec(address) {
                 for op in ops {
                     let t_out = self.base.get(op).unwrap();
+                    let asset = t_out.value.clone().with_fixed_hash(op);
                     address_list
                         .entry(address.clone())
                         .or_insert_with(Vec::new)
-                        .push(OutPointData::new(op.clone(), t_out.value.clone()));
-                    total.update_add(&t_out.value);
+                        .push(OutPointData::new(op.clone(), asset.clone()));
+                    total.update_add(&asset);
                 }
             }
         }

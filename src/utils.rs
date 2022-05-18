@@ -10,6 +10,7 @@ use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
 use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
+use naom::primitives::transaction::DrsTxHashSpec;
 use naom::primitives::{
     asset::{Asset, TokenAmount},
     block::{build_hex_txs_hash, Block, BlockHeader},
@@ -606,7 +607,6 @@ pub fn create_valid_transaction_with_ins_outs(
                 locktime: 0,
                 script_public_key: Some(addr.to_string()),
                 drs_block_hash: None,
-                drs_tx_hash: None,
             });
         }
         tx_outs
@@ -1003,11 +1003,12 @@ pub fn create_receipt_asset_tx_from_sig(
     script_public_key: String,
     public_key: String,
     signature: String,
-) -> Result<Transaction, StringError> {
-    let tx_out = TxOut::new_receipt_amount(script_public_key, receipt_amount);
-
-    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::Receipt(receipt_amount));
-
+    drs_tx_hash_spec: DrsTxHashSpec,
+) -> Result<(Transaction, String), StringError> {
+    let drs_tx_hash_create = drs_tx_hash_spec.get_drs_tx_hash();
+    let receipt = Asset::receipt(receipt_amount, drs_tx_hash_create.clone());
+    let asset_hash = construct_tx_in_signable_asset_hash(&receipt);
+    let tx_out = TxOut::new_asset(script_public_key, receipt);
     let public_key = decode_pub_key(&public_key)?;
     let signature = decode_signature(&signature)?;
 
@@ -1016,7 +1017,10 @@ pub fn create_receipt_asset_tx_from_sig(
         script_signature: Script::new_create_asset(b_num, asset_hash, signature, public_key),
     };
 
-    Ok(construct_tx_core(vec![tx_in], vec![tx_out]))
+    let tx = construct_tx_core(vec![tx_in], vec![tx_out]);
+    let tx_hash = drs_tx_hash_create.unwrap_or_else(|| construct_tx_hash(&tx));
+
+    Ok((tx, tx_hash))
 }
 
 /// Confert to ApiKeys data structure

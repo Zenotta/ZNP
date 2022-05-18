@@ -392,11 +392,10 @@ pub mod convert {
     mod old {
         pub use super::super::*;
     }
-    use crate::{
-        compute_raft, interfaces, storage_raft, transaction_gen,
-        wallet::{self, AssetValues},
-    };
+    use crate::constants::RECEIPT_DEFAULT_DRS_TX_HASH;
+    use crate::{compute_raft, interfaces, storage_raft, transaction_gen, wallet};
     use naom::crypto::sign_ed25519::{PublicKey, SecretKey, Signature};
+    use naom::primitives::asset::{AssetValues, ReceiptAsset};
     use naom::primitives::{
         asset::{Asset, DataAsset, TokenAmount},
         block::{build_hex_txs_hash, Block, BlockHeader},
@@ -503,7 +502,6 @@ pub mod convert {
             value: convert_asset(old.value),
             locktime: old.locktime,
             drs_block_hash: old.drs_block_hash,
-            drs_tx_hash: old.drs_tx_hash,
             script_public_key: old.script_public_key,
         }
     }
@@ -512,8 +510,20 @@ pub mod convert {
         match old {
             old::naom::Asset::Token(v) => Asset::Token(convert_token_amount(v)),
             old::naom::Asset::Data(v) => Asset::Data(convert_data_asset(v)),
-            old::naom::Asset::Receipt(v) => Asset::Receipt(v),
+            old::naom::Asset::Receipt(v) => Asset::Receipt(convert_receipt_asset(v)), // Old `Receipt` assets cannot get carried over with the introduction of DRS
         }
+    }
+
+    pub fn convert_receipt_asset(old: u64) -> ReceiptAsset {
+        ReceiptAsset {
+            amount: old,
+            drs_tx_hash: Some(RECEIPT_DEFAULT_DRS_TX_HASH.to_owned()),
+        }
+    }
+
+    /// Convert all previous `Receipt` assets to the "default" type with "default_drs_tx_hash"
+    pub fn convert_receipt_amount(old: u64) -> BTreeMap<String, u64> {
+        std::iter::once((RECEIPT_DEFAULT_DRS_TX_HASH.to_owned(), old)).collect()
     }
 
     pub fn convert_data_asset(old: old::naom::DataAsset) -> DataAsset {
@@ -562,7 +572,7 @@ pub mod convert {
     pub fn convert_asset_values(old: old::wallet::AssetValues) -> AssetValues {
         AssetValues {
             tokens: convert_token_amount(old.tokens),
-            receipts: old.receipts,
+            receipts: convert_receipt_amount(old.receipts),
         }
     }
 
@@ -627,6 +637,10 @@ pub mod convert {
         old.into_iter()
             .map(|(k, v)| (k, convert_transaction(v)))
             .collect()
+    }
+
+    pub fn convert_last_coinbase(old: (String, old::naom::Transaction)) -> (String, Transaction) {
+        (old.0, convert_transaction(old.1))
     }
 
     pub fn convert_transaction_gen(

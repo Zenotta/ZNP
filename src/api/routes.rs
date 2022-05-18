@@ -782,6 +782,8 @@ pub fn storage_node_routes(
 }
 
 // API routes for Compute nodes
+// TODO: 1. `fetch_pending` should not return `Transaction` as it contains sensitive information (`Script`)
+// TODO: 2. `fetch_pending` should return sensible data once a proper use-case has been found
 pub fn compute_node_routes(
     api_keys: ApiKeys,
     routes_pow_info: RoutesPoWInfo,
@@ -799,13 +801,6 @@ pub fn compute_node_routes(
         api_keys.clone(),
         cache.clone(),
     )
-    .or(fetch_pending(
-        dp,
-        threaded_calls.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
     .or(create_receipt_asset(
         dp,
         threaded_calls.clone(),

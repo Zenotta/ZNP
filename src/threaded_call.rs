@@ -41,11 +41,11 @@ pub async fn make_threaded_call<'a, T: ?Sized, R: Send + Sized + 'static>(
         tag,
     )
     .await
-    .map_err(|_| StringError("ThreadedCall fa)l to send call".to_owned()))?;
+    .map_err(|_| StringError("ThreadedCall fail to send call".to_owned()))?;
 
     let r = r_rx
         .await
-        .map_err(|_| StringError("ThreadedCall fa)l to get result".to_owned()))?;
+        .map_err(|_| StringError("ThreadedCall fail to get result".to_owned()))?;
     Ok(r)
 }
 

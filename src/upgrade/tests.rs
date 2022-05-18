@@ -712,7 +712,6 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
                     value: Asset::Token(TokenAmount(7510183)),
                     locktime: 0,
                     drs_block_hash: None,
-                    drs_tx_hash: None,
                     script_public_key: Some(
                         "bdba6089d59492c9f89d9e3244fd6c38789884fde14e6192d87899a326a7415e"
                             .to_owned(),

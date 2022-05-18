@@ -1,3 +1,4 @@
+use crate::compute::ComputeError;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::Unicorn;
@@ -7,7 +8,7 @@ use naom::primitives::asset::Asset;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::{Block, BlockHeader};
 use naom::primitives::druid::DruidExpectation;
-use naom::primitives::transaction::TxIn;
+use naom::primitives::transaction::{DrsTxHashSpec, TxIn};
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use rug::Integer;
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,7 @@ pub struct RbPaymentRequestData {
     pub sender_half_druid: String,
     pub sender_from_addr: String,
     pub sender_asset: Asset,
+    pub sender_drs_tx_expectation: Option<String>,
 }
 
 /// Struct used to make a response to a new receipt-based payment
@@ -472,6 +474,7 @@ pub enum ComputeApiRequest {
         script_public_key: String,
         public_key: String,
         signature: String,
+        drs_tx_hash_spec: DrsTxHashSpec,
     },
     SendTransactions {
         transactions: Vec<Transaction>,
@@ -574,7 +577,8 @@ pub trait ComputeApi {
         script_public_key: String,
         public_key: String,
         signature: String,
-    ) -> Option<Response>;
+        drs_tx_hash_spec: DrsTxHashSpec,
+    ) -> Result<(Transaction, String), ComputeError>;
 }
 
 ///============ USER NODE ============///
@@ -583,7 +587,10 @@ pub trait ComputeApi {
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserApiRequest {
     /// Request to generate receipt-based asset
-    SendCreateReceiptRequest { receipt_amount: u64 },
+    SendCreateReceiptRequest {
+        receipt_amount: u64,
+        drs_tx_hash_spec: DrsTxHashSpec,
+    },
 
     /// Request to fetch UTXO set and update running total for specified addresses
     UpdateWalletFromUtxoSet {

@@ -17,7 +17,7 @@ use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::druid::DruidExpectation;
-use naom::primitives::transaction::{Transaction, TxIn, TxOut};
+use naom::primitives::transaction::{DrsTxHashSpec, Transaction, TxIn, TxOut};
 use naom::utils::transaction_utils::{
     construct_rb_payments_send_tx, construct_rb_receive_payment_tx, construct_receipt_create_tx,
     construct_tx_core, construct_tx_hash, construct_tx_ins_address,
@@ -557,9 +557,13 @@ impl UserNode {
             MakePayment { address, amount } => {
                 Some(self.make_payment_transactions(None, address, amount).await)
             }
-            SendCreateReceiptRequest { receipt_amount } => {
-                Some(self.generate_receipt_asset_tx(receipt_amount).await)
-            }
+            SendCreateReceiptRequest {
+                receipt_amount,
+                drs_tx_hash_spec,
+            } => Some(
+                self.generate_receipt_asset_tx(receipt_amount, drs_tx_hash_spec)
+                    .await,
+            ),
         }
     }
 
@@ -587,6 +591,10 @@ impl UserNode {
             )
             .await?;
         Ok(())
+    }
+
+    pub fn get_next_payment_transaction(&self) -> Option<(Option<SocketAddr>, Transaction)> {
+        self.next_payment.clone()
     }
 
     pub fn get_received_utxo(&self) -> Option<UtxoSet> {
@@ -1072,6 +1080,7 @@ impl UserNode {
         &mut self,
         peer: SocketAddr,
         sender_asset: Asset,
+        drs_tx_hash: Option<String>, /* drs_tx_hash of Receipt asset to receive */
     ) -> Result<()> {
         let (sender_address, _) = self.wallet_db.generate_payment_address().await;
         let sender_half_druid = generate_half_druid();
@@ -1085,6 +1094,7 @@ impl UserNode {
             (tx_ins, tx_outs),
             sender_half_druid,
             sender_address,
+            drs_tx_hash,
         );
 
         self.next_rb_payment_data = Some(rb_payment_data);
@@ -1131,7 +1141,8 @@ impl UserNode {
     ) -> Response {
         let receiver_half_druid = generate_half_druid();
         let (receiver_address, _) = self.wallet_db.generate_payment_address().await;
-        let asset_required = Asset::Receipt(1);
+        let asset_required =
+            Asset::receipt(1, rb_payment_request_data.sender_drs_tx_expectation.clone());
         let tx_ins_and_outs = self
             .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
             .await;
@@ -1191,7 +1202,11 @@ impl UserNode {
     }
 
     /// Create new receipt-asset transaction to send to compute for processing
-    pub async fn generate_receipt_asset_tx(&mut self, receipt_amount: u64) -> Response {
+    pub async fn generate_receipt_asset_tx(
+        &mut self,
+        receipt_amount: u64,
+        drs_tx_hash_spec: DrsTxHashSpec,
+    ) -> Response {
         let AddressStore {
             public_key,
             secret_key,
@@ -1199,8 +1214,13 @@ impl UserNode {
         } = self.wallet_db.generate_payment_address().await.1;
 
         let block_num = self.last_block_notified.header.b_num;
-        let receipt_asset_tx =
-            construct_receipt_create_tx(block_num, public_key, &secret_key, receipt_amount);
+        let receipt_asset_tx = construct_receipt_create_tx(
+            block_num,
+            public_key,
+            &secret_key,
+            receipt_amount,
+            drs_tx_hash_spec,
+        );
 
         self.next_payment = Some((None, receipt_asset_tx));
 
@@ -1227,6 +1247,7 @@ pub fn make_rb_payment_send_tx_and_request(
     (tx_ins, tx_outs): (Vec<TxIn>, Vec<TxOut>),
     sender_half_druid: String,
     sender_address: String,
+    sender_drs_tx_expectation: Option<String>,
 ) -> (RbPaymentData, RbPaymentRequestData) {
     let sender_from_addr = construct_tx_ins_address(&tx_ins);
 
@@ -1235,6 +1256,7 @@ pub fn make_rb_payment_send_tx_and_request(
         sender_half_druid: sender_half_druid.clone(),
         sender_from_addr,
         sender_asset: sender_asset.clone(),
+        sender_drs_tx_expectation,
     };
 
     let rb_payment_data = RbPaymentData {
@@ -1265,6 +1287,7 @@ pub fn make_rb_payment_receipt_tx_and_response(
         sender_half_druid,
         sender_from_addr,
         sender_asset,
+        sender_drs_tx_expectation,
     } = rb_payment_request_data;
 
     let druid = sender_half_druid + &receiver_half_druid;
@@ -1274,7 +1297,7 @@ pub fn make_rb_payment_receipt_tx_and_response(
     let sender_druid_expectation = DruidExpectation {
         from: receiver_from_addr,
         to: sender_address.clone(),
-        asset: Asset::Receipt(1),
+        asset: Asset::receipt(1, sender_drs_tx_expectation.clone()),
     };
 
     // DruidExpectation for receiver(Bob)
@@ -1291,6 +1314,7 @@ pub fn make_rb_payment_receipt_tx_and_response(
         0,
         druid,
         vec![receiver_druid_expectation],
+        sender_drs_tx_expectation,
     );
 
     let rb_payment_response = RbPaymentResponseData {

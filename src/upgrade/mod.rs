@@ -11,19 +11,21 @@ mod tests_last_version_db;
 
 use crate::configurations::{DbMode, ExtraNodeParams, UnicornFixedInfo};
 use crate::constants::{
-    BLOCK_PREPEND, DB_PATH, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, TX_PREPEND, WALLET_PATH,
+    BLOCK_PREPEND, DB_PATH, DB_VERSION_KEY, FUND_KEY, NETWORK_VERSION_SERIALIZED, TX_PREPEND,
+    WALLET_PATH,
 };
 use crate::db_utils::{
     new_db_no_check_version, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec,
     SimpleDbWriteBatch, DB_COL_DEFAULT,
 };
+use crate::miner::LAST_COINBASE_KEY;
 use crate::utils::StringError;
 use crate::{compute, compute_raft, raft_store, storage, storage_raft, user, wallet};
 use bincode::{deserialize, serialize};
 use frozen_last_version as old;
 use std::error::Error;
 use std::fmt;
-use tracing::{error, trace};
+use tracing::error;
 
 pub const DB_SPEC_INFOS: &[DbSpecInfo] = &[
     DbSpecInfo {
@@ -488,16 +490,19 @@ pub fn upgrade_wallet_db_batch<'a>(
         if key == DB_VERSION_KEY.as_bytes() {
             // Keep as is
         } else if key == old::wallet::TX_GENERATOR_KEY.as_bytes() {
-            // Keep as is
+            // Upgrade
             let old_gen: old::wallet::TransactionGenSer =
                 tracked_deserialize("TransactionGen deserialize", &key, &value)?;
 
             let data = serialize(&old::convert_transaction_gen(old_gen))?;
             batch.put_cf(DB_COL_DEFAULT, user::TX_GENERATOR_KEY, &data);
         } else if key == old::wallet::LAST_COINBASE_KEY.as_bytes() {
-            // Keep as is
-            let _: old::wallet::LastCoinbase =
+            // Upgrade
+            let old_coinbase: old::wallet::LastCoinbase =
                 tracked_deserialize("LastCoinbase deserialize", &key, &value)?;
+
+            let data = serialize(&old::convert_last_coinbase(old_coinbase))?;
+            batch.put_cf(DB_COL_DEFAULT, LAST_COINBASE_KEY, &data);
         } else if key == old::wallet::MINING_ADDRESS_KEY.as_bytes() {
             // Keep as is
             let _: String = tracked_deserialize("MiningAddress deserialize", &key, &value)?;
@@ -506,10 +511,12 @@ pub fn upgrade_wallet_db_batch<'a>(
             let _: old::wallet::MasterKeyStore =
                 tracked_deserialize("MasterKeyStore deserialize", &key, &value)?;
         } else if key == old::wallet::FUND_KEY.as_bytes() {
-            // Keep as is
-            let f: old::wallet::FundStore =
+            // Upgrade
+            let old_fundstore: old::wallet::FundStore =
                 tracked_deserialize("FundStore deserialize", &key, &value)?;
-            trace!("FundStore: {:?}", f);
+
+            let data = serialize(&old::convert_fund_store(old_fundstore))?;
+            batch.put_cf(DB_COL_DEFAULT, FUND_KEY, &data);
         } else if key == old::wallet::KNOWN_ADDRESS_KEY.as_bytes() {
             // Keep as is
             let _: old::wallet::KnownAddresses =

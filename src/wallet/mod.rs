@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::{error, fmt, io};
 use tokio::task;
-mod fund_store;
-pub use fund_store::{AssetValues, FundStore};
+pub mod fund_store;
+pub use fund_store::FundStore;
 
 /// Storage key for a &[u8] of the word 'MasterKeyStore'
 pub const MASTER_KEY_STORE_KEY: &str = "MasterKeyStore";
@@ -389,7 +389,8 @@ impl WalletDb {
             for (out_p, asset, key_address) in &usable_payments {
                 let key_address = key_address.clone();
                 let store = TransactionStore { key_address };
-                fund_store.store_tx(out_p.clone(), asset.clone());
+                let asset_to_store = asset.clone().with_fixed_hash(out_p);
+                fund_store.store_tx(out_p.clone(), asset_to_store);
                 save_transaction_to_wallet(&mut batch, out_p, &store);
             }
 
