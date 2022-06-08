@@ -98,14 +98,7 @@ pub struct MiningPipelineInfo {
 
 impl MiningPipelineInfo {
     /// Start participants intake phase
-    pub fn start_participant_intake(
-        &mut self,
-        tx_inputs: &[String],
-        fixed_params: &UnicornFixedParam,
-    ) {
-        //  Construct with  previous participants and winnning hashes
-        self.construct_unicorn(tx_inputs, fixed_params);
-
+    pub fn start_participant_intake(&mut self) {
         //Only keep relevant info for this phase
         *self = Self {
             unicorn_info: std::mem::take(&mut self.unicorn_info),
@@ -321,6 +314,12 @@ impl MiningPipelineInfo {
         let all_participants: Vec<_> = all_participants.flatten().copied().collect();
         let seed = construct_seed(tx_inputs, &all_participants, &self.last_winning_hashes);
         self.unicorn_info = construct_unicorn(seed, fixed_params);
+    }
+
+    /// Return the seed value for the block based on current unicorn
+    pub fn get_unicorn_seed_value(&self) -> Vec<u8> {
+        let u = &self.unicorn_info;
+        format!("{}-{}", u.unicorn.seed, u.witness).into_bytes()
     }
 
     /// Gets a UNICORN-generated pseudo random number

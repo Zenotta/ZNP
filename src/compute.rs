@@ -382,8 +382,8 @@ impl ComputeNode {
     /// Process all the mining phase in a single step (Test only)
     /// ### Arguments
     /// * `winning_pow`    - Address nad PoW for the winner to use
-    pub fn test_skip_mining(&mut self, winning_pow: (SocketAddr, WinningPoWInfo)) {
-        self.node_raft.test_skip_mining(winning_pow);
+    pub fn test_skip_mining(&mut self, winning_pow: (SocketAddr, WinningPoWInfo), seed: Vec<u8>) {
+        self.node_raft.test_skip_mining(winning_pow, seed);
         self.mining_block_mined();
     }
 

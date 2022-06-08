@@ -476,7 +476,10 @@ impl ComputeRaft {
     }
 
     /// Process all the mining phase in a single step (Test only)
-    pub fn test_skip_mining(&mut self, winning_pow: (SocketAddr, WinningPoWInfo)) {
+    pub fn test_skip_mining(&mut self, winning_pow: (SocketAddr, WinningPoWInfo), seed: Vec<u8>) {
+        let block = self.consensused.current_block.as_mut().unwrap();
+        block.header.seed_value = seed;
+
         self.consensused
             .block_pipeline
             .test_skip_mining(winning_pow)
@@ -1224,10 +1227,14 @@ impl ComputeConsensused {
 
     /// Start participants intake phase
     pub fn start_participant_intake(&mut self) {
-        let block = self.current_block.as_ref().unwrap();
+        let block = self.current_block.as_mut().unwrap();
         let tx_inputs = &block.transactions;
-        self.block_pipeline
-            .start_participant_intake(tx_inputs, &self.unicorn_fixed_param);
+        let fixed_paam = &self.unicorn_fixed_param;
+
+        self.block_pipeline.construct_unicorn(tx_inputs, fixed_paam);
+        block.header.seed_value = self.block_pipeline.get_unicorn_seed_value();
+
+        self.block_pipeline.start_participant_intake();
     }
 
     /// Handle a mining pipeline item
