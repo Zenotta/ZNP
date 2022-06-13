@@ -821,6 +821,46 @@ async fn create_block_act_with(network: &mut Network, cfg: Cfg, cfg_num: CfgNum,
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn create_block_with_seed() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let network_config = complete_network_config_with_n_compute_raft(11600, 1);
+    let mut network = Network::create_from_config(&network_config).await;
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let compute = &compute_nodes[0];
+    let transactions = valid_transactions(true);
+    let (_, block_info0) = complete_first_block(&network.collect_initial_uxto_txs()).await;
+
+    //
+    // Act
+    //
+    create_first_block_act(&mut network).await;
+    let block0 = compute_current_mining_block(&mut network, compute).await;
+    let seed0 = block0.as_ref().map(|b| b.header.seed_value.as_slice());
+    let seed0 = seed0.and_then(|s| std::str::from_utf8(s).ok());
+
+    compute_all_skip_mining(&mut network, compute_nodes, &block_info0).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+    add_transactions_act(&mut network, &transactions).await;
+    create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+    let block1 = compute_current_mining_block(&mut network, compute).await;
+    let seed1 = block1.as_ref().map(|b| b.header.seed_value.as_slice());
+    let seed1 = seed1.and_then(|s| std::str::from_utf8(s).ok());
+
+    //
+    // Assert
+    //
+    let expected_seed0 = Some("66834560691823092383280912636706120233344033721002615407440851751837150180545-3844507961937768323920383207668601435665951786473762741354875576809652837091661170062503618204890764181646182943319001719893641440471545700415549055369881370");
+    let expected_seed1 = Some("64881971566960642807502732089019822505957602038695891698026494006585682667610-6351671768184906669104848274468413710662978486397558205806593283397095895418610669943877633258302998254241950838477005161684726191818003264071457891039943678");
+    assert_eq!((seed0, seed1), (expected_seed0, expected_seed1));
+
+    test_step_complete(network).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_no_raft() {
     proof_of_work(complete_network_config(10200)).await;
 }
@@ -3362,10 +3402,11 @@ async fn compute_all_send_block_to_storage(network: &mut Network, compute_group:
 async fn compute_skip_mining(network: &mut Network, compute: &str, block_info: &CompleteBlock) {
     let mut c = network.compute(compute).unwrap().lock().await;
 
+    let seed = block_info.common.block.header.seed_value.clone();
     let winning_pow_info = complete_block_winning_pow(block_info);
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0);
 
-    c.test_skip_mining((addr, winning_pow_info))
+    c.test_skip_mining((addr, winning_pow_info), seed)
 }
 
 async fn compute_all_skip_mining(
@@ -4216,7 +4257,23 @@ async fn complete_block(
     previous_hash: Option<&str>,
     block_txs: &BTreeMap<String, Transaction>,
 ) -> ((String, String), CompleteBlock) {
+    complete_block_with_seed(
+        block_num,
+        previous_hash,
+        block_txs,
+        "fixed_test_seed".to_owned(),
+    )
+    .await
+}
+
+async fn complete_block_with_seed(
+    block_num: u64,
+    previous_hash: Option<&str>,
+    block_txs: &BTreeMap<String, Transaction>,
+    seed: String,
+) -> ((String, String), CompleteBlock) {
     let mut block = Block::new();
+    block.header.seed_value = seed.into_bytes();
     block.header.b_num = block_num;
     block.header.previous_hash = previous_hash.map(|v| v.to_string());
     block.transactions = block_txs.keys().cloned().collect();
