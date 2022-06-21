@@ -100,6 +100,18 @@ Beyond this, it is only expected that branches have sensible naming that describ
 
 ..
 
+## Deployment
+
+Steps to deploy the node binaries in choice of your environment.
+
+- Run the pipeline for branch of your choice with following varibles.
+- Set `deploy_binaries` to `true` to enforce infrastructure changes.
+- Set `zenotta_env` with choice of your environment. e.g - `dev-stg`, `dev-byron` etc..
+- Successful run of `infra` pipeline will present with you IP addresses of different nodes.
+- IP address of node will still needs to be configured in `node_settings.toml` and `tls_certificates.json` manually post rollout.
+
+..
+
 ## Documentation
 
 Documentation can be built locally with rustdoc by running the following command:

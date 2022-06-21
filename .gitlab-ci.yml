@@ -38,14 +38,35 @@ build:
     - rustc --version && cargo --version  
     - cargo build --bins --release
     - ls ./target/release/ -l
+    - echo "BUILD_CI_JOB_ID=$CI_JOB_ID" >> build.env
   artifacts:
+    reports:
+      dotenv: build.env
     paths:
       - target/release/node
       - target/release/upgrade
       - src/bin/*.toml 
       - src/bin/*.json 
       - src/bin/*.sh 
-      
+
+deploy:
+  stage: deploy
+  variables:
+    zenotta_env: $zenotta_env
+    znp_project_id: $CI_PROJECT_ID
+    znp_job_id: $BUILD_CI_JOB_ID
+    znp_deploy_binaries: "true"
+    apply_changes: "true"
+  needs:
+    - job: build
+      artifacts: true
+  trigger:
+    project: zenotta/devops
+    branch: develop
+    strategy: depend
+  rules:
+    - if: $deploy_binaries == "true" 
+
 # Test and lint the project: do not build binaries
 # that require rocksdb and other dependencies
 test:cargo:
