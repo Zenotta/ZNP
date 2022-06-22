@@ -1843,6 +1843,51 @@ async fn test_post_change_passphrase_failure() {
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Error\",\"reason\":\"Invalid passphrase\",\"route\":\"change_passphrase\",\"content\":\"null\"}");
 }
 
+/// Test POST change blank passphrase failure
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_change_blank_passphrase_failure() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let db = get_wallet_db("old_passphrase").await;
+    let json_body = ChangePassphraseData {
+        old_passphrase: String::from("old_passphrase"),
+        new_passphrase: String::from(""),
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/change_passphrase")
+        .header("Content-Type", "application/json")
+        .header("x-request-id", COMMON_REQ_ID)
+        .json(&json_body.clone());
+    //
+    // Act
+    //
+    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+    let filter = routes::change_passphrase(&mut dp(), db.clone(), Default::default(), ks, cache)
+        .recover(handle_rejection);
+    let actual = db.test_passphrase(String::from("")).await;
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert!(
+        matches!(actual, Err(WalletDbError::PassphraseError)),
+        "{:?}",
+        actual
+    );
+    assert_eq!(
+        (res.status(), res.headers().clone()),
+        fail_json(StatusCode::UNAUTHORIZED)
+    );
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Error\",\"reason\":\"New passphrase cannot be blank\",\"route\":\"change_passphrase\",\"content\":\"null\"}");
+}
+
 /// Test POST fetch block hashes for blocks that contain given `tx_hashes`
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_block_nums_by_tx_hashes() {

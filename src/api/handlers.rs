@@ -697,6 +697,10 @@ pub async fn post_change_wallet_passphrase(
 
     let r = CallResponse::new(route, &call_id);
 
+    if new_passphrase.is_empty() {
+        //New passphrase cannot be blank
+        return r.into_err(StatusCode::UNAUTHORIZED, ApiErrorType::BlankPassphrase);
+    }
     match db
         .change_wallet_passphrase(old_passphrase, new_passphrase)
         .await
