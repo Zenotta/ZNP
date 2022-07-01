@@ -2,6 +2,9 @@ use crate::constants::{MINER_PARTICIPATION_UN, WINNING_MINER_UN};
 use crate::interfaces::WinningPoWInfo;
 use crate::unicorn::{construct_seed, construct_unicorn, UnicornFixedParam, UnicornInfo};
 use keccak_prime::fortuna::Fortuna;
+use naom::primitives::asset::TokenAmount;
+use naom::primitives::block::Block;
+use naom::primitives::transaction::Transaction;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryInto;
@@ -86,25 +89,51 @@ pub struct PipelineEventInfo {
 /// Rolling info particular to a specific mining pipeline
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct MiningPipelineInfo {
-    participants: BTreeMap<u64, Participants>,
+    /// Participants for intake phase
+    participants_intake: BTreeMap<u64, Participants>,
+    /// Participants during actual mining
+    participants_mining: BTreeMap<u64, Participants>,
+    /// Empty Participants collection
     empty_participants: Participants,
+    /// The last round winning hashes
     last_winning_hashes: BTreeSet<String>,
+    /// The wining PoWs for selection
     all_winning_pow: Vec<(SocketAddr, WinningPoWInfo)>,
+    /// The unicorn info for the selections
     unicorn_info: UnicornInfo,
+    /// The selected wining PoW
     winning_pow: Option<(SocketAddr, WinningPoWInfo)>,
+    /// The current status
     mining_pipeline_status: MiningPipelineStatus,
+    /// The timeout ids
     current_phase_timeout_peer_ids: BTreeSet<u64>,
+    /// Index of the last block,
+    pub current_block_num: Option<u64>,
+    /// Current block ready to mine (consensused).
+    pub current_block: Option<Block>,
+    /// All transactions present in current_block (consensused).
+    pub current_block_tx: BTreeMap<String, Transaction>,
+    /// The current reward for a given compute node
+    pub current_reward: TokenAmount,
 }
 
 impl MiningPipelineInfo {
+    /// Check if computing the first block.
+    pub fn current_block_num(&self) -> Option<u64> {
+        self.current_block_num
+    }
+
     /// Start participants intake phase
     pub fn start_participant_intake(&mut self) {
         //Only keep relevant info for this phase
-        *self = Self {
-            unicorn_info: std::mem::take(&mut self.unicorn_info),
-            mining_pipeline_status: MiningPipelineStatus::ParticipantIntake,
-            ..Default::default()
-        };
+        self.mining_pipeline_status = MiningPipelineStatus::ParticipantIntake;
+        self.participants_intake = Default::default();
+        self.participants_mining = Default::default();
+        self.last_winning_hashes = Default::default();
+        self.all_winning_pow = Default::default();
+        self.winning_pow = Default::default();
+        self.current_phase_timeout_peer_ids = Default::default();
+
         debug!("MINING PIPELINE STATUS: {:?}", self.mining_pipeline_status);
     }
 
@@ -176,8 +205,12 @@ impl MiningPipelineInfo {
     }
 
     /// Process all the mining phase in a single step
-    pub fn test_skip_mining(&mut self, winning_pow: (SocketAddr, WinningPoWInfo)) {
-        info!("test_skip_mining PoW entry: {:?}", winning_pow);
+    pub fn test_skip_mining(&mut self, winning_pow: (SocketAddr, WinningPoWInfo), seed: Vec<u8>) {
+        info!("test_skip_mining PoW entry: {:?} ({:?})", winning_pow, seed);
+
+        let block = self.current_block.as_mut().unwrap();
+        block.header.seed_value = seed;
+
         self.start_participants_pow_intake(usize::MAX);
         self.all_winning_pow.push(winning_pow);
         self.start_winning_pow_halted();
@@ -190,7 +223,7 @@ impl MiningPipelineInfo {
 
     /// Retrieves the miners participating in the current round
     pub fn get_mining_participants(&self, proposer_id: u64) -> &Participants {
-        self.participants
+        self.participants_mining
             .get(&proposer_id)
             .unwrap_or(&self.empty_participants)
     }
@@ -207,7 +240,7 @@ impl MiningPipelineInfo {
 
     /// Add a new participant to the eligible list, if possible
     pub fn add_to_participants(&mut self, proposer_id: u64, participant: SocketAddr) {
-        let participants = self.participants.entry(proposer_id).or_default();
+        let participants = self.participants_intake.entry(proposer_id).or_default();
         if participants.push(participant) {
             debug!(
                 "Adding miner participant: {}-{:?}",
@@ -241,12 +274,12 @@ impl MiningPipelineInfo {
     /// Selects a winning miner from the list via UNICORN
     pub fn has_ready_select_participating_miners(&mut self, sufficient_majority: usize) -> bool {
         self.current_phase_timeout_peer_ids.len() >= sufficient_majority
-            && self.participants.len() >= sufficient_majority
+            && self.participants_intake.len() >= sufficient_majority
     }
 
     /// Select miners to mine current block and move to Pow intake
     pub fn start_participants_pow_intake(&mut self, partition_full_size: usize) {
-        let mut participants = std::mem::take(&mut self.participants);
+        let mut participants = std::mem::take(&mut self.participants_intake);
         let _timeouts = std::mem::take(&mut self.current_phase_timeout_peer_ids);
 
         for ps in participants.values_mut() {
@@ -260,10 +293,10 @@ impl MiningPipelineInfo {
             ps.lookup = ps.unsorted.iter().copied().collect();
         }
 
-        self.participants = participants;
+        self.participants_mining = participants;
         self.mining_pipeline_status = MiningPipelineStatus::WinningPoWIntake;
         debug!("MINING PIPELINE STATUS: {:?}", self.mining_pipeline_status);
-        debug!("Participating Miners: {:?}", self.participants);
+        debug!("Participating Miners: {:?}", self.participants_mining);
     }
 
     /// Selects a winning miner from the list via UNICORN
@@ -304,22 +337,20 @@ impl MiningPipelineInfo {
     }
 
     /// Sets the new UNICORN value based on the latest info
-    pub fn construct_unicorn(&mut self, tx_inputs: &[String], fixed_params: &UnicornFixedParam) {
+    pub fn construct_unicorn(&mut self, fixed_params: &UnicornFixedParam) {
+        let block = self.current_block.as_mut().unwrap();
+        let tx_inputs = &block.transactions;
+
         debug!(
             "Constructing UNICORN value using {:?}, {:?}, {:?}",
-            tx_inputs, self.participants, self.last_winning_hashes
+            tx_inputs, self.participants_mining, self.last_winning_hashes
         );
 
-        let all_participants = self.participants.values().map(|p| &p.unsorted);
+        let all_participants = self.participants_mining.values().map(|p| &p.unsorted);
         let all_participants: Vec<_> = all_participants.flatten().copied().collect();
         let seed = construct_seed(tx_inputs, &all_participants, &self.last_winning_hashes);
         self.unicorn_info = construct_unicorn(seed, fixed_params);
-    }
-
-    /// Return the seed value for the block based on current unicorn
-    pub fn get_unicorn_seed_value(&self) -> Vec<u8> {
-        let u = &self.unicorn_info;
-        format!("{}-{}", u.unicorn.seed, u.witness).into_bytes()
+        block.header.seed_value = get_unicorn_seed_value(&self.unicorn_info);
     }
 
     /// Gets a UNICORN-generated pseudo random number
@@ -368,4 +399,9 @@ impl MiningPipelineInfo {
         let selection = 1 + prn as usize % (items.len() - 1);
         items.swap(0, selection);
     }
+}
+
+/// Return the seed value for the block based on given unicorn
+fn get_unicorn_seed_value(u: &UnicornInfo) -> Vec<u8> {
+    format!("{}-{}", u.unicorn.seed, u.witness).into_bytes()
 }
