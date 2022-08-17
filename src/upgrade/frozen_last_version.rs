@@ -104,6 +104,7 @@ pub mod naom {
         OP_HASH256 = 0x5d,
         OP_EQUALVERIFY = 0x3d,
         OP_CHECKSIG = 0x5f,
+        OP_CREATE = 0x6d,
         OP_HASH256_V0 = 0x6e,
         OP_HASH256_TEMP = 0x6f,
     }
@@ -122,6 +123,7 @@ pub mod naom {
                 0x5d => Ok(Self::OP_HASH256),
                 0x3d => Ok(Self::OP_EQUALVERIFY),
                 0x5f => Ok(Self::OP_CHECKSIG),
+                0x6d => Ok(Self::OP_CREATE),
                 0x6e => Ok(Self::OP_HASH256_V0),
                 0x6f => Ok(Self::OP_HASH256_TEMP),
                 v => Err(serde::de::Error::custom(format!(
@@ -492,6 +494,7 @@ pub mod convert {
             old::naom::OpCodes::OP_HASH256 => OpCodes::OP_HASH256,
             old::naom::OpCodes::OP_EQUALVERIFY => OpCodes::OP_EQUALVERIFY,
             old::naom::OpCodes::OP_CHECKSIG => OpCodes::OP_CHECKSIG,
+            old::naom::OpCodes::OP_CREATE => OpCodes::OP_CREATE,
             old::naom::OpCodes::OP_HASH256_V0 => OpCodes::OP_HASH256_V0,
             old::naom::OpCodes::OP_HASH256_TEMP => OpCodes::OP_HASH256_TEMP,
         }
