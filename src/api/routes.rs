@@ -292,6 +292,31 @@ pub fn block_by_num(
         .with(post_cors())
 }
 
+// POST get block information by number
+pub fn transactions_by_key(
+    dp: &mut DbgPaths,
+    db: Arc<Mutex<SimpleDb>>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    let route = "transactions_by_key";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(db))
+        .and(warp::body::json())
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_transactions_by_key(db, info, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
 // POST save keypair
 // TODO: Requires password
 pub fn import_keypairs(
@@ -742,6 +767,13 @@ pub fn storage_node_routes(
         api_keys.clone(),
         cache.clone(),
     )
+    .or(transactions_by_key(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
     .or(latest_block(
         dp,
         db.clone(),
