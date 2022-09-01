@@ -97,6 +97,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::{fmt, io};
+use tokio::time::{timeout, Duration};
 use tokio::{
     self,
     sync::{mpsc, oneshot, Mutex, RwLock},
@@ -115,6 +116,8 @@ const FANOUT: usize = 8;
 
 /// Max. number of gossip message retransmissions.
 const GOSSIP_MAX_TTL: u8 = 4;
+
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5); // 5 seconds is just a wild guess. Tweak if necessary.
 
 /// Contains a shared list of connected peers.
 type PeerList = HashMap<SocketAddr, Peer>;
@@ -406,12 +409,15 @@ impl Node {
                 .ok_or(CommsError::PeerInvalidState)?
         };
 
-        // TODO: make sure we have a timeout here in case if a peer is unresponsive.
-        // If timeout, should drop the Peer.
-        match handshake_response.await {
-            Ok(()) => trace!("complete connection to {:?}", peer),
+        match timeout(RESPONSE_TIMEOUT, handshake_response)
+            .await
+            .map_err(|e| {
+                trace!("Timeout after {e}. Failed connection to {:?}", peer);
+                CommsError::PeerNotFound
+            })? {
+            Ok(()) => trace!("Complete connection to {:?}", peer),
             Err(_) => {
-                trace!("complete failed connection to {:?}", peer);
+                trace!("Complete failed connection to {:?}", peer);
                 return Err(CommsError::PeerNotFound);
             }
         }
