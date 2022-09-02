@@ -21,7 +21,7 @@ source $HOME/.cargo/env
 rustc --version
 ```
 
-If the terminal responds with the `rustc` version you're currently running then everything went well and you're ready to go. 
+If the terminal responds with the `rustc` version you're currently running then everything went well, and you're ready to go. 
 
 ### Linux
 
@@ -46,11 +46,12 @@ You can then set up the project on your local machine using the following steps:
 make
 ```
 
-You will also require a local instance of the Zenotta `NAOM` repo, which is a crate dependency. The dependency 
+You will also require a local instances of the Zenotta `NAOM` and `Keccak Prime` repo, which is a crate dependency. The dependency 
 is listed in the `Cargo.toml` as:
 
 ```
 naom = { path = "../naom" }
+keccak_prime = { path = "../keccak-prime" }
 ```
 
 The path can be changed as needed. Once done you can build the project using `cargo build` and run it using `cargo run`, as per usual.
@@ -72,7 +73,7 @@ This will compile everything into a release state, from which you can then run y
 - **Miner**: `RUST_LOG=warp target/release/node miner --config=src/bin/node_settings_local_raft_1.toml`
 - **User**: `RUST_LOG=warp target/release/node user --config=src/bin/node_settings_local_raft_1.toml`
 
-You can provide a number of flags to the command depending on the type of node, and you can view information on the available flags for each node type by running the compiled binary with the `--help` flag (eg. `target/release/storage --help`). You can also run a full, 1 node system in your local environment by running `sh src/bin/node_settings_local_raft_1_run.sh` and perusing the generated logs. 
+You can provide a number of flags to the command depending on the type of node, and you can view information on the available flags for each node type by running the compiled binary with the `--help` flag (e.g. `target/release/storage --help`). You can also run a full, 1 node system in your local environment by running `sh src/bin/node_settings_local_raft_1_run.sh` and perusing the generated logs. 
 
 If you run into TLS problems on the API routes, you can pass `--api_use_tls=0` to the shell script in order to disable TLS. **Note that this will create a security concern**, so it's best not to use this too frequently or for anything public facing.
 
@@ -93,8 +94,8 @@ git checkout -b branch_name
 
 where `branch_name` would be replaced with your chosen branch name. There is no general branch naming convention aside from two cases:
 
-- *New features*: These should be prefixed with `feature_` and then the branch name (eg. `feature_new_cool_feature`)
-- *Bugfixes*: These should be prefixed with `bugfix_` and then the branch name (eg. `bugfix_new_damn_bug`)
+- *New features*: These should be prefixed with `feature_` and then the branch name (e.g. `feature_new_cool_feature`)
+- *Bugfixes*: These should be prefixed with `bugfix_` and then the branch name (e.g. `bugfix_new_damn_bug`)
 
 Beyond this, it is only expected that branches have sensible naming that describes what the branch involves or is for.
 
@@ -104,11 +105,11 @@ Beyond this, it is only expected that branches have sensible naming that describ
 
 Steps to deploy the node binaries in choice of your environment.
 
-- Run the pipeline for branch of your choice with following varibles.
+- Run the pipeline for branch of your choice with following variables.
 - Set `deploy_binaries` to `true` to enforce infrastructure changes.
-- Set `zenotta_env` with choice of your environment. e.g - `dev-stg`, `dev-byron` etc..
+- Set `zenotta_env` with choice of your environment. e.g - `dev-stg`, `dev-byron` etc.
 - Successful run of `infra` pipeline will present with you IP addresses of different nodes.
-- IP address of node will still needs to be configured in `node_settings.toml` and `tls_certificates.json` manually post rollout.
+- IP address of node will still need to be configured in `node_settings.toml` and `tls_certificates.json` manually post rollout.
 
 ..
 

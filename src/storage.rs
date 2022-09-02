@@ -1149,7 +1149,7 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
     db: Arc<Mutex<SimpleDb>>,
     key: K,
 ) -> Option<BlockchainItem> {
-    let col_all = if key.as_ref().get(0) == Some(&NAMED_CONSTANT_PREPEND) {
+    let col_all = if key.as_ref().first() == Some(&NAMED_CONSTANT_PREPEND) {
         DB_COL_BC_NAMED
     } else {
         DB_COL_BC_ALL

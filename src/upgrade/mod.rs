@@ -548,7 +548,7 @@ pub fn upgrade_same_version_wallet_db(mut dbs: ExtraNodeParams) -> Result<ExtraN
 /// whether it is a transaction key
 pub fn is_transaction_key(key: &[u8]) -> bool {
     // special genesis block transactions had 6 digits and missed prefix
-    key.get(0) == Some(&TX_PREPEND) || key.len() == 6
+    key.first() == Some(&TX_PREPEND) || key.len() == 6
 }
 
 /// Wallet AddressStore key
@@ -600,7 +600,7 @@ fn to_u8_array_literal(value: &[u8]) -> String {
         if v.is_ascii_alphanumeric() || v == &b'_' {
             result.push(*v as char);
         } else {
-            result.push_str(&format!("\\x{:02X}", v));
+            format!("{result}\\x{:02X}", v);
         }
     }
     result

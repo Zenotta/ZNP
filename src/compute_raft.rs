@@ -34,7 +34,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 };
 
 /// Item serialized into RaftData and process by Raft.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ComputeRaftItem {
     FirstBlock(BTreeMap<String, Transaction>),
     Block(BlockStoredInfo),
@@ -44,7 +44,7 @@ pub enum ComputeRaftItem {
 }
 
 /// Commited item to process.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommittedItem {
     FirstBlock,
     Block,
@@ -86,7 +86,7 @@ pub enum SpecialHandling {
 /// Initial proposal state: Need both miner ready and block info ready
 #[allow(clippy::large_enum_variant)]
 #[allow(clippy::enum_variant_names)]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InitialProposal {
     PendingAll,
     PendingAuthorized,
