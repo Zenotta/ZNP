@@ -188,7 +188,7 @@ async fn insert_cache_value(
     cache: &ReplyCache,
 ) -> Result<JsonReply, JsonReply> {
     if !call_id.is_empty() {
-        let _ = cache.insert(String::from(call_id), response.clone()).await;
+        cache.insert(String::from(call_id), response.clone()).await;
     }
 
     response

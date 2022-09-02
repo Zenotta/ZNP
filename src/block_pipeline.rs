@@ -24,14 +24,14 @@ impl Default for MiningPipelineStatus {
 }
 
 /// Change in phase.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MiningPipelinePhaseChange {
     StartPhasePowIntake,
     StartPhaseHalted,
 }
 
 /// Different types of items that can be proposed to the block pipeline
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MiningPipelineItem {
     MiningParticipant(SocketAddr),
     CompleteParticipant,

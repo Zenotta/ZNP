@@ -78,7 +78,7 @@ pub struct RbPaymentResponseData {
 }
 
 /// A placeholder struct for sensible feedback
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
     pub success: bool,
     pub reason: &'static str,
@@ -678,7 +678,7 @@ impl fmt::Debug for UserRequest {
 ///============ PRE-LAUNCH NODE ============///
 
 /// API Debug Data Struct
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct DebugData {
     pub node_type: String,
     #[serde(borrow)]
