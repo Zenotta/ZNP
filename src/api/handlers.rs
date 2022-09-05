@@ -25,7 +25,7 @@ use naom::primitives::asset::{Asset, ReceiptAsset, TokenAmount};
 use naom::primitives::druid::DdeValues;
 use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
-use naom::utils::transaction_utils::construct_address_for;
+use naom::utils::transaction_utils::{construct_address_for, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -930,7 +930,7 @@ pub async fn make_api_threaded_call<'a, T: ?Sized, R: Send + Sized + 'static>(
 }
 
 /// Constructs the mapping of output address to asset for `create_transactions`
-pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, APIAsset> {
+pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, (String, APIAsset)> {
     let mut tx_info = BTreeMap::new();
 
     for tx in transactions {
@@ -938,7 +938,7 @@ pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, APIAs
             let address = out.script_public_key.clone().unwrap_or_default();
             let asset = APIAsset::new(out.value.clone(), None);
 
-            tx_info.insert(address, asset);
+            tx_info.insert(construct_tx_hash(tx), (address, asset));
         }
     }
 

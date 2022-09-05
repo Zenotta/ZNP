@@ -1721,9 +1721,15 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     //
     // Assert
     //
+    let expected_response_body = match address_version {
+        Some(NETWORK_VERSION_V0) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"gd7d597e062a8ad188d3f3f65eeead07\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"metadata\":null}]}}",
+        Some(NETWORK_VERSION_TEMP) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"gfdc595abce03519b7537ef71b8925b9\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"metadata\":null}]}}",
+        None => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"g9b21057dcea802476507d0f387d9eb1\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"metadata\":null}]}}",
+        _ => Default::default()
+    };
     assert_eq!(
         ((res.status(), res.headers().clone()), from_utf8(res.body())),
-        (success_json(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"0008536e3d5a13e347262b5023963000\":{\"asset\":{\"Token\":1},\"metadata\":null}}}")
+        (success_json(), expected_response_body)
     );
 }
 
