@@ -562,9 +562,13 @@ pub mod convert {
     }
 
     pub fn convert_fund_store(old: old::wallet::FundStore) -> wallet::FundStore {
+        let transactions = convert_saved_wallet_transactions(old.transactions);
+        let transaction_pages = convert_saved_wallet_transactions_to_pages(&transactions);
+
         wallet::FundStore::new(
             convert_asset_values(old.running_total),
-            convert_saved_wallet_transactions(old.transactions),
+            transactions,
+            transaction_pages,
             convert_saved_wallet_transactions(old.spent_transactions),
         )
     }
@@ -582,6 +586,23 @@ pub mod convert {
         old.into_iter()
             .map(|(k, v)| (convert_outpoint(k), convert_asset(v)))
             .collect()
+    }
+
+    //Creares pages from the frozen transactions
+    pub fn convert_saved_wallet_transactions_to_pages(
+        old: &BTreeMap<OutPoint, Asset>,
+    ) -> Vec<BTreeMap<OutPoint, Asset>> {
+        let mut transaction_pages: Vec<BTreeMap<OutPoint, Asset>> = vec![BTreeMap::new()];
+
+        for key in old.keys() {
+            if transaction_pages.last().unwrap().len() <= wallet::fund_store::ENTRIES_PER_PAGE {
+                transaction_pages
+                    .last_mut()
+                    .unwrap()
+                    .insert(key.clone(), old.get(key).unwrap().clone());
+            }
+        }
+        transaction_pages
     }
 
     pub fn convert_compute_consensused_to_import(
