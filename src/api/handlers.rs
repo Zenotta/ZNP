@@ -159,6 +159,7 @@ pub struct FetchPendingtResult {
 
 /// Gets the state of the connected wallet and returns it.
 /// Returns a `WalletInfo` struct
+/// extra is used to deonte spent_transactions or which page of transaction_pages
 pub async fn get_wallet_info(
     wallet_db: WalletDb,
     extra: Option<String>,
@@ -173,10 +174,21 @@ pub async fn get_wallet_info(
     };
 
     let mut addresses = AddressesWithOutPoints::new();
-    let txs = match extra.as_deref() {
-        Some("spent") => fund_store.spent_transactions().clone(),
-        _ => fund_store.transactions().clone(),
-    };
+    let txs;
+    if let Some(param) = extra.as_deref() {
+        if let Ok(page_usize) = param.parse::<usize>() {
+            txs = fund_store.transaction_pages(page_usize).clone();
+        } else if param.parse::<u64>().is_ok() {
+            txs = fund_store.transaction_pages(0).clone();
+        } else {
+            txs = match extra.as_deref() {
+                Some("spent") => fund_store.spent_transactions().clone(),
+                _ => fund_store.transactions().clone(),
+            };
+        }
+    } else {
+        txs = fund_store.transactions().clone();
+    }
 
     for (out_point, asset) in txs {
         addresses
