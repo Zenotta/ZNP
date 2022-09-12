@@ -168,7 +168,9 @@ async fn full_flow_raft_majority_3_nodes() {
     .await;
 }
 
+// Only run locally - unstable on repository pipeline
 #[tokio::test(flavor = "current_thread")]
+#[ignore]
 async fn full_flow_raft_15_nodes() {
     full_flow(complete_network_config_with_n_compute_raft(10550, 15)).await;
 }

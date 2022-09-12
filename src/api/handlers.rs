@@ -25,7 +25,7 @@ use naom::primitives::asset::{Asset, ReceiptAsset, TokenAmount};
 use naom::primitives::druid::DdeValues;
 use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
-use naom::utils::transaction_utils::construct_address_for;
+use naom::utils::transaction_utils::{construct_address_for, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -347,6 +347,16 @@ pub async fn post_blockchain_entry_by_key(
     get_json_reply_stored_value_from_db(db, &key, true, call_id, route)
 }
 
+/// Post to batch retrieve multiple transactions from the blockchain db by hash keys
+pub async fn post_transactions_by_key(
+    db: Arc<Mutex<SimpleDb>>,
+    keys: Vec<String>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    get_json_reply_items_from_db(db, keys, route, call_id)
+}
+
 /// Post to retrieve block information by number
 pub async fn post_block_by_num(
     db: Arc<Mutex<SimpleDb>>,
@@ -358,7 +368,7 @@ pub async fn post_block_by_num(
         .iter()
         .map(|num| indexed_block_hash_key(*num))
         .collect();
-    get_json_reply_blocks_from_db(db, keys, route, call_id)
+    get_json_reply_items_from_db(db, keys, route, call_id)
 }
 
 /// Post to import new keypairs to the connected wallet
@@ -875,9 +885,9 @@ fn get_json_reply_stored_value_from_db(
     r.into_ok("Database item(s) successfully retrieved", json_content)
 }
 
-/// Fetches JSON blocks. Blocks which for whatever reason are
+/// Fetches JSON items. Items which for whatever reason are
 /// unretrievable will be replaced with a default (best handling?)
-pub fn get_json_reply_blocks_from_db(
+pub fn get_json_reply_items_from_db(
     db: Arc<Mutex<SimpleDb>>,
     keys: Vec<String>,
     route: &'static str,
@@ -893,7 +903,7 @@ pub fn get_json_reply_blocks_from_db(
         })
         .collect();
 
-    // Make JSON tupple with key and Block
+    // Make JSON tupple with key and JSON item
     let key_values: Vec<_> = key_values
         .iter()
         .map(|(k, v)| [&b"[\""[..], k, &b"\","[..], v, &b"]"[..]])
@@ -920,7 +930,7 @@ pub async fn make_api_threaded_call<'a, T: ?Sized, R: Send + Sized + 'static>(
 }
 
 /// Constructs the mapping of output address to asset for `create_transactions`
-pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, APIAsset> {
+pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, (String, APIAsset)> {
     let mut tx_info = BTreeMap::new();
 
     for tx in transactions {
@@ -928,7 +938,7 @@ pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, APIAs
             let address = out.script_public_key.clone().unwrap_or_default();
             let asset = APIAsset::new(out.value.clone(), None);
 
-            tx_info.insert(address, asset);
+            tx_info.insert(construct_tx_hash(tx), (address, asset));
         }
     }
 

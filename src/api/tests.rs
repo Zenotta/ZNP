@@ -469,7 +469,7 @@ async fn test_get_storage_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"latest_block\",\"blockchain_entry\",\"check_transaction_presence\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13010\",\"127.0.0.1:13010\",\"Compute\"]],\"routes_pow\":{}}}";
+    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"transactions_by_key\",\"latest_block\",\"blockchain_entry\",\"check_transaction_presence\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13010\",\"127.0.0.1:13010\",\"Compute\"]],\"routes_pow\":{}}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -1196,6 +1196,35 @@ async fn test_post_block_info_by_nums() {
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Database item(s) successfully retrieved\",\"route\":\"block_by_num\",\"content\":[[\"b0004e829238707b7a600a95d3089e320448f706c2c7f6b0427201cc384c7fbfc\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}],[\"\",\"\"],[\"b0004e829238707b7a600a95d3089e320448f706c2c7f6b0427201cc384c7fbfc\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}]]}");
 }
 
+/// Test POST for get transactions info by tx_hash
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_transactions_by_key() {
+    let _ = tracing_log_try_init();
+
+    let db = get_db_with_block().await;
+    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+    let filter = routes::transactions_by_key(&mut dp(), db, Default::default(), ks, cache)
+        .recover(handle_rejection);
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/transactions_by_key")
+        .header("Content-Type", "application/json")
+        .header("x-request-id", COMMON_REQ_ID)
+        .json(&vec!["g98d0ab9304ca82f098a86ad6251803b".to_string()])
+        .reply(&filter)
+        .await;
+
+    // Header to match
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers(), &headers);
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Database item(s) successfully retrieved\",\"route\":\"transactions_by_key\",\"content\":[[\"g98d0ab9304ca82f098a86ad6251803b\",{\"inputs\":[],\"outputs\":[],\"version\":2,\"druid_info\":null}]]}");
+}
+
 /// Test POST make payment
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_make_payment() {
@@ -1692,9 +1721,15 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     //
     // Assert
     //
+    let expected_response_body = match address_version {
+        Some(NETWORK_VERSION_V0) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"gd7d597e062a8ad188d3f3f65eeead07\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"metadata\":null}]}}",
+        Some(NETWORK_VERSION_TEMP) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"gfdc595abce03519b7537ef71b8925b9\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"metadata\":null}]}}",
+        None => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"g9b21057dcea802476507d0f387d9eb1\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"metadata\":null}]}}",
+        _ => Default::default()
+    };
     assert_eq!(
         ((res.status(), res.headers().clone()), from_utf8(res.body())),
-        (success_json(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"0008536e3d5a13e347262b5023963000\":{\"asset\":{\"Token\":1},\"metadata\":null}}}")
+        (success_json(), expected_response_body)
     );
 }
 
