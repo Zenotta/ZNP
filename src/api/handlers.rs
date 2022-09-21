@@ -83,14 +83,14 @@ pub struct CreateReceiptAssetDataCompute {
     pub script_public_key: String,
     pub public_key: String,
     pub signature: String,
-    pub metadata: Option<String>
+    pub metadata: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateReceiptAssetDataUser {
     pub receipt_amount: u64,
     pub drs_tx_hash_spec: DrsTxHashSpec,
-    pub metadata: Option<String>
+    pub metadata: Option<String>,
 }
 
 /// Information needed for the creaion of TxIn script.
@@ -594,13 +594,13 @@ pub async fn post_create_receipt_asset_user(
     let CreateReceiptAssetDataUser {
         receipt_amount,
         drs_tx_hash_spec,
-        metadata
+        metadata,
     } = receipt_data;
 
     let request = UserRequest::UserApi(UserApiRequest::SendCreateReceiptRequest {
         receipt_amount,
         drs_tx_hash_spec,
-        metadata
+        metadata,
     });
     let r = CallResponse::new(route, &call_id);
 
@@ -628,7 +628,7 @@ pub async fn post_create_receipt_asset(
         script_public_key,
         public_key,
         signature,
-        metadata
+        metadata,
     } = create_receipt_asset_data;
 
     let r = CallResponse::new(route, &call_id);

@@ -14,7 +14,7 @@ use crate::utils::{
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
 use bincode::deserialize;
 use bytes::Bytes;
-use naom::primitives::asset::{Asset, TokenAmount, ReceiptAsset};
+use naom::primitives::asset::{Asset, ReceiptAsset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::{DrsTxHashSpec, Transaction, TxIn, TxOut};
@@ -560,7 +560,7 @@ impl UserNode {
             SendCreateReceiptRequest {
                 receipt_amount,
                 drs_tx_hash_spec,
-                metadata
+                metadata,
             } => Some(
                 self.generate_receipt_asset_tx(receipt_amount, drs_tx_hash_spec, metadata)
                     .await,
@@ -1143,11 +1143,14 @@ impl UserNode {
         let receiver_half_druid = generate_half_druid();
         let (receiver_address, _) = self.wallet_db.generate_payment_address().await;
         let metadata = match &rb_payment_request_data.sender_asset {
-            Asset::Receipt(ReceiptAsset{ metadata, .. }) => metadata.clone(),
-            _ => None
+            Asset::Receipt(ReceiptAsset { metadata, .. }) => metadata.clone(),
+            _ => None,
         };
-        let asset_required =
-            Asset::receipt(1, rb_payment_request_data.sender_drs_tx_expectation.clone(), metadata);
+        let asset_required = Asset::receipt(
+            1,
+            rb_payment_request_data.sender_drs_tx_expectation.clone(),
+            metadata,
+        );
         let tx_ins_and_outs = self
             .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
             .await;
@@ -1300,7 +1303,11 @@ pub fn make_rb_payment_receipt_tx_and_response(
     let druid = sender_half_druid + &receiver_half_druid;
     let receiver_from_addr = construct_tx_ins_address(&tx_ins);
     let (receipt_drs_tx_hash, metadata) = match &sender_asset {
-        Asset::Receipt(ReceiptAsset{ drs_tx_hash, metadata, .. }) => (drs_tx_hash.clone(), metadata.clone()),
+        Asset::Receipt(ReceiptAsset {
+            drs_tx_hash,
+            metadata,
+            ..
+        }) => (drs_tx_hash.clone(), metadata.clone()),
         _ => (None, None),
     };
 

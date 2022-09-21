@@ -153,7 +153,7 @@ impl ComputeApi for ComputeTest {
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
-        metadata: Option<String>
+        metadata: Option<String>,
     ) -> Result<(Transaction, String), ComputeError> {
         let b_num = 0;
         Ok(create_receipt_asset_tx_from_sig(
@@ -163,7 +163,7 @@ impl ComputeApi for ComputeTest {
             public_key,
             signature,
             drs_tx_hash_spec,
-            metadata
+            metadata,
         )?)
     }
 }
@@ -1755,7 +1755,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
         public_key: COMMON_PUB_KEY.to_owned(),
         signature,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
-        metadata: None
+        metadata: None,
     };
 
     let request = warp::test::request()
@@ -1802,7 +1802,7 @@ async fn test_post_create_receipt_asset_tx_user() {
     let json_body = CreateReceiptAssetDataUser {
         receipt_amount: 1,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
-        metadata: Some("metadata".to_owned())
+        metadata: Some("metadata".to_owned()),
     };
 
     let request = warp::test::request()
@@ -1857,7 +1857,7 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     let json_body = CreateReceiptAssetDataUser {
         receipt_amount: 1,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
-        metadata: Some("metadata".to_owned())
+        metadata: Some("metadata".to_owned()),
     };
 
     let request = warp::test::request()

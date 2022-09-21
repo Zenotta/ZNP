@@ -518,7 +518,7 @@ pub mod convert {
         ReceiptAsset {
             amount: old,
             drs_tx_hash: Some(RECEIPT_DEFAULT_DRS_TX_HASH.to_owned()),
-            metadata: None
+            metadata: None,
         }
     }
 

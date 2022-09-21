@@ -1004,7 +1004,7 @@ pub fn create_receipt_asset_tx_from_sig(
     public_key: String,
     signature: String,
     drs_tx_hash_spec: DrsTxHashSpec,
-    metadata: Option<String>
+    metadata: Option<String>,
 ) -> Result<(Transaction, String), StringError> {
     let drs_tx_hash_create = drs_tx_hash_spec.get_drs_tx_hash();
     let receipt = Asset::receipt(receipt_amount, drs_tx_hash_create.clone(), metadata);

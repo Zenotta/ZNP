@@ -475,7 +475,7 @@ pub enum ComputeApiRequest {
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
-        metadata: Option<String>
+        metadata: Option<String>,
     },
     SendTransactions {
         transactions: Vec<Transaction>,
@@ -579,7 +579,7 @@ pub trait ComputeApi {
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
-        metadata: Option<String>
+        metadata: Option<String>,
     ) -> Result<(Transaction, String), ComputeError>;
 }
 
@@ -592,7 +592,7 @@ pub enum UserApiRequest {
     SendCreateReceiptRequest {
         receipt_amount: u64,
         drs_tx_hash_spec: DrsTxHashSpec,
-        metadata: Option<String>
+        metadata: Option<String>,
     },
 
     /// Request to fetch UTXO set and update running total for specified addresses

@@ -2333,7 +2333,14 @@ pub async fn create_receipt_asset_raft_1_node() {
     // Act
     //
     let actual_running_total_before = node_get_wallet_info(&mut network, "user1").await.0;
-    let tx_hash = create_receipt_asset_act(&mut network, "user1", "compute1", 10, receipt_metadata.clone()).await;
+    let tx_hash = create_receipt_asset_act(
+        &mut network,
+        "user1",
+        "compute1",
+        10,
+        receipt_metadata.clone(),
+    )
+    .await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     let committed_utxo_set = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
@@ -2349,7 +2356,10 @@ pub async fn create_receipt_asset_raft_1_node() {
     //
     assert_eq!(
         actual_utxo_receipt,
-        node_all(compute_nodes, vec![Asset::receipt(10, None, receipt_metadata)])
+        node_all(
+            compute_nodes,
+            vec![Asset::receipt(10, None, receipt_metadata)]
+        )
     );
     assert_eq!(
         actual_running_total_before,
@@ -2382,7 +2392,8 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     //
     // Act
     //
-    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::receipt(1, None, receipt_metadata.clone()));
+    let asset_hash =
+        construct_tx_in_signable_asset_hash(&Asset::receipt(1, None, receipt_metadata.clone()));
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
@@ -2393,7 +2404,7 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
         COMMON_PUB_ADDR.to_string(),
         COMMON_PUB_KEY.to_string(),
         signature,
-        receipt_metadata.clone()
+        receipt_metadata.clone(),
     )
     .await;
 
@@ -2411,7 +2422,10 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     //
     assert_eq!(
         actual_utxo_receipt,
-        node_all(compute_nodes, vec![Asset::receipt(1, None, receipt_metadata)]) /* DRS tx hash will reflect as `None` on UTXO set for newly created `Receipt`s */
+        node_all(
+            compute_nodes,
+            vec![Asset::receipt(1, None, receipt_metadata)]
+        ) /* DRS tx hash will reflect as `None` on UTXO set for newly created `Receipt`s */
     );
 
     test_step_complete(network).await;
@@ -2436,7 +2450,14 @@ pub async fn make_receipt_based_payment_raft_1_node() {
 
     create_first_block_act(&mut network).await;
     node_connect_to(&mut network, "user1", "user2").await;
-    let tx_hash = create_receipt_asset_act(&mut network, "user2", "compute1", 5, receipt_metadata.clone()).await;
+    let tx_hash = create_receipt_asset_act(
+        &mut network,
+        "user2",
+        "compute1",
+        5,
+        receipt_metadata.clone(),
+    )
+    .await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     //
@@ -2520,7 +2541,7 @@ pub async fn make_receipt_based_payment_raft_1_node() {
         vec![Asset::receipt(
             1,
             Some(tx_hash.clone()), /* tx_hash of create transaction */
-            receipt_metadata /* metadata of create transaction */
+            receipt_metadata,      /* metadata of create transaction */
         )],
     ];
     assert!(actual_assets.iter().all(|v| expected_assets.contains(v)));
@@ -2569,9 +2590,23 @@ pub async fn make_multiple_receipt_based_payments_raft_1_node() {
     let mut network = Network::create_from_config(&network_config).await;
     create_first_block_act(&mut network).await;
     // Receipt type "one" belongs to "user1"
-    let tx_hash_1 = create_receipt_asset_act(&mut network, "user1", "compute1", 5, receipt_metadata.clone()).await;
+    let tx_hash_1 = create_receipt_asset_act(
+        &mut network,
+        "user1",
+        "compute1",
+        5,
+        receipt_metadata.clone(),
+    )
+    .await;
     // Receipt type "two" belongs to "user2"
-    let tx_hash_2 = create_receipt_asset_act(&mut network, "user2", "compute1", 10, receipt_metadata.clone()).await;
+    let tx_hash_2 = create_receipt_asset_act(
+        &mut network,
+        "user2",
+        "compute1",
+        10,
+        receipt_metadata.clone(),
+    )
+    .await;
     node_connect_to(&mut network, "user1", "user2").await;
 
     //
@@ -2704,9 +2739,10 @@ async fn create_receipt_asset_act(
     user: &str,
     compute: &str,
     receipt_amount: u64,
-    receipt_metadata: Option<String>
+    receipt_metadata: Option<String>,
 ) -> String {
-    let tx_hash = user_send_receipt_asset(network, user, compute, receipt_amount, receipt_metadata).await;
+    let tx_hash =
+        user_send_receipt_asset(network, user, compute, receipt_amount, receipt_metadata).await;
     compute_handle_event(network, compute, "Transactions added to tx pool").await;
     compute_handle_event(network, compute, "Transactions committed").await;
     tx_hash
@@ -2719,7 +2755,7 @@ async fn compute_create_receipt_asset_tx(
     script_public_key: String,
     public_key: String,
     signature: String,
-    receipt_metadata: Option<String>
+    receipt_metadata: Option<String>,
 ) {
     let mut c = network.compute(compute).unwrap().lock().await;
     let drs_tx_hash_spec = DrsTxHashSpec::Create; /* Generate unique DRS tx hash */
@@ -2812,7 +2848,7 @@ async fn reject_receipt_based_payment() {
             &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
             1,
             DrsTxHashSpec::Create,
-            None
+            None,
         ),
     );
     add_transactions_act(&mut network, &create_receipt_asset_txs).await;
@@ -3894,7 +3930,7 @@ async fn user_send_receipt_asset(
     user: &str,
     compute: &str,
     receipt_amount: u64,
-    receipt_metadata: Option<String>
+    receipt_metadata: Option<String>,
 ) -> String {
     // Returns transactio hash
     let mut u = network.user(user).unwrap().lock().await;
