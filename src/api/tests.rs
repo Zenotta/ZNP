@@ -153,6 +153,7 @@ impl ComputeApi for ComputeTest {
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
+        metadata: Option<String>
     ) -> Result<(Transaction, String), ComputeError> {
         let b_num = 0;
         Ok(create_receipt_asset_tx_from_sig(
@@ -162,6 +163,7 @@ impl ComputeApi for ComputeTest {
             public_key,
             signature,
             drs_tx_hash_spec,
+            metadata
         )?)
     }
 }
@@ -1743,7 +1745,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
     //
     let compute = ComputeTest::new(Vec::new());
 
-    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::receipt(1, None));
+    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::receipt(1, None, None));
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
@@ -1753,6 +1755,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
         public_key: COMMON_PUB_KEY.to_owned(),
         signature,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
+        metadata: None
     };
 
     let request = warp::test::request()
@@ -1799,6 +1802,7 @@ async fn test_post_create_receipt_asset_tx_user() {
     let json_body = CreateReceiptAssetDataUser {
         receipt_amount: 1,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
+        metadata: Some("metadata".to_owned())
     };
 
     let request = warp::test::request()
@@ -1833,6 +1837,7 @@ async fn test_post_create_receipt_asset_tx_user() {
     let expected_frame = user_api_request_as_frame(UserApiRequest::SendCreateReceiptRequest {
         receipt_amount: json_body.receipt_amount,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
+        metadata: json_body.metadata,
     });
 
     let actual_frame = next_event_frame(&mut self_node).await;
@@ -1852,6 +1857,7 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     let json_body = CreateReceiptAssetDataUser {
         receipt_amount: 1,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
+        metadata: Some("metadata".to_owned())
     };
 
     let request = warp::test::request()

@@ -83,12 +83,14 @@ pub struct CreateReceiptAssetDataCompute {
     pub script_public_key: String,
     pub public_key: String,
     pub signature: String,
+    pub metadata: Option<String>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateReceiptAssetDataUser {
     pub receipt_amount: u64,
     pub drs_tx_hash_spec: DrsTxHashSpec,
+    pub metadata: Option<String>
 }
 
 /// Information needed for the creaion of TxIn script.
@@ -592,11 +594,13 @@ pub async fn post_create_receipt_asset_user(
     let CreateReceiptAssetDataUser {
         receipt_amount,
         drs_tx_hash_spec,
+        metadata
     } = receipt_data;
 
     let request = UserRequest::UserApi(UserApiRequest::SendCreateReceiptRequest {
         receipt_amount,
         drs_tx_hash_spec,
+        metadata
     });
     let r = CallResponse::new(route, &call_id);
 
@@ -624,12 +628,14 @@ pub async fn post_create_receipt_asset(
         script_public_key,
         public_key,
         signature,
+        metadata
     } = create_receipt_asset_data;
 
     let r = CallResponse::new(route, &call_id);
 
     // Create receipt asset on the Compute node
     let spk = script_public_key.clone();
+    let md = metadata.clone();
     let (tx_hash, compute_resp) = make_api_threaded_call(
         &mut threaded_calls,
         move |c| {
@@ -640,6 +646,7 @@ pub async fn post_create_receipt_asset(
                     public_key,
                     signature,
                     drs_tx_hash_spec,
+                    md
                 )?;
             let compute_resp = c.receive_transactions(vec![tx]);
             Ok::<(String, Response), ComputeError>((tx_hash, compute_resp))
@@ -653,7 +660,7 @@ pub async fn post_create_receipt_asset(
     match compute_resp.success {
         true => {
             // Response content
-            let receipt_asset = ReceiptAsset::new(receipt_amount, Some(tx_hash.clone()));
+            let receipt_asset = ReceiptAsset::new(receipt_amount, Some(tx_hash.clone()), metadata);
             let api_asset = APIAsset::new(Asset::Receipt(receipt_asset), None);
             let create_info = APICreateResponseContent::new(api_asset, script_public_key, tx_hash);
             let response_data = json_serialize_embed(create_info);

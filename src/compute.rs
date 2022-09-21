@@ -853,12 +853,14 @@ impl ComputeNode {
                 public_key,
                 signature,
                 drs_tx_hash_spec,
+                metadata
             } => match self.create_receipt_asset_tx(
                 receipt_amount,
                 script_public_key,
                 public_key,
                 signature,
                 drs_tx_hash_spec,
+                metadata
             ) {
                 Ok((tx, _)) => Some(self.receive_transactions(vec![tx])),
                 Err(e) => {
@@ -1334,6 +1336,7 @@ impl ComputeNode {
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
+        metadata: Option<String>
     ) -> Result<(Transaction, String)> {
         let b_num = self.node_raft.get_current_block_num();
         Ok(create_receipt_asset_tx_from_sig(
@@ -1343,6 +1346,7 @@ impl ComputeNode {
             public_key,
             signature,
             drs_tx_hash_spec,
+            metadata
         )?)
     }
 
@@ -1488,6 +1492,7 @@ impl ComputeApi for ComputeNode {
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
+        metadata: Option<String>
     ) -> Result<(Transaction, String)> {
         self.create_receipt_asset_tx(
             receipt_amount,
@@ -1495,6 +1500,7 @@ impl ComputeApi for ComputeNode {
             public_key,
             signature,
             drs_tx_hash_spec,
+            metadata
         )
     }
 }
