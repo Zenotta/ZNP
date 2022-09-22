@@ -56,9 +56,9 @@ const TEST_DURATION_DIVIDER: usize = 10;
 #[cfg(debug_assertions)] // Debug
 const TEST_DURATION_DIVIDER: usize = 1;
 
-const SEED_UTXO: &[(i32, &str)] = &[(1, "000000"), (3, "000001"), (1, "000002")];
-const VALID_TXS_IN: &[(i32, &str)] = &[(0, "000000"), (0, "000001"), (1, "000001")];
-const VALID_TXS_OUT: &[&str] = &["000101", "000102", "000103"];
+const SEED_UTXO: &[(i32, &str)] = &[(1, "00000000000000000000000000000000"), (3, "00000000000000000000000000000001"), (1, "00000000000000000000000000000002")];
+const VALID_TXS_IN: &[(i32, &str)] = &[(0, "00000000000000000000000000000000"), (0, "00000000000000000000000000000001"), (1, "00000000000000000000000000000001")];
+const VALID_TXS_OUT: &[&str] = &["00000000000000000000000000000101", "00000000000000000000000000000102", "00000000000000000000000000000103"];
 const DEFAULT_SEED_AMOUNT: TokenAmount = TokenAmount(3);
 
 const BLOCK_RECEIVED: &str = "Block received to be added";
@@ -4100,10 +4100,13 @@ fn valid_transactions_with(
         transactions.insert(t_hash, payment_tx);
     }
 
+    println!("transactions: {:?}", transactions);
+
     // Add one create tx
     if with_create {
         let drs = vec![0, 1, 2, 3, 4, 5];
         let (create_hash, create_tx) = create_valid_create_transaction_with_ins_outs(drs, pk, &sk);
+        println!("create_tx: {:?}", create_tx);
         transactions.insert(create_hash, create_tx);
     }
 
