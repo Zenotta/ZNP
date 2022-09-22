@@ -14,7 +14,7 @@ use crate::utils::{
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
 use bincode::deserialize;
 use bytes::Bytes;
-use naom::primitives::asset::{Asset, ReceiptAsset, TokenAmount};
+use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::{DrsTxHashSpec, Transaction, TxIn, TxOut};
@@ -1142,14 +1142,10 @@ impl UserNode {
     ) -> Response {
         let receiver_half_druid = generate_half_druid();
         let (receiver_address, _) = self.wallet_db.generate_payment_address().await;
-        let metadata = match &rb_payment_request_data.sender_asset {
-            Asset::Receipt(ReceiptAsset { metadata, .. }) => metadata.clone(),
-            _ => None,
-        };
         let asset_required = Asset::receipt(
             1,
             rb_payment_request_data.sender_drs_tx_expectation.clone(),
-            metadata,
+            None,
         );
         let tx_ins_and_outs = self
             .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
@@ -1302,20 +1298,12 @@ pub fn make_rb_payment_receipt_tx_and_response(
 
     let druid = sender_half_druid + &receiver_half_druid;
     let receiver_from_addr = construct_tx_ins_address(&tx_ins);
-    let (receipt_drs_tx_hash, metadata) = match &sender_asset {
-        Asset::Receipt(ReceiptAsset {
-            drs_tx_hash,
-            metadata,
-            ..
-        }) => (drs_tx_hash.clone(), metadata.clone()),
-        _ => (None, None),
-    };
 
     // DruidExpectation for sender(Alice)
     let sender_druid_expectation = DruidExpectation {
         from: receiver_from_addr,
         to: sender_address.clone(),
-        asset: Asset::receipt(1, sender_drs_tx_expectation, metadata),
+        asset: Asset::receipt(1, sender_drs_tx_expectation.clone(), None),
     };
 
     // DruidExpectation for receiver(Bob)
@@ -1332,7 +1320,7 @@ pub fn make_rb_payment_receipt_tx_and_response(
         0,
         druid,
         vec![receiver_druid_expectation],
-        ReceiptAsset::new(1, receipt_drs_tx_hash, None),
+        sender_drs_tx_expectation,
     );
 
     let rb_payment_response = RbPaymentResponseData {

@@ -56,9 +56,21 @@ const TEST_DURATION_DIVIDER: usize = 10;
 #[cfg(debug_assertions)] // Debug
 const TEST_DURATION_DIVIDER: usize = 1;
 
-const SEED_UTXO: &[(i32, &str)] = &[(1, "00000000000000000000000000000000"), (3, "00000000000000000000000000000001"), (1, "00000000000000000000000000000002")];
-const VALID_TXS_IN: &[(i32, &str)] = &[(0, "00000000000000000000000000000000"), (0, "00000000000000000000000000000001"), (1, "00000000000000000000000000000001")];
-const VALID_TXS_OUT: &[&str] = &["00000000000000000000000000000101", "00000000000000000000000000000102", "00000000000000000000000000000103"];
+const SEED_UTXO: &[(i32, &str)] = &[
+    (1, "00000000000000000000000000000000"),
+    (3, "00000000000000000000000000000001"),
+    (1, "00000000000000000000000000000002"),
+];
+const VALID_TXS_IN: &[(i32, &str)] = &[
+    (0, "00000000000000000000000000000000"),
+    (0, "00000000000000000000000000000001"),
+    (1, "00000000000000000000000000000001"),
+];
+const VALID_TXS_OUT: &[&str] = &[
+    "00000000000000000000000000000101",
+    "00000000000000000000000000000102",
+    "00000000000000000000000000000103",
+];
 const DEFAULT_SEED_AMOUNT: TokenAmount = TokenAmount(3);
 
 const BLOCK_RECEIVED: &str = "Block received to be added";
@@ -2446,6 +2458,8 @@ pub async fn make_receipt_based_payment_raft_1_node() {
     network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    // This metadata ONLY forms part of the create transaction
+    // , and is not present in any on-spending
     let receipt_metadata = Some("receipt metadata".to_string());
 
     create_first_block_act(&mut network).await;
@@ -2541,7 +2555,7 @@ pub async fn make_receipt_based_payment_raft_1_node() {
         vec![Asset::receipt(
             1,
             Some(tx_hash.clone()), /* tx_hash of create transaction */
-            receipt_metadata,      /* metadata of create transaction */
+            None,                  /* metadata of create transaction */
         )],
     ];
     assert!(actual_assets.iter().all(|v| expected_assets.contains(v)));
