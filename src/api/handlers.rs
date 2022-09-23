@@ -661,11 +661,8 @@ pub async fn post_create_receipt_asset(
         true => {
             // Response content
             let receipt_asset = ReceiptAsset::new(receipt_amount, Some(tx_hash.clone()), metadata);
-            println!("receipt_asset: {:?}", receipt_asset);
             let api_asset = APIAsset::new(Asset::Receipt(receipt_asset), None);
-            println!("api_asset: {:?}", api_asset);
             let create_info = APICreateResponseContent::new(api_asset, script_public_key, tx_hash);
-            println!("create_info: {:?}", create_info);
             let response_data = json_serialize_embed(create_info);
             r.into_ok("Receipt asset(s) created", response_data)
         }
