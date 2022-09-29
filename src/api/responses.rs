@@ -136,12 +136,12 @@ impl Default for APIResponseStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct APIAsset {
     asset: Asset,
-    metadata: Option<Vec<u8>>,
+    extra_info: Option<Vec<u8>>,
 }
 
 impl APIAsset {
-    pub fn new(asset: Asset, metadata: Option<Vec<u8>>) -> Self {
-        APIAsset { asset, metadata }
+    pub fn new(asset: Asset, extra_info: Option<Vec<u8>>) -> Self {
+        APIAsset { asset, extra_info }
     }
 }
 

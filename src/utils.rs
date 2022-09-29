@@ -1004,9 +1004,10 @@ pub fn create_receipt_asset_tx_from_sig(
     public_key: String,
     signature: String,
     drs_tx_hash_spec: DrsTxHashSpec,
+    metadata: Option<String>,
 ) -> Result<(Transaction, String), StringError> {
     let drs_tx_hash_create = drs_tx_hash_spec.get_drs_tx_hash();
-    let receipt = Asset::receipt(receipt_amount, drs_tx_hash_create.clone());
+    let receipt = Asset::receipt(receipt_amount, drs_tx_hash_create.clone(), metadata);
     let asset_hash = construct_tx_in_signable_asset_hash(&receipt);
     let tx_out = TxOut::new_asset(script_public_key, receipt);
     let public_key = decode_pub_key(&public_key)?;

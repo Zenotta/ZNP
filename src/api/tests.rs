@@ -153,6 +153,7 @@ impl ComputeApi for ComputeTest {
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
+        metadata: Option<String>,
     ) -> Result<(Transaction, String), ComputeError> {
         let b_num = 0;
         Ok(create_receipt_asset_tx_from_sig(
@@ -162,6 +163,7 @@ impl ComputeApi for ComputeTest {
             public_key,
             signature,
             drs_tx_hash_spec,
+            metadata,
         )?)
     }
 }
@@ -1270,7 +1272,7 @@ async fn test_post_make_payment() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Payment processing\",\"route\":\"make_payment\",\"content\":{\"4348536e3d5a13e347262b5023963edf\":{\"asset\":{\"Token\":25},\"metadata\":null}}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Payment processing\",\"route\":\"make_payment\",\"content\":{\"4348536e3d5a13e347262b5023963edf\":{\"asset\":{\"Token\":25},\"extra_info\":null}}}");
 
     // Frame expected
     let (address, amount) = (encapsulated_data.address, encapsulated_data.amount);
@@ -1323,7 +1325,7 @@ async fn test_post_make_ip_payment() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"IP payment processing\",\"route\":\"make_ip_payment\",\"content\":{\"127.0.0.1:12345\":{\"asset\":{\"Token\":25},\"metadata\":null}}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"IP payment processing\",\"route\":\"make_ip_payment\",\"content\":{\"127.0.0.1:12345\":{\"asset\":{\"Token\":25},\"extra_info\":null}}}");
 
     // Frame expected
     let (payment_peer, amount) = (
@@ -1593,7 +1595,7 @@ async fn test_post_fetch_pending() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Pending transactions successfully fetched\",\"route\":\"fetch_pending\",\"content\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g516cfd7114fd17c150165e3e6cedcd7\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\"}},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":2,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}},\"gb38bbea4d95f1419f794aaed49b0d82\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":2,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\"}}}]}}}}}}");
+        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Pending transactions successfully fetched\",\"route\":\"fetch_pending\",\"content\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g0dd48b6c86f19924e518a6d020f7006\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":2,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}},\"g2b503fb58b9a1b4e090892d9dbcf9b2\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":2,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}}}]}}}}}}");
 }
 
 /// Test POST update running total successful
@@ -1722,9 +1724,9 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     // Assert
     //
     let expected_response_body = match address_version {
-        Some(NETWORK_VERSION_V0) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"gd7d597e062a8ad188d3f3f65eeead07\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"metadata\":null}]}}",
-        Some(NETWORK_VERSION_TEMP) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"gfdc595abce03519b7537ef71b8925b9\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"metadata\":null}]}}",
-        None => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"g9b21057dcea802476507d0f387d9eb1\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"metadata\":null}]}}",
+        Some(NETWORK_VERSION_V0) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"gd7d597e062a8ad188d3f3f65eeead07\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"extra_info\":null}]}}",
+        Some(NETWORK_VERSION_TEMP) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"gfdc595abce03519b7537ef71b8925b9\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"extra_info\":null}]}}",
+        None => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"g9b21057dcea802476507d0f387d9eb1\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"extra_info\":null}]}}",
         _ => Default::default()
     };
     assert_eq!(
@@ -1743,7 +1745,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
     //
     let compute = ComputeTest::new(Vec::new());
 
-    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::receipt(1, None));
+    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::receipt(1, None, None));
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
@@ -1753,6 +1755,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
         public_key: COMMON_PUB_KEY.to_owned(),
         signature,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
+        metadata: None,
     };
 
     let request = warp::test::request()
@@ -1783,7 +1786,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Receipt asset(s) created\",\"route\":\"create_receipt_asset\",\"content\":{\"asset\":{\"asset\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"default_drs_tx_hash\"}},\"metadata\":null},\"to_address\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"tx_hash\":\"default_drs_tx_hash\"}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Receipt asset(s) created\",\"route\":\"create_receipt_asset\",\"content\":{\"asset\":{\"asset\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"default_drs_tx_hash\",\"metadata\":null}},\"extra_info\":null},\"to_address\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"tx_hash\":\"default_drs_tx_hash\"}}");
 }
 
 /// Test POST create receipt asset on user node successfully
@@ -1799,6 +1802,7 @@ async fn test_post_create_receipt_asset_tx_user() {
     let json_body = CreateReceiptAssetDataUser {
         receipt_amount: 1,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
+        metadata: Some("metadata".to_owned()),
     };
 
     let request = warp::test::request()
@@ -1833,6 +1837,7 @@ async fn test_post_create_receipt_asset_tx_user() {
     let expected_frame = user_api_request_as_frame(UserApiRequest::SendCreateReceiptRequest {
         receipt_amount: json_body.receipt_amount,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
+        metadata: json_body.metadata,
     });
 
     let actual_frame = next_event_frame(&mut self_node).await;
@@ -1852,6 +1857,7 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     let json_body = CreateReceiptAssetDataUser {
         receipt_amount: 1,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
+        metadata: Some("metadata".to_owned()),
     };
 
     let request = warp::test::request()

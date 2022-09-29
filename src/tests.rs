@@ -56,9 +56,21 @@ const TEST_DURATION_DIVIDER: usize = 10;
 #[cfg(debug_assertions)] // Debug
 const TEST_DURATION_DIVIDER: usize = 1;
 
-const SEED_UTXO: &[(i32, &str)] = &[(1, "000000"), (3, "000001"), (1, "000002")];
-const VALID_TXS_IN: &[(i32, &str)] = &[(0, "000000"), (0, "000001"), (1, "000001")];
-const VALID_TXS_OUT: &[&str] = &["000101", "000102", "000103"];
+const SEED_UTXO: &[(i32, &str)] = &[
+    (1, "00000000000000000000000000000000"),
+    (3, "00000000000000000000000000000001"),
+    (1, "00000000000000000000000000000002"),
+];
+const VALID_TXS_IN: &[(i32, &str)] = &[
+    (0, "00000000000000000000000000000000"),
+    (0, "00000000000000000000000000000001"),
+    (1, "00000000000000000000000000000001"),
+];
+const VALID_TXS_OUT: &[&str] = &[
+    "00000000000000000000000000000101",
+    "00000000000000000000000000000102",
+    "00000000000000000000000000000103",
+];
 const DEFAULT_SEED_AMOUNT: TokenAmount = TokenAmount(3);
 
 const BLOCK_RECEIVED: &str = "Block received to be added";
@@ -855,8 +867,8 @@ async fn create_block_with_seed() {
     //
     // Assert
     //
-    let expected_seed0 = Some("66834560691823092383280912636706120233344033721002615407440851751837150180545-3844507961937768323920383207668601435665951786473762741354875576809652837091661170062503618204890764181646182943319001719893641440471545700415549055369881370");
-    let expected_seed1 = Some("64881971566960642807502732089019822505957602038695891698026494006585682667610-6351671768184906669104848274468413710662978486397558205806593283397095895418610669943877633258302998254241950838477005161684726191818003264071457891039943678");
+    let expected_seed0 = Some("102382207707718734792748219972459444372508601011471438062299221139355828742917-4092482189202844858141461446747443254065713079405017303649880917821984131927979764736076459305831834761744847895656303682167530187457916798745160233343351193");
+    let expected_seed1 = Some("91124028054906114018709330124115933803364515285189046703065092365784181831168-4971480990984662959257068434796552350215575133813016304646387974151755214791434564367178387151988109470155526442779724140906741700652139994367704116296699391");
     assert_eq!((seed0, seed1), (expected_seed0, expected_seed1));
 
     test_step_complete(network).await;
@@ -2327,12 +2339,20 @@ pub async fn create_receipt_asset_raft_1_node() {
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.nodes[&NodeType::Compute];
     create_first_block_act(&mut network).await;
+    let receipt_metadata = Some("receipt_metadata".to_string());
 
     //
     // Act
     //
     let actual_running_total_before = node_get_wallet_info(&mut network, "user1").await.0;
-    let tx_hash = create_receipt_asset_act(&mut network, "user1", "compute1", 10).await;
+    let tx_hash = create_receipt_asset_act(
+        &mut network,
+        "user1",
+        "compute1",
+        10,
+        receipt_metadata.clone(),
+    )
+    .await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     let committed_utxo_set = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
@@ -2348,7 +2368,10 @@ pub async fn create_receipt_asset_raft_1_node() {
     //
     assert_eq!(
         actual_utxo_receipt,
-        node_all(compute_nodes, vec![Asset::receipt(10, None)])
+        node_all(
+            compute_nodes,
+            vec![Asset::receipt(10, None, receipt_metadata)]
+        )
     );
     assert_eq!(
         actual_running_total_before,
@@ -2376,11 +2399,13 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     network_config.compute_seed_utxo =
         make_compute_seed_utxo_with_info(&[("000000", vec![(COMMON_PUB_KEY, TokenAmount(0))])]);
     create_first_block_act(&mut network).await;
+    let receipt_metadata = Some("receipt_metadata".to_string());
 
     //
     // Act
     //
-    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::receipt(1, None));
+    let asset_hash =
+        construct_tx_in_signable_asset_hash(&Asset::receipt(1, None, receipt_metadata.clone()));
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
@@ -2391,6 +2416,7 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
         COMMON_PUB_ADDR.to_string(),
         COMMON_PUB_KEY.to_string(),
         signature,
+        receipt_metadata.clone(),
     )
     .await;
 
@@ -2408,7 +2434,10 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     //
     assert_eq!(
         actual_utxo_receipt,
-        node_all(compute_nodes, vec![Asset::receipt(1, None)]) /* DRS tx hash will reflect as `None` on UTXO set for newly created `Receipt`s */
+        node_all(
+            compute_nodes,
+            vec![Asset::receipt(1, None, receipt_metadata)]
+        ) /* DRS tx hash will reflect as `None` on UTXO set for newly created `Receipt`s */
     );
 
     test_step_complete(network).await;
@@ -2429,10 +2458,20 @@ pub async fn make_receipt_based_payment_raft_1_node() {
     network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    // This metadata ONLY forms part of the create transaction
+    // , and is not present in any on-spending
+    let receipt_metadata = Some("receipt metadata".to_string());
 
     create_first_block_act(&mut network).await;
     node_connect_to(&mut network, "user1", "user2").await;
-    let tx_hash = create_receipt_asset_act(&mut network, "user2", "compute1", 5).await;
+    let tx_hash = create_receipt_asset_act(
+        &mut network,
+        "user2",
+        "compute1",
+        5,
+        receipt_metadata.clone(),
+    )
+    .await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     //
@@ -2516,6 +2555,7 @@ pub async fn make_receipt_based_payment_raft_1_node() {
         vec![Asset::receipt(
             1,
             Some(tx_hash.clone()), /* tx_hash of create transaction */
+            None,                  /* metadata of create transaction */
         )],
     ];
     assert!(actual_assets.iter().all(|v| expected_assets.contains(v)));
@@ -2560,12 +2600,27 @@ pub async fn make_multiple_receipt_based_payments_raft_1_node() {
         ]
     };
 
+    let receipt_metadata = Some("receipt metadata".to_string());
     let mut network = Network::create_from_config(&network_config).await;
     create_first_block_act(&mut network).await;
     // Receipt type "one" belongs to "user1"
-    let tx_hash_1 = create_receipt_asset_act(&mut network, "user1", "compute1", 5).await;
+    let tx_hash_1 = create_receipt_asset_act(
+        &mut network,
+        "user1",
+        "compute1",
+        5,
+        receipt_metadata.clone(),
+    )
+    .await;
     // Receipt type "two" belongs to "user2"
-    let tx_hash_2 = create_receipt_asset_act(&mut network, "user2", "compute1", 10).await;
+    let tx_hash_2 = create_receipt_asset_act(
+        &mut network,
+        "user2",
+        "compute1",
+        10,
+        receipt_metadata.clone(),
+    )
+    .await;
     node_connect_to(&mut network, "user1", "user2").await;
 
     //
@@ -2698,8 +2753,10 @@ async fn create_receipt_asset_act(
     user: &str,
     compute: &str,
     receipt_amount: u64,
+    receipt_metadata: Option<String>,
 ) -> String {
-    let tx_hash = user_send_receipt_asset(network, user, compute, receipt_amount).await;
+    let tx_hash =
+        user_send_receipt_asset(network, user, compute, receipt_amount, receipt_metadata).await;
     compute_handle_event(network, compute, "Transactions added to tx pool").await;
     compute_handle_event(network, compute, "Transactions committed").await;
     tx_hash
@@ -2712,6 +2769,7 @@ async fn compute_create_receipt_asset_tx(
     script_public_key: String,
     public_key: String,
     signature: String,
+    receipt_metadata: Option<String>,
 ) {
     let mut c = network.compute(compute).unwrap().lock().await;
     let drs_tx_hash_spec = DrsTxHashSpec::Create; /* Generate unique DRS tx hash */
@@ -2722,6 +2780,7 @@ async fn compute_create_receipt_asset_tx(
             public_key,
             signature,
             drs_tx_hash_spec,
+            receipt_metadata,
         )
         .unwrap();
     c.receive_transactions(vec![tx]);
@@ -2794,7 +2853,7 @@ async fn reject_receipt_based_payment() {
     let mut network = Network::create_from_config(&network_config).await;
     create_first_block_act(&mut network).await;
     let mut create_receipt_asset_txs = BTreeMap::default();
-    let tx_hash = "g44831b7fd9987d898cec6aefca5790f";
+    let tx_hash = "g915f478a057a8a5366fb5ca64b82a4a";
     create_receipt_asset_txs.insert(
         tx_hash.to_owned(),
         construct_receipt_create_tx(
@@ -2803,6 +2862,7 @@ async fn reject_receipt_based_payment() {
             &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
             1,
             DrsTxHashSpec::Create,
+            None,
         ),
     );
     add_transactions_act(&mut network, &create_receipt_asset_txs).await;
@@ -3756,6 +3816,7 @@ async fn user_send_transaction_to_compute(
 ) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
+
     u.send_transactions_to_compute(compute_node_addr, vec![tx.clone()])
         .await
         .unwrap();
@@ -3884,11 +3945,12 @@ async fn user_send_receipt_asset(
     user: &str,
     compute: &str,
     receipt_amount: u64,
+    receipt_metadata: Option<String>,
 ) -> String {
     // Returns transactio hash
     let mut u = network.user(user).unwrap().lock().await;
     let compute_addr = network.get_address(compute).await.unwrap();
-    u.generate_receipt_asset_tx(receipt_amount, DrsTxHashSpec::Create)
+    u.generate_receipt_asset_tx(receipt_amount, DrsTxHashSpec::Create, receipt_metadata)
         .await;
     let tx_hash = construct_tx_hash(&u.get_next_payment_transaction().unwrap().1);
     u.send_next_payment_to_destinations(compute_addr)
@@ -4031,7 +4093,6 @@ fn valid_transactions_with(
 ) -> BTreeMap<String, Transaction> {
     let (pk, sk) = if !fixed {
         let (pk, sk) = sign::gen_keypair();
-        println!("sk: {}, pk: {}", hex::encode(&sk), hex::encode(&pk));
         (pk, sk)
     } else {
         let sk_slice = hex::decode(COMMON_SEC_KEY).unwrap();
