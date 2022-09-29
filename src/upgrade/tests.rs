@@ -484,7 +484,7 @@ async fn upgrade_spend_old_tx() {
         "user1",
         "compute1",
         TokenAmount(123),
-        "payment_address".to_owned(),
+        "payment_address00000000000000000".to_owned(),
     )
     .await;
 

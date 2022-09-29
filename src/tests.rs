@@ -2853,7 +2853,7 @@ async fn reject_receipt_based_payment() {
     let mut network = Network::create_from_config(&network_config).await;
     create_first_block_act(&mut network).await;
     let mut create_receipt_asset_txs = BTreeMap::default();
-    let tx_hash = "g44831b7fd9987d898cec6aefca5790f";
+    let tx_hash = "g915f478a057a8a5366fb5ca64b82a4a";
     create_receipt_asset_txs.insert(
         tx_hash.to_owned(),
         construct_receipt_create_tx(
@@ -3816,6 +3816,7 @@ async fn user_send_transaction_to_compute(
 ) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
+
     u.send_transactions_to_compute(compute_node_addr, vec![tx.clone()])
         .await
         .unwrap();
