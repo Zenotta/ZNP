@@ -180,6 +180,11 @@ fn get_cache_value(call_id: &str, cache: &ReplyCache) -> Option<Result<JsonReply
     cache.get(&String::from(call_id))
 }
 
+// Removes a value from the cache
+async fn remove_cache_value(call_id: &str, cache: &ReplyCache) {
+    cache.invalidate(&String::from(call_id)).await;
+}
+
 //inserts cache value into BTreeMap. Clears old values if 24 hours has passed since the last clear.
 //ReplyCache is a moka::future::cache of type <String, Result<JsonReply, JsonReply>>
 async fn insert_cache_value(
@@ -201,6 +206,7 @@ pub async fn get_or_insert_cache_value(
 ) -> Result<JsonReply, JsonReply> {
     let fetched_value = get_cache_value(&call_id, &cache);
     if let Some(value) = fetched_value {
+        remove_cache_value(&call_id, &cache).await;
         return value;
     }
 
