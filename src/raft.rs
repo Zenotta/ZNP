@@ -1,4 +1,4 @@
-use crate::db_utils::SimpleDb;
+use crate::db_utils::{SimpleDb, SimpleDbError};
 use crate::raft_store::{self, RaftStore};
 use crate::utils::MpscTracingSender;
 use raft::prelude::*;
@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{timeout_at, Instant};
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 pub type RaftData = Vec<u8>;
 pub type CommitSender = MpscTracingSender<Vec<RaftCommit>>;
@@ -103,8 +103,15 @@ impl<'a> Deserialize<'a> for RaftMessageWrapper {
 /// Input command/messages to the raft loop.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum RaftCmd {
-    Propose { data: RaftData, context: RaftData },
-    Snapshot { idx: u64, data: RaftData },
+    Propose {
+        data: RaftData,
+        context: RaftData,
+    },
+    Snapshot {
+        idx: u64,
+        data: RaftData,
+        backup: bool,
+    },
     Raft(RaftMessageWrapper),
     Close,
 }
@@ -230,6 +237,11 @@ impl RaftNode {
         self.node.mut_store().take_persistent()
     }
 
+    /// Backup persistent storage
+    pub fn backup_persistent_store(&self) -> Result<(), SimpleDbError> {
+        self.node.get_store().backup_persistent()
+    }
+
     /// Async RAFT loop processing inputs and populating output channels.
     async fn next_event(&mut self) -> Option<()> {
         match timeout_at(self.tick_timeout_at, self.cmd_rx.recv()).await {
@@ -238,7 +250,7 @@ impl RaftNode {
                 self.propose_data_backlog
                     .push((data, context, self.node.raft.id));
             }
-            Ok(Some(RaftCmd::Snapshot { idx, data })) => {
+            Ok(Some(RaftCmd::Snapshot { idx, data, backup })) => {
                 trace!("next_event snapshot({}, idx: {})", self.node.raft.id, idx);
                 let store = self.node.mut_store();
                 let (prev_idx, need_compact) = self.previous_snapshot_idx;
@@ -247,6 +259,11 @@ impl RaftNode {
                 }
                 if need_compact {
                     store.compact(prev_idx).unwrap();
+                }
+                if backup {
+                    if let Err(e) = store.backup_persistent() {
+                        error!("Backup error: {:?}", e);
+                    }
                 }
                 self.previous_snapshot_idx = (idx, idx != prev_idx);
             }
@@ -1033,8 +1050,9 @@ mod tests {
         for test_node in test_nodes {
             let idx = test_node.last_committed.as_ref().unwrap().index;
             let data = data.clone();
+            let backup = false;
 
-            let cmd = RaftCmd::Snapshot { idx, data };
+            let cmd = RaftCmd::Snapshot { idx, data, backup };
             test_node.cmd_tx.send(cmd).unwrap();
         }
     }

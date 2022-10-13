@@ -1,5 +1,6 @@
 use crate::configurations::DbMode;
 use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED};
+use rocksdb::backup::{BackupEngine, BackupEngineOptions};
 use rocksdb::{DBCompressionType, IteratorMode, Options, WriteBatch, DB};
 pub use rocksdb::{Error as DBError, DEFAULT_COLUMN_FAMILY_NAME as DB_COL_DEFAULT};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -40,6 +41,12 @@ impl fmt::Display for SimpleDbError {
 impl From<DBError> for SimpleDbError {
     fn from(other: DBError) -> Self {
         Self(other.into_string())
+    }
+}
+
+impl SimpleDbError {
+    pub fn into_string(self) -> String {
+        self.0
     }
 }
 
@@ -179,6 +186,30 @@ impl SimpleDb {
             // Drop/close file db
             None
         }
+    }
+
+    /// Backup path for file db
+    pub fn file_backup_path(&self) -> Option<String> {
+        if let Self::File { path, .. } = &self {
+            Some(path.clone() + "_backup")
+        } else {
+            None
+        }
+    }
+
+    /// Backup for file db
+    pub fn file_backup(&self) -> Result<()> {
+        if let Self::File { path, db, .. } = &self {
+            let backup_path = path.clone() + "_backup";
+            let backup_opts = BackupEngineOptions::default();
+            let mut backup_engine = BackupEngine::open(&backup_opts, &backup_path).unwrap();
+            let flush_before_backup = true;
+
+            warn!("Backup db {} to {}", path, backup_path);
+            backup_engine.create_new_backup_flush(db, flush_before_backup)?;
+        }
+
+        Ok(())
     }
 
     /// Create a column as part of an upgrade if not already open
@@ -573,15 +604,7 @@ pub fn new_db_no_check_version(
     db_spec: &SimpleDbSpec,
     old_db: Option<SimpleDb>,
 ) -> Result<SimpleDb> {
-    let db_path = db_spec.db_path;
-    let suffix = db_spec.suffix;
-    let save_path = match db_mode {
-        DbMode::Live => Some(format!("{}/{}{}", db_path, DB_PATH_LIVE, suffix)),
-        DbMode::Test(idx) => Some(format!("{}/{}{}.{}", db_path, DB_PATH_TEST, suffix, idx)),
-        DbMode::InMemory => None,
-    };
-
-    if let Some(save_path) = save_path {
+    if let Some(save_path) = new_db_save_path(db_mode, db_spec) {
         if old_db.is_some() {
             panic!("new_db: Do not provide database, read it from disk");
         }
@@ -589,4 +612,37 @@ pub fn new_db_no_check_version(
     } else {
         SimpleDb::new_in_memory(db_spec.columns, old_db)
     }
+}
+
+/// Path for the database is selected mode
+///
+/// ### Arguments
+///
+/// * `db_moode` - Mode for the database.
+/// * `db_spec`  - Database specification.
+pub fn new_db_save_path(db_mode: DbMode, db_spec: &SimpleDbSpec) -> Option<String> {
+    let db_path = db_spec.db_path;
+    let suffix = db_spec.suffix;
+    match db_mode {
+        DbMode::Live => Some(format!("{}/{}{}", db_path, DB_PATH_LIVE, suffix)),
+        DbMode::Test(idx) => Some(format!("{}/{}{}.{}", db_path, DB_PATH_TEST, suffix, idx)),
+        DbMode::InMemory => None,
+    }
+}
+
+/// Restore backup for file db
+pub fn restore_file_backup(db_mode: DbMode, db_spec: &SimpleDbSpec) -> Result<()> {
+    if let Some(path) = new_db_save_path(db_mode, db_spec) {
+        let backup_path = path.clone() + "_backup";
+        let backup_opts = BackupEngineOptions::default();
+        let mut backup_engine = BackupEngine::open(&backup_opts, &backup_path).unwrap();
+
+        let mut restore_option = rocksdb::backup::RestoreOptions::default();
+        restore_option.set_keep_log_files(true);
+
+        warn!("Restore db {} from {}", path, backup_path);
+        backup_engine.restore_from_latest_backup(path, "", &restore_option)?;
+    }
+
+    Ok(())
 }

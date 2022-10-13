@@ -90,6 +90,8 @@ pub struct NetworkConfig {
     pub user_test_auto_gen_setup: UserAutoGenTxSetup,
     pub tls_config: TestTlsSpec,
     pub routes_pow: BTreeMap<String, usize>,
+    pub backup_block_modulo: Option<u64>,
+    pub backup_restore: Option<bool>,
 }
 
 /// Node info to create node
@@ -1036,6 +1038,7 @@ async fn init_miner(
         miner_api_port: 3004,
         miner_api_use_tls: true,
         routes_pow: config.routes_pow.clone(),
+        backup_block_modulo: Default::default(),
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);
@@ -1075,6 +1078,8 @@ async fn init_storage(
         storage_raft_tick_timeout: 200 / config.test_duration_divider,
         storage_catchup_duration: 2000 / config.test_duration_divider,
         routes_pow: Default::default(),
+        backup_block_modulo: config.backup_block_modulo,
+        backup_restore: config.backup_restore,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Storage {}", info);
@@ -1122,6 +1127,8 @@ async fn init_compute(
         compute_api_port: 3002,
         compute_api_use_tls: true,
         routes_pow: Default::default(),
+        backup_block_modulo: config.backup_block_modulo,
+        backup_restore: config.backup_restore,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Compute {}", info);
@@ -1163,6 +1170,7 @@ async fn init_user(
         user_auto_donate: config.user_auto_donate,
         user_test_auto_gen_setup: config.user_test_auto_gen_setup.clone(),
         routes_pow: Default::default(),
+        backup_block_modulo: Default::default(),
     };
 
     let info = format!("{} -> {}", name, node_info.node_spec.address);
@@ -1228,12 +1236,16 @@ pub fn remove_all_node_dbs_in_info(info: &NetworkInstanceInfo) {
             Compute => {
                 let v1 = format!("{}/{}.compute.{}", DB_PATH, DB_PATH_TEST, port);
                 let v2 = format!("{}/{}.compute_raft.{}", DB_PATH, DB_PATH_TEST, port);
-                vec![v1, v2]
+                let v3 = format!("{}_backup", v1);
+                let v4 = format!("{}_backup", v2);
+                vec![v1, v2, v3, v4]
             }
             Storage => {
                 let v1 = format!("{}/{}.storage.{}", DB_PATH, DB_PATH_TEST, port);
                 let v2 = format!("{}/{}.storage_raft.{}", DB_PATH, DB_PATH_TEST, port);
-                vec![v1, v2]
+                let v3 = format!("{}_backup", v1);
+                let v4 = format!("{}_backup", v2);
+                vec![v1, v2, v3, v4]
             }
         };
         for to_remove in db_paths {

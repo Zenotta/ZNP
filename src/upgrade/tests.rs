@@ -665,6 +665,8 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         user_test_auto_gen_setup: Default::default(),
         tls_config: get_test_tls_spec(),
         routes_pow: Default::default(),
+        backup_block_modulo: Default::default(),
+        backup_restore: Default::default(),
     }
     .with_groups(1, 1)
 }

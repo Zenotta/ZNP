@@ -165,6 +165,9 @@ impl StorageNode {
         let catchup_fetch = StorageFetch::new(&config, addr);
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
 
+        if config.backup_restore.unwrap_or(false) {
+            db_utils::restore_file_backup(config.storage_db_mode, &DB_SPEC).unwrap();
+        }
         let db = {
             let raw_db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take());
             Arc::new(Mutex::new(raw_db))
@@ -265,6 +268,16 @@ impl StorageNode {
             db: self_db.take().in_memory(),
             raft_db: raft_db.in_memory(),
             ..Default::default()
+        }
+    }
+
+    /// Backup persistent dbs
+    pub async fn backup_persistent_dbs(&mut self) {
+        if self.node_raft.need_backup() {
+            let self_db = self.db.lock().unwrap();
+            if let Err(e) = self_db.file_backup() {
+                error!("Error bakup up main db: {:?}", e);
+            }
         }
     }
 
@@ -471,6 +484,7 @@ impl StorageNode {
                 };
                 self.node_raft
                     .event_processed_generate_snapshot(block_stored);
+                self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
                     reason: "Block complete stored",

@@ -55,6 +55,11 @@ impl RaftStore {
         self.presistent.take()
     }
 
+    /// Consume store and return peristent storage
+    pub fn backup_persistent(&self) -> Result<(), SimpleDbError> {
+        self.presistent.file_backup()
+    }
+
     /// Saves the current HardState.
     pub fn set_hardstate(&mut self, hs: HardState) -> RaftResult<()> {
         let bytes = hs.write_to_bytes()?;
