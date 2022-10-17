@@ -1256,9 +1256,12 @@ async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn main_loops_few_txs_raft_1_node() {
-    let network_config = complete_network_config_with_n_compute_raft(11300, 1);
-    main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
+async fn main_loops_few_txs_raft_1_node_with_file_backup() {
+    let mut network_config = complete_network_config_with_n_compute_raft(11300, 1);
+    network_config.in_memory_db = false;
+    network_config.backup_block_modulo = Some(2);
+    remove_all_node_dbs(&network_config);
+    main_loops_raft_1_node_common(network_config, vec![3], TokenAmount(17), 20, 1, 1_000, &[]).await
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -4381,6 +4384,8 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         user_test_auto_gen_setup: Default::default(),
         tls_config: Default::default(),
         routes_pow: Default::default(),
+        backup_block_modulo: Default::default(),
+        backup_restore: Default::default(),
     }
 }
 

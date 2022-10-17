@@ -264,6 +264,13 @@ impl UserNode {
         }
     }
 
+    /// Backup persistent storage
+    pub async fn backup_persistent_store(&mut self) {
+        if let Err(e) = self.wallet_db.backup_persistent_store().await {
+            error!("Error bakup up main db: {:?}", e);
+        }
+    }
+
     /// Update the running total from a retrieved UTXO set/subset
     pub async fn update_running_total(&mut self) {
         let utxo_set = self.received_utxo_set.take();

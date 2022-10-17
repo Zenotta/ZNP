@@ -214,6 +214,25 @@ impl DeserializedBlockchainItem {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct BackupCheck {
+    modulo_block_num: Option<u64>,
+}
+
+impl BackupCheck {
+    pub fn new(modulo_block_num: Option<u64>) -> Self {
+        Self { modulo_block_num }
+    }
+
+    pub fn need_backup(&self, current_block: u64) -> bool {
+        if let Some(modulo) = self.modulo_block_num {
+            current_block != 0 && current_block % modulo == 0
+        } else {
+            false
+        }
+    }
+}
+
 /// Install a global tracing subscriber that listens for events and
 /// filters based on the value of the [`RUST_LOG` environment variable],
 /// if one is not already set.

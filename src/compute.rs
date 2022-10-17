@@ -3,7 +3,7 @@ use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::{ComputeNodeConfig, ExtraNodeParams, TlsPrivateInfo};
 use crate::constants::{DB_PATH, PEER_LIMIT};
-use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
+use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
     ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlock,
@@ -62,6 +62,7 @@ pub type Result<T> = std::result::Result<T, ComputeError>;
 pub enum ComputeError {
     ConfigError(&'static str),
     Network(CommsError),
+    DbError(SimpleDbError),
     Serialization(bincode::Error),
     AsyncTask(task::JoinError),
     GenericError(StringError),
@@ -72,6 +73,7 @@ impl fmt::Display for ComputeError {
         match self {
             Self::ConfigError(err) => write!(f, "Config error: {}", err),
             Self::Network(err) => write!(f, "Network error: {}", err),
+            Self::DbError(err) => write!(f, "DB error: {}", err),
             Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
             Self::Serialization(err) => write!(f, "Serialization error: {}", err),
             Self::GenericError(err) => write!(f, "Generic error: {}", err),
@@ -84,6 +86,7 @@ impl Error for ComputeError {
         match self {
             Self::ConfigError(_) => None,
             Self::Network(ref e) => Some(e),
+            Self::DbError(ref e) => Some(e),
             Self::AsyncTask(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
             Self::GenericError(ref e) => Some(e),
@@ -94,6 +97,12 @@ impl Error for ComputeError {
 impl From<CommsError> for ComputeError {
     fn from(other: CommsError) -> Self {
         Self::Network(other)
+    }
+}
+
+impl From<SimpleDbError> for ComputeError {
+    fn from(other: SimpleDbError) -> Self {
+        Self::DbError(other)
     }
 }
 
@@ -169,6 +178,9 @@ impl ComputeNode {
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Compute).await?;
         let node_raft = ComputeRaft::new(&config, extra.raft_db.take()).await;
 
+        if config.backup_restore.unwrap_or(false) {
+            db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC).unwrap();
+        }
         let db = db_utils::new_db(config.compute_db_mode, &DB_SPEC, extra.db.take());
         let shutdown_group = {
             let storage = std::iter::once(storage_addr);
@@ -305,6 +317,15 @@ impl ComputeNode {
             db: self.db.take().in_memory(),
             raft_db: raft_db.in_memory(),
             ..Default::default()
+        }
+    }
+
+    /// Backup persistent dbs
+    pub async fn backup_persistent_dbs(&mut self) {
+        if self.node_raft.need_backup() {
+            if let Err(e) = self.db.file_backup() {
+                error!("Error bakup up main db: {:?}", e);
+            }
         }
     }
 
@@ -686,6 +707,7 @@ impl ComputeNode {
         match self.node_raft.received_commit(commit_data).await {
             Some(CommittedItem::FirstBlock) => {
                 self.reset_mining_block_process();
+                self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
                     reason: "First Block committed",
@@ -693,6 +715,7 @@ impl ComputeNode {
             }
             Some(CommittedItem::Block) => {
                 self.reset_mining_block_process();
+                self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
                     reason: "Block committed",
@@ -700,6 +723,7 @@ impl ComputeNode {
             }
             Some(CommittedItem::BlockShutdown) => {
                 self.reset_mining_block_process();
+                self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
                     reason: "Block shutdown",

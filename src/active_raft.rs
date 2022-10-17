@@ -1,5 +1,5 @@
 use crate::configurations::NodeSpec;
-use crate::db_utils::SimpleDb;
+use crate::db_utils::{SimpleDb, SimpleDbError};
 use crate::raft::{
     CommitReceiver, RaftCmd, RaftCmdSender, RaftCommit, RaftCommitData, RaftData,
     RaftMessageWrapper, RaftMsgReceiver, RaftNode,
@@ -147,6 +147,11 @@ impl ActiveRaft {
         self.raft_node.lock().await.take_closed_persistent_store()
     }
 
+    /// Backup persistent storage
+    pub async fn backup_persistent_store(&self) -> Result<(), SimpleDbError> {
+        self.raft_node.lock().await.backup_persistent_store()
+    }
+
     /// Blocks & waits for a next commit from a peer.
     pub async fn next_commit(&self) -> Option<RaftCommit> {
         let mut committed_rx = self.committed_rx.lock().await;
@@ -188,9 +193,11 @@ impl ActiveRaft {
     }
 
     /// Create a snapshot at the given idx with the given data.
-    pub fn create_snapshot(&mut self, idx: u64, data: RaftData) {
+    pub fn create_snapshot(&mut self, idx: u64, data: RaftData, backup: bool) {
         if self.use_raft {
-            self.cmd_tx.send(RaftCmd::Snapshot { idx, data }).unwrap();
+            self.cmd_tx
+                .send(RaftCmd::Snapshot { idx, data, backup })
+                .unwrap();
         }
     }
 }

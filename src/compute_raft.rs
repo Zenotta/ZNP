@@ -5,13 +5,15 @@ use crate::block_pipeline::{
 };
 use crate::configurations::{ComputeNodeConfig, UnicornFixedInfo};
 use crate::constants::{BLOCK_SIZE_IN_TX, DB_PATH, TX_POOL_LIMIT};
-use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
+use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{BlockStoredInfo, UtxoSet, WinningPoWInfo};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::{UnicornFixedParam, UnicornInfo};
-use crate::utils::{calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed};
+use crate::utils::{
+    calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed, BackupCheck,
+};
 use bincode::{deserialize, serialize};
 use naom::crypto::sha3_256;
 use naom::primitives::asset::TokenAmount;
@@ -192,6 +194,8 @@ pub struct ComputeRaft {
     proposed_and_consensused_tx_pool_len_max: usize,
     /// No longer process commits after shutdown reached
     shutdown_no_commit_process: bool,
+    /// Check for backup needed
+    backup_check: BackupCheck,
 }
 
 impl fmt::Debug for ComputeRaft {
@@ -209,6 +213,10 @@ impl ComputeRaft {
     /// * `raft_db` - Override raft db to use.
     pub async fn new(config: &ComputeNodeConfig, raft_db: Option<SimpleDb>) -> Self {
         let use_raft = config.compute_raft != 0;
+
+        if config.backup_restore.unwrap_or(false) {
+            db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC).unwrap();
+        }
         let raft_active = ActiveRaft::new(
             config.compute_node_idx,
             &config.compute_nodes,
@@ -240,6 +248,7 @@ impl ComputeRaft {
             item: ComputeRaftItem::FirstBlock(utxo_set),
             dedup_b_num: None,
         });
+        let backup_check = BackupCheck::new(config.backup_block_modulo);
 
         Self {
             first_raft_peer,
@@ -259,6 +268,7 @@ impl ComputeRaft {
             proposed_tx_pool_len_max: BLOCK_SIZE_IN_TX / peers_len,
             proposed_and_consensused_tx_pool_len_max: BLOCK_SIZE_IN_TX * 2,
             shutdown_no_commit_process: false,
+            backup_check,
         }
     }
 
@@ -295,6 +305,11 @@ impl ComputeRaft {
     /// Extract persistent storage of a closed raft
     pub async fn take_closed_persistent_store(&mut self) -> SimpleDb {
         self.raft_active.take_closed_persistent_store().await
+    }
+
+    /// Extract persistent storage
+    pub async fn backup_persistent_store(&self) -> Result<(), SimpleDbError> {
+        self.raft_active.backup_persistent_store().await
     }
 
     /// Check if we are waiting for initial state
@@ -761,8 +776,9 @@ impl ComputeRaft {
         let (snapshot_idx, term) = self.consensused.last_committed_raft_idx_and_term;
 
         debug!("generate_snapshot: (idx: {}, term: {})", snapshot_idx, term);
+        let backup = self.need_backup();
         self.raft_active
-            .create_snapshot(snapshot_idx, consensused_ser);
+            .create_snapshot(snapshot_idx, consensused_ser, backup);
 
         if self.is_shutdown_on_commit() {
             self.shutdown_no_commit_process = true;
@@ -801,6 +817,15 @@ impl ComputeRaft {
     /// Whether shut down block already processed
     pub fn is_shutdown_commit_processed(&self) -> bool {
         self.shutdown_no_commit_process
+    }
+
+    /// Get Wether backup is needed
+    pub fn need_backup(&self) -> bool {
+        if let Some(b_num) = self.get_committed_current_block_num() {
+            self.backup_check.need_backup(b_num)
+        } else {
+            false
+        }
     }
 }
 
@@ -1588,6 +1613,8 @@ mod test {
             compute_api_use_tls: true,
             compute_api_port: 3003,
             routes_pow: Default::default(),
+            backup_block_modulo: Default::default(),
+            backup_restore: Default::default(),
         };
         let mut node = ComputeRaft::new(&compute_config, Default::default()).await;
         node.set_key_run(0);

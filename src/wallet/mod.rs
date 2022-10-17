@@ -254,6 +254,12 @@ impl WalletDb {
         self.db.lock().unwrap().take()
     }
 
+    /// Backup persistent storage
+    pub async fn backup_persistent_store(&mut self) -> Result<()> {
+        self.db.lock().unwrap().file_backup()?;
+        Ok(())
+    }
+
     /// Generates a new payment address, saving the related keys to the wallet
     /// TODO: Add static address capability for frequent payments
     pub async fn generate_payment_address(&self) -> (String, AddressStore) {

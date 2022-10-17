@@ -1,10 +1,11 @@
 use crate::active_raft::ActiveRaft;
 use crate::configurations::StorageNodeConfig;
 use crate::constants::DB_PATH;
-use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
+use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{BlockStoredInfo, CommonBlockInfo, MinedBlockExtraInfo};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
+use crate::utils::BackupCheck;
 use bincode::{deserialize, serialize};
 use naom::crypto::sha3_256;
 use serde::{Deserialize, Serialize};
@@ -95,6 +96,8 @@ pub struct StorageRaft {
     proposed_in_flight: RaftInFlightProposals,
     /// No longer process commits after shutdown reached
     shutdown_no_commit_process: bool,
+    /// Check for backup needed
+    backup_check: BackupCheck,
 }
 
 impl fmt::Debug for StorageRaft {
@@ -112,6 +115,10 @@ impl StorageRaft {
     /// * `raft_db` - Override raft db to use.
     pub fn new(config: &StorageNodeConfig, raft_db: Option<SimpleDb>) -> Self {
         let use_raft = config.storage_raft != 0;
+
+        if config.backup_restore.unwrap_or(false) {
+            db_utils::restore_file_backup(config.storage_db_mode, &DB_SPEC).unwrap();
+        }
         let raft_active = ActiveRaft::new(
             config.storage_node_idx,
             &config.storage_nodes,
@@ -124,6 +131,7 @@ impl StorageRaft {
         let peers_len = raft_active.peers_len();
 
         let consensused = StorageConsensused::default().with_peers_len(peers_len);
+        let backup_check = BackupCheck::new(config.backup_block_modulo);
 
         Self {
             first_raft_peer,
@@ -132,6 +140,7 @@ impl StorageRaft {
             consensused_snapshot_applied: !use_raft,
             proposed_in_flight: Default::default(),
             shutdown_no_commit_process: false,
+            backup_check,
         }
     }
 
@@ -163,6 +172,11 @@ impl StorageRaft {
     /// Extract persistent storage of a closed raft
     pub async fn take_closed_persistent_store(&mut self) -> SimpleDb {
         self.raft_active.take_closed_persistent_store().await
+    }
+
+    /// Extract persistent storage
+    pub async fn backup_persistent_store(&self) -> Result<(), SimpleDbError> {
+        self.raft_active.backup_persistent_store().await
     }
 
     /// Check if we are waiting for initial state
@@ -324,8 +338,9 @@ impl StorageRaft {
         let (snapshot_idx, term) = self.consensused.last_committed_raft_idx_and_term;
 
         debug!("generate_snapshot: (idx: {}, term: {})", snapshot_idx, term);
+        let backup = self.need_backup();
         self.raft_active
-            .create_snapshot(snapshot_idx, consensused_ser);
+            .create_snapshot(snapshot_idx, consensused_ser, backup);
 
         if shutdown {
             self.shutdown_no_commit_process = true;
@@ -351,6 +366,16 @@ impl StorageRaft {
     /// Whether shut down block already processed
     pub fn is_shutdown_commit_processed(&self) -> bool {
         self.shutdown_no_commit_process
+    }
+
+    /// Get Wether backup is needed
+    pub fn need_backup(&self) -> bool {
+        if let Some(b) = self.get_last_block_stored() {
+            let b_num = b.block_num;
+            self.backup_check.need_backup(b_num)
+        } else {
+            false
+        }
     }
 }
 

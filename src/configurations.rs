@@ -138,6 +138,10 @@ pub struct ComputeNodeConfig {
     pub sanction_list: Vec<String>,
     // Routes that require PoW validation and their corresponding difficulties
     pub routes_pow: BTreeMap<String, usize>,
+    /// Backup block that given modulo result in 0
+    pub backup_block_modulo: Option<u64>,
+    /// Restore backup if true
+    pub backup_restore: Option<bool>,
 }
 
 /// Configuration option for a storage node
@@ -169,6 +173,10 @@ pub struct StorageNodeConfig {
     pub storage_catchup_duration: usize,
     // Routes that require PoW validation and their corresponding difficulties
     pub routes_pow: BTreeMap<String, usize>,
+    /// Backup block that given modulo result in 0
+    pub backup_block_modulo: Option<u64>,
+    /// Restore backup if true
+    pub backup_restore: Option<bool>,
 }
 
 /// Configuration option for a storage node
@@ -202,6 +210,8 @@ pub struct MinerNodeConfig {
     pub passphrase: Option<String>,
     // Routes that require PoW validation and their corresponding difficulties
     pub routes_pow: BTreeMap<String, usize>,
+    /// Backup block that given modulo result in 0
+    pub backup_block_modulo: Option<u64>,
 }
 
 /// Configuration option for a user node
@@ -242,6 +252,8 @@ pub struct UserNodeConfig {
     pub user_test_auto_gen_setup: UserAutoGenTxSetup,
     // Routes that require PoW validation and their corresponding difficulties
     pub routes_pow: BTreeMap<String, usize>,
+    /// Backup block that given modulo result in 0
+    pub backup_block_modulo: Option<u64>,
 }
 
 /// Configuration option for a pre-launch node
