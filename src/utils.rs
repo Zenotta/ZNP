@@ -2,7 +2,7 @@ use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{BLOCK_PREPEND, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
 use crate::interfaces::{
-    BlockchainItem, BlockchainItemMeta, DruidDroplet, ProofOfWork, StoredSerializingBlock,
+    BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
 };
 use crate::wallet::WalletDb;
 use bincode::serialize;
@@ -136,6 +136,11 @@ impl<T> RunningTaskOrResult<T> {
         } else {
             None
         }
+    }
+
+    /// Return true if running task
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::Running(_))
     }
 }
 
@@ -426,9 +431,10 @@ pub fn generate_random_num(len: usize) -> Vec<u8> {
 /// * `rand_num`  - A random number used to generate the ProofOfWork in an Option<Vec<u8>>
 pub fn generate_pow_for_address(
     peer: SocketAddr,
+    pow_info: PowInfo,
     address: String,
     rand_num: Option<Vec<u8>>,
-) -> task::JoinHandle<(ProofOfWork, SocketAddr)> {
+) -> task::JoinHandle<(ProofOfWork, PowInfo, SocketAddr)> {
     task::spawn_blocking(move || {
         let mut pow = ProofOfWork {
             address,
@@ -439,7 +445,7 @@ pub fn generate_pow_for_address(
             pow.nonce = generate_pow_nonce();
         }
 
-        (pow, peer)
+        (pow, pow_info, peer)
     })
 }
 

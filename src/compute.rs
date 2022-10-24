@@ -7,7 +7,7 @@ use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
     ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlock,
-    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest,
+    MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, UserRequest,
     UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
 use crate::raft::RaftCommit;
@@ -43,6 +43,7 @@ use tracing_futures::Instrument;
 pub const REQUEST_LIST_KEY: &str = "RequestListKey";
 pub const USER_NOTIFY_LIST_KEY: &str = "UserNotifyListKey";
 pub const POW_RANDOM_NUM_KEY: &str = "PowRandomNumKey";
+pub const POW_PREV_RANDOM_NUM_KEY: &str = "PowPreviousRandomNumKey";
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 
 /// Database columns
@@ -134,6 +135,7 @@ pub struct ComputeNode {
     jurisdiction: String,
     current_mined_block: Option<MinedBlock>,
     druid_pool: DruidPool,
+    previous_random_num: Vec<u8>,
     current_random_num: Vec<u8>,
     partition_full_size: usize,
     request_list: BTreeSet<SocketAddr>,
@@ -200,6 +202,7 @@ impl ComputeNode {
             threaded_calls: Default::default(),
             current_mined_block: None,
             druid_pool: Default::default(),
+            previous_random_num: Default::default(),
             current_random_num: Default::default(),
             request_list: Default::default(),
             sanction_list: config.sanction_list,
@@ -535,8 +538,11 @@ impl ComputeNode {
                 success: true,
                 reason: "Winning PoW intake open",
             }) => {
-                self.flood_block_to_partition().await.unwrap();
-                self.flood_block_to_users().await.unwrap();
+                debug!(
+                    "Block and participants ready to mine: {:?}",
+                    self.get_mining_block()
+                );
+                self.flood_rand_and_block_to_partition().await.unwrap();
             }
             Ok(Response {
                 success: true,
@@ -559,16 +565,16 @@ impl ComputeNode {
                 reason: "First Block committed",
             }) => {
                 debug!("First Block ready to mine: {:?}", self.get_mining_block());
-                self.flood_rand_num_to_requesters().await.unwrap();
                 self.flood_block_to_users().await.unwrap();
+                self.flood_rand_and_block_to_partition().await.unwrap();
             }
             Ok(Response {
                 success: true,
                 reason: "Block committed",
             }) => {
                 debug!("Block ready to mine: {:?}", self.get_mining_block());
-                self.flood_rand_num_to_requesters().await.unwrap();
                 self.flood_block_to_users().await.unwrap();
+                self.flood_rand_and_block_to_partition().await.unwrap();
             }
             Ok(Response {
                 success: true,
@@ -835,9 +841,13 @@ impl ComputeNode {
                 block_num,
                 nonce,
                 coinbase,
-            } => Some(self.receive_pow(peer, block_num, nonce, coinbase).await),
-            SendPartitionEntry { partition_entry } => {
-                Some(self.receive_partition_entry(peer, partition_entry).await)
+            } => self.receive_pow(peer, block_num, nonce, coinbase).await,
+            SendPartitionEntry {
+                pow_info,
+                partition_entry,
+            } => {
+                self.receive_partition_entry(peer, pow_info, partition_entry)
+                    .await
             }
             SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
             SendUserBlockNotificationRequest => {
@@ -976,33 +986,49 @@ impl ComputeNode {
     async fn receive_partition_entry(
         &mut self,
         peer: SocketAddr,
+        pow_info: PowInfo,
         partition_entry: ProofOfWork,
-    ) -> Response {
-        if self.node_raft.get_mining_pipeline_status() != &MiningPipelineStatus::ParticipantIntake {
-            return Response {
-                success: false,
-                reason: "Partition list complete",
-            };
+    ) -> Option<Response> {
+        if pow_info.b_num != self.node_raft.get_current_block_num() {
+            // Out of date entry
+            return None;
         }
+
+        let status = self.node_raft.get_mining_pipeline_status().clone();
+        let random_number = match (&status, pow_info.participant_only) {
+            (MiningPipelineStatus::ParticipantOnlyIntake, true) => &self.previous_random_num,
+            (MiningPipelineStatus::AllItemsIntake, false) => &self.current_random_num,
+            (MiningPipelineStatus::Halted, _) => {
+                return Some(Response {
+                    success: false,
+                    reason: "Partition list complete",
+                });
+            }
+            _ => return None,
+        };
 
         let valid_pow = format_parition_pow_address(peer) == partition_entry.address
-            && validate_pow_for_address(&partition_entry, &Some(&self.current_random_num));
+            && validate_pow_for_address(&partition_entry, &Some(random_number));
 
         if !valid_pow {
-            return Response {
+            return Some(Response {
                 success: false,
                 reason: "PoW received is invalid",
-            };
+            });
         }
 
-        self.node_raft
-            .propose_mining_pipeline_item(MiningPipelineItem::MiningParticipant(peer))
-            .await;
+        if !self
+            .node_raft
+            .propose_mining_pipeline_item(MiningPipelineItem::MiningParticipant(peer, status))
+            .await
+        {
+            return None;
+        }
 
-        Response {
+        Some(Response {
             success: true,
             reason: "Partition PoW received successfully",
-        }
+        })
     }
 
     /// Floods the closing event to everyone
@@ -1036,42 +1062,57 @@ impl ComputeNode {
         Ok(())
     }
 
-    /// Floods the random number to everyone who requested
-    pub async fn flood_rand_num_to_requesters(&mut self) -> Result<()> {
-        let rnum = self.current_random_num.clone();
+    /// Floods the current block to participants for mining
+    pub async fn flood_rand_and_block_to_partition(&mut self) -> Result<()> {
+        let (rnum, participant_only) = match self.node_raft.get_mining_pipeline_status() {
+            MiningPipelineStatus::ParticipantOnlyIntake => (self.previous_random_num.clone(), true),
+            MiningPipelineStatus::AllItemsIntake => (self.current_random_num.clone(), false),
+            MiningPipelineStatus::Halted => return Ok(()),
+        };
+
         let win_coinbases = self.node_raft.get_last_mining_transaction_hashes().clone();
+        let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
+
         info!(
             "RANDOM NUMBER IN COMPUTE: {:?}, (mined:{})",
             rnum,
             win_coinbases.len()
         );
+        debug!("BLOCK TO SEND: {:?}", block);
+
+        let header = block.header.clone();
+        let b_num = header.b_num;
+        let reward = self.node_raft.get_current_reward();
+        let pow_info = PowInfo {
+            participant_only,
+            b_num,
+        };
+
+        let participants = self.node_raft.get_mining_participants();
+        let non_participants = self.request_list.difference(participants.lookup());
 
         self.node
             .send_to_all(
-                self.request_list.iter().copied(),
-                MineRequest::SendRandomNum {
-                    rnum,
-                    win_coinbases,
+                participants.iter().copied(),
+                MineRequest::SendBlock {
+                    pow_info,
+                    rnum: rnum.clone(),
+                    win_coinbases: win_coinbases.clone(),
+                    block: Some(header.clone()),
+                    reward: *reward,
                 },
             )
             .await
             .unwrap();
 
-        Ok(())
-    }
-
-    /// Floods the current block to participants for mining
-    pub async fn flood_block_to_partition(&mut self) -> Result<()> {
-        debug!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
-        let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
-        let header = block.header.clone();
-        let reward = self.node_raft.get_current_reward();
-
         self.node
             .send_to_all(
-                self.node_raft.get_mining_participants_iter(),
+                non_participants.copied(),
                 MineRequest::SendBlock {
-                    block: header,
+                    pow_info,
+                    rnum,
+                    win_coinbases,
+                    block: None,
                     reward: *reward,
                 },
             )
@@ -1141,7 +1182,18 @@ impl ComputeNode {
 
     /// Reset the mining block processing to allow a new block.
     fn reset_mining_block_process(&mut self) {
+        self.previous_random_num = Some(std::mem::take(&mut self.current_random_num))
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(generate_pow_random_num);
+
         self.current_random_num = generate_pow_random_num();
+        self.db
+            .put_cf(
+                DB_COL_INTERNAL,
+                POW_PREV_RANDOM_NUM_KEY,
+                &self.previous_random_num,
+            )
+            .unwrap();
         self.db
             .put_cf(
                 DB_COL_INTERNAL,
@@ -1149,6 +1201,7 @@ impl ComputeNode {
                 &self.current_random_num,
             )
             .unwrap();
+
         self.current_mined_block = None;
     }
 
@@ -1180,21 +1233,23 @@ impl ComputeNode {
             Err(e) => panic!("Error accessing db: {:?}", e),
         };
 
-        self.current_random_num = {
-            let current_random_num = match self.db.get_cf(DB_COL_INTERNAL, POW_RANDOM_NUM_KEY) {
-                Ok(Some(num)) => num,
-                Ok(None) => generate_pow_random_num(),
-                Err(e) => panic!("Error accessing db: {:?}", e),
+        for (num, key) in [
+            (&mut self.current_random_num, POW_RANDOM_NUM_KEY),
+            (&mut self.previous_random_num, POW_PREV_RANDOM_NUM_KEY),
+        ] {
+            *num = {
+                let current_random_num = match self.db.get_cf(DB_COL_INTERNAL, key) {
+                    Ok(Some(num)) => num,
+                    Ok(None) => generate_pow_random_num(),
+                    Err(e) => panic!("Error accessing db: {:?}", e),
+                };
+                debug!("load_local_db: {} {:?}", key, current_random_num);
+                if let Err(e) = self.db.put_cf(DB_COL_INTERNAL, key, &current_random_num) {
+                    panic!("Error accessing db: {:?}", e);
+                }
+                current_random_num
             };
-            debug!("load_local_db: current_random_num {:?}", current_random_num);
-            if let Err(e) = self
-                .db
-                .put_cf(DB_COL_INTERNAL, POW_RANDOM_NUM_KEY, &current_random_num)
-            {
-                panic!("Error accessing db: {:?}", e);
-            }
-            current_random_num
-        };
+        }
 
         self.node_raft.set_key_run({
             let key_run = match self.db.get_cf(DB_COL_INTERNAL, RAFT_KEY_RUN) {
@@ -1232,7 +1287,7 @@ impl ComputeNode {
         block_num: u64,
         nonce: Vec<u8>,
         coinbase: Transaction,
-    ) -> Response {
+    ) -> Option<Response> {
         let pow_mining_block = (self.node_raft.get_mining_block().as_ref())
             .filter(|b| block_num == b.header.b_num)
             .filter(|_| self.node_raft.get_mining_participants().contains(&address));
@@ -1243,29 +1298,29 @@ impl ComputeNode {
             mining_block.header.clone()
         } else {
             trace!(?address, "Received outdated PoW");
-            return Response {
+            return Some(Response {
                 success: false,
                 reason: "Not block currently mined",
-            };
+            });
         };
 
         // Check coinbase amount and structure
         let coinbase_amount = self.node_raft.get_current_reward();
         if !coinbase.is_coinbase() || coinbase.outputs[0].value.token_amount() != *coinbase_amount {
-            return Response {
+            return Some(Response {
                 success: false,
                 reason: "Coinbase transaction invalid",
-            };
+            });
         }
 
         // Perform validation
         let coinbase_hash = construct_tx_hash(&coinbase);
         let block_to_check = apply_mining_tx(block_to_check, nonce, coinbase_hash);
         if !validate_pow_block(&block_to_check) {
-            return Response {
+            return Some(Response {
                 success: false,
                 reason: "Invalid PoW for block",
-            };
+            });
         }
 
         // TODO: D and P will need to change with keccak prime intro
@@ -1278,14 +1333,18 @@ impl ComputeNode {
         };
 
         // Propose the received PoW to the block pipeline
-        self.node_raft
+        if !self
+            .node_raft
             .propose_mining_pipeline_item(MiningPipelineItem::WinningPoW(address, pow_info))
-            .await;
+            .await
+        {
+            return None;
+        }
 
-        Response {
+        Some(Response {
             success: true,
             reason: "Received PoW successfully",
-        }
+        })
     }
 
     /// Receives block info from its storage node
@@ -1330,16 +1389,16 @@ impl ComputeNode {
                     error!("Resend block to storage failed {:?}", e);
                 }
             }
-            MiningPipelineStatus::ParticipantIntake => {
+            MiningPipelineStatus::ParticipantOnlyIntake => {
                 info!("Resend partition random number to miners");
-                if let Err(e) = self.flood_rand_num_to_requesters().await {
+                if let Err(e) = self.flood_rand_and_block_to_partition().await {
                     error!("Resend partition random number to miners failed {:?}", e);
                 }
             }
-            MiningPipelineStatus::WinningPoWIntake => {
-                info!("Resend block to partition miners");
-                if let Err(e) = self.flood_block_to_partition().await {
-                    error!("Resend block to partition miners failed {:?}", e);
+            MiningPipelineStatus::AllItemsIntake => {
+                info!("Resend block and rand to partition miners");
+                if let Err(e) = self.flood_rand_and_block_to_partition().await {
+                    error!("Resend block and rand to partition miners failed {:?}", e);
                 }
             }
         }
