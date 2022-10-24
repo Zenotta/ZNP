@@ -2,8 +2,8 @@ use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
-    BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
-    StorageRequest,
+    BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, PowInfo, ProofOfWork,
+    Response, StorageRequest,
 };
 use crate::utils::{
     self, apply_mining_tx, format_parition_pow_address, generate_pow_for_block,
@@ -15,7 +15,6 @@ use crate::wallet::WalletDb;
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::crypto::sha3_256;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::{self, BlockHeader};
 use naom::primitives::transaction::Transaction;
@@ -126,7 +125,8 @@ pub struct MinerNode {
     last_pow: Option<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
-    mining_partition_task: RunningTaskOrResult<(ProofOfWork, SocketAddr)>,
+    wait_partition_task: bool,
+    mining_partition_task: RunningTaskOrResult<(ProofOfWork, PowInfo, SocketAddr)>,
     mining_block_task: RunningTaskOrResult<BlockPoWInfo>,
     blockchain_item_received: Option<(String, BlockchainItem, SocketAddr)>,
     api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, RoutesPoWInfo),
@@ -181,6 +181,7 @@ impl MinerNode {
             last_pow: None,
             current_coinbase: None,
             current_payment_address: None,
+            wait_partition_task: Default::default(),
             mining_partition_task: Default::default(),
             mining_block_task: Default::default(),
             blockchain_item_received: Default::default(),
@@ -375,12 +376,13 @@ impl MinerNode {
                     }
                 }
                 _ = self.mining_partition_task.wait() => {
+                    self.wait_partition_task = false;
                     return Some(Ok(Response {
                         success: true,
                         reason: "Partition PoW complete",
                     }));
                 }
-                _ = self.mining_block_task.wait() => {
+                _ = self.mining_block_task.wait(), if !self.wait_partition_task => {
                     return Some(Ok(Response {
                         success: true,
                         reason: "Block PoW complete",
@@ -467,11 +469,23 @@ impl MinerNode {
 
         match req {
             SendBlockchainItem { key, item } => Some(self.receive_blockchain_item(peer, key, item)),
-            SendBlock { block, reward } => self.receive_pre_block(peer, block, reward).await,
-            SendRandomNum {
+            SendBlock {
+                pow_info,
                 rnum,
                 win_coinbases,
-            } => self.receive_random_number(peer, rnum, win_coinbases).await,
+                reward,
+                block,
+            } => {
+                self.receive_pre_block_and_random(
+                    peer,
+                    pow_info,
+                    rnum,
+                    win_coinbases,
+                    reward,
+                    block,
+                )
+                .await
+            }
             SendTransactions {
                 tx_merkle_verification,
             } => {
@@ -518,6 +532,44 @@ impl MinerNode {
         &self.blockchain_item_received
     }
 
+    /// Receives a new block to be mined
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`     - Sending peer's socket address
+    /// * `pre_block` - New block to be mined
+    /// * `reward`    - The block reward to be paid on successful PoW
+    async fn receive_pre_block_and_random(
+        &mut self,
+        peer: SocketAddr,
+        pow_info: PowInfo,
+        rand_num: Vec<u8>,
+        win_coinbases: Vec<String>,
+        reward: TokenAmount,
+        pre_block: Option<BlockHeader>,
+    ) -> Option<Response> {
+        let process_rnd = self
+            .receive_random_number(peer, pow_info, rand_num, win_coinbases)
+            .await;
+        let process_block = if let Some(pre_block) = pre_block {
+            self.receive_pre_block(peer, pre_block, reward).await
+        } else {
+            false
+        };
+
+        match (process_rnd, process_block) {
+            (true, false) => Some(Response {
+                success: true,
+                reason: "Received random number successfully",
+            }),
+            (_, true) => Some(Response {
+                success: true,
+                reason: "Pre-block received successfully",
+            }),
+            (false, false) => None,
+        }
+    }
+
     /// Handles the receipt of the random number of partitioning
     ///
     /// ### Arguments
@@ -527,26 +579,25 @@ impl MinerNode {
     async fn receive_random_number(
         &mut self,
         peer: SocketAddr,
+        pow_info: PowInfo,
         rand_num: Vec<u8>,
         win_coinbases: Vec<String>,
-    ) -> Option<Response> {
+    ) -> bool {
         if peer != self.compute_address() {
-            return None;
+            return false;
         }
 
         if self.rand_num == rand_num {
             self.process_found_partition_pow().await;
-            return None;
+            return false;
         }
 
         if self.is_current_coinbase_found(&win_coinbases) {
             self.commit_found_coinbase().await;
         }
-        self.start_generate_partition_pow(peer, rand_num).await;
-        Some(Response {
-            success: true,
-            reason: "Received random number successfully",
-        })
+        self.start_generate_partition_pow(peer, pow_info, rand_num)
+            .await;
+        true
     }
 
     /// Receives a new block to be mined
@@ -561,9 +612,9 @@ impl MinerNode {
         peer: SocketAddr,
         pre_block: BlockHeader,
         reward: TokenAmount,
-    ) -> Option<Response> {
+    ) -> bool {
         if peer != self.compute_address() {
-            return None;
+            return false;
         }
 
         let new_block = BlockPoWReceived {
@@ -582,15 +633,12 @@ impl MinerNode {
             if new_b_num == current_b_num {
                 self.process_found_block_pow().await;
             }
-            return None;
+            return false;
         }
 
         self.start_generate_pow_for_current_block(peer, new_block)
             .await;
-        Some(Response {
-            success: true,
-            reason: "Pre-block received successfully",
-        })
+        true
     }
 
     /// Verifies the block by checking the transactions using a merkle tree.
@@ -705,8 +753,8 @@ impl MinerNode {
 
     /// Process the found Pow sending it to the related peer and logging errors
     pub async fn process_found_partition_pow(&mut self) -> bool {
-        let (partition_entry, peer) = match self.mining_partition_task.completed_result() {
-            Some(Ok((e, p))) => (e.clone(), *p),
+        let (partition_entry, p_info, peer) = match self.mining_partition_task.completed_result() {
+            Some(Ok((e, p_info, p))) => (e.clone(), *p_info, *p),
             Some(Err(e)) => {
                 error!("process_found_partition_pow PoW {:?}", e);
                 return false;
@@ -717,7 +765,7 @@ impl MinerNode {
             }
         };
 
-        if let Err(e) = self.send_partition_pow(peer, partition_entry).await {
+        if let Err(e) = self.send_partition_pow(peer, p_info, partition_entry).await {
             error!("process_found_partition_pow PoW {:?}", e);
             return false;
         }
@@ -734,10 +782,17 @@ impl MinerNode {
     pub async fn send_partition_pow(
         &mut self,
         peer: SocketAddr,
+        pow_info: PowInfo,
         partition_entry: ProofOfWork,
     ) -> Result<()> {
         self.node
-            .send(peer, ComputeRequest::SendPartitionEntry { partition_entry })
+            .send(
+                peer,
+                ComputeRequest::SendPartitionEntry {
+                    pow_info,
+                    partition_entry,
+                },
+            )
             .await?;
         Ok(())
     }
@@ -827,35 +882,22 @@ impl MinerNode {
     ///
     /// * `peer`     - Peer to send PoW to
     /// * `rand_num` - random num for PoW
-    pub async fn start_generate_partition_pow(&mut self, peer: SocketAddr, rand_num: Vec<u8>) {
+    pub async fn start_generate_partition_pow(
+        &mut self,
+        peer: SocketAddr,
+        pow_info: PowInfo,
+        rand_num: Vec<u8>,
+    ) {
         let address_proof = format_parition_pow_address(self.address());
 
+        self.wait_partition_task = true;
         self.mining_partition_task = RunningTaskOrResult::Running(utils::generate_pow_for_address(
             peer,
+            pow_info,
             address_proof,
             Some(rand_num.clone()),
         ));
         self.rand_num = rand_num;
-    }
-
-    /// Generate a valid PoW and return the hashed value
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer`    - Peer to send PoW to
-    /// * `address` - Payment address for a valid PoW
-    pub async fn generate_pow_promise(
-        &mut self,
-        peer: SocketAddr,
-        address: String,
-    ) -> Result<Vec<u8>> {
-        let (pow, _) = utils::generate_pow_for_address(peer, address, None).await?;
-
-        self.last_pow = Some(pow.clone());
-        let mut pow_body = pow.address.as_bytes().to_vec();
-        pow_body.extend(pow.nonce);
-
-        Ok(sha3_256::digest(&pow_body).to_vec())
     }
 
     /// Returns the last PoW.

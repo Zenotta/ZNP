@@ -113,6 +113,12 @@ enum CfgNum {
     Majority,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum CfgPow {
+    First,
+    Parallel,
+}
+
 #[derive(Clone, Debug)]
 enum CfgModif {
     Drop(&'static str),
@@ -183,8 +189,13 @@ async fn full_flow_raft_majority_3_nodes() {
 // Only run locally - unstable on repository pipeline
 #[tokio::test(flavor = "current_thread")]
 #[ignore]
-async fn full_flow_raft_15_nodes() {
-    full_flow(complete_network_config_with_n_compute_raft(10550, 15)).await;
+async fn full_flow_raft_majority_15_nodes() {
+    full_flow_tls(
+        complete_network_config_with_n_compute_raft(10550, 15),
+        CfgNum::Majority,
+        Vec::new(),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -372,14 +383,14 @@ async fn full_flow_common(
     //
     create_first_block_act(&mut network).await;
     modify_network(&mut network, "After create block 0", &modify_cfg).await;
-    proof_of_work_act(&mut network, cfg_num).await;
+    proof_of_work_act(&mut network, CfgPow::First, cfg_num).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
     let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
 
     add_transactions_act(&mut network, &transactions).await;
     create_block_act(&mut network, Cfg::All, cfg_num).await;
     modify_network(&mut network, "After create block 1", &modify_cfg).await;
-    proof_of_work_act(&mut network, cfg_num).await;
+    proof_of_work_act(&mut network, CfgPow::Parallel, cfg_num).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
     let stored1 = storage_get_last_block_stored(&mut network, "storage1").await;
 
@@ -948,7 +959,7 @@ async fn proof_of_work_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     //
     let block_before = compute_all_mined_block_num(&mut network, compute_nodes).await;
 
-    proof_of_work_act(&mut network, cfg_num).await;
+    proof_of_work_act(&mut network, CfgPow::First, cfg_num).await;
     proof_of_work_send_more_act(&mut network, cfg_num).await;
 
     let block_after = compute_all_mined_block_num(&mut network, compute_nodes).await;
@@ -962,38 +973,46 @@ async fn proof_of_work_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     test_step_complete(network).await;
 }
 
-async fn proof_of_work_act(network: &mut Network, cfg_num: CfgNum) {
+async fn proof_of_work_act(network: &mut Network, cfg_pow: CfgPow, cfg_num: CfgNum) {
     let active_nodes = network.all_active_nodes().clone();
     let compute_nodes = &active_nodes[&NodeType::Compute];
     let c_mined = &node_select(compute_nodes, cfg_num);
     let active_compute_to_miner_mapping = network.active_compute_to_miner_mapping().clone();
+    const POWS_COMPLETE: [&str; 2] = ["Partition PoW complete", "Block PoW complete"];
 
     info!("Test Step Miner block Proof of Work: partition-> rand num -> num pow -> pre-block -> block pow");
-    for compute in c_mined {
-        let c_miners = &active_compute_to_miner_mapping.get(compute).unwrap();
-        compute_flood_rand_num_to_requesters(network, compute).await;
-        miner_all_handle_event(network, c_miners, "Received random number successfully").await;
+    if cfg_pow == CfgPow::First {
+        for compute in c_mined {
+            let c_miners = &active_compute_to_miner_mapping.get(compute).unwrap();
+            compute_flood_rand_and_block_to_partition(network, compute).await;
+            miner_all_handle_event(network, c_miners, "Received random number successfully").await;
 
-        for miner in c_miners.iter() {
-            miner_handle_event(network, miner, "Partition PoW complete").await;
-            miner_process_found_partition_pow(network, miner).await;
-            compute_handle_event(network, compute, "Partition PoW received successfully").await;
+            for miner in c_miners.iter() {
+                miner_handle_event(network, miner, "Partition PoW complete").await;
+                miner_process_found_partition_pow(network, miner).await;
+                compute_handle_event(network, compute, "Partition PoW received successfully").await;
+            }
         }
-    }
 
-    node_all_handle_event(network, compute_nodes, &["Winning PoW intake open"]).await;
+        node_all_handle_event(network, compute_nodes, &["Winning PoW intake open"]).await;
+    }
 
     for compute in c_mined {
         let c_miners = &active_compute_to_miner_mapping.get(compute).unwrap();
         let in_miners = compute_get_filtered_participants(network, compute, c_miners).await;
         let in_miners = &in_miners;
-        compute_flood_block_to_partition(network, compute).await;
+        compute_flood_rand_and_block_to_partition(network, compute).await;
         // TODO: Better to validate all miners => needs to have the miner with barrier as well.
-        miner_all_handle_event(network, in_miners, "Pre-block received successfully").await;
-        miner_all_handle_event(network, in_miners, "Block PoW complete").await;
+
+        let all_evts = block_and_partition_evt_in_miner_pow(c_miners, in_miners);
+        node_all_handle_different_event(network, c_miners, &all_evts).await;
         compute_flood_transactions_to_partition(network, compute).await;
         miner_all_handle_event(network, in_miners, "Block is valid").await;
 
+        for miner in c_miners.iter() {
+            miner_process_found_partition_pow(network, miner).await;
+            compute_handle_event(network, compute, "Partition PoW received successfully").await;
+        }
         for miner in in_miners {
             miner_process_found_block_pow(network, miner).await;
             compute_handle_event(network, compute, "Received PoW successfully").await;
@@ -1075,7 +1094,7 @@ async fn proof_winner(network_config: NetworkConfig) {
     // Act
     // Does not allow miner reuse.
     //
-    proof_of_work_act(&mut network, CfgNum::All).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
@@ -1127,8 +1146,12 @@ async fn proof_winner_act(network: &mut Network) {
     info!("Test Step Miner winner:");
     for compute in compute_nodes {
         let c_miners = &config.compute_to_miner_mapping.get(compute).unwrap();
-        compute_flood_rand_num_to_requesters(network, compute).await;
-        miner_all_handle_event(network, c_miners, "Received random number successfully").await;
+        let in_miners = compute_get_filtered_participants(network, compute, c_miners).await;
+        let in_miners = &in_miners;
+
+        compute_flood_rand_and_block_to_partition(network, compute).await;
+        let all_evts = block_and_partition_evt_in_miner_pow(c_miners, in_miners);
+        node_all_handle_different_event(network, c_miners, &all_evts).await;
     }
 }
 
@@ -1667,7 +1690,7 @@ async fn proof_of_work_reject() {
     let block_num = 1;
     create_first_block_act(&mut network).await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
-    compute_flood_rand_num_to_requesters(&mut network, compute).await;
+    compute_flood_rand_and_block_to_partition(&mut network, compute).await;
     miner_handle_event(&mut network, miner, "Received random number successfully").await;
     miner_handle_event(&mut network, miner, "Partition PoW complete").await;
     miner_process_found_partition_pow(&mut network, miner).await;
@@ -1780,16 +1803,27 @@ async fn handle_message_lost_restart_upgrade_block_complete_raft_1_node() {
         CfgModif::RestartUpgradeEventsAll(&[
             (NodeType::Compute, "Snapshot applied"),
             (NodeType::Compute, "Received first full partition request"),
+            //(NodeType::Compute, "Partition PoW received successfully"),
             (NodeType::Storage, "Snapshot applied"),
+            //            (NodeType::Miner, "Received random number successfully"),
+            //            (NodeType::Miner, "Partition PoW complete"),
         ]),
     )];
 
     let network_config = complete_network_config_with_n_compute_raft(10480, 1);
-    handle_message_lost_common(network_config, &modify_cfg).await
+    handle_message_lost_common_with_pow(network_config, CfgPow::First, &modify_cfg).await
 }
 
 async fn handle_message_lost_common(
+    network_config: NetworkConfig,
+    modify_cfg: &[(&str, CfgModif)],
+) {
+    handle_message_lost_common_with_pow(network_config, CfgPow::Parallel, modify_cfg).await
+}
+
+async fn handle_message_lost_common_with_pow(
     mut network_config: NetworkConfig,
+    cfg_pow: CfgPow,
     modify_cfg: &[(&str, CfgModif)],
 ) {
     test_step_start();
@@ -1812,23 +1846,35 @@ async fn handle_message_lost_common(
     });
     let expected_events_b1_stored = network.all_active_nodes_events(|t, _| match t {
         NodeType::Storage => vec![BLOCK_RECEIVED.to_owned(), BLOCK_STORED.to_owned()],
+        NodeType::Compute if cfg_pow == CfgPow::Parallel => vec![
+            "Partition PoW received successfully".to_owned(),
+            "Received PoW successfully".to_owned(),
+            "Pipeline halted".to_owned(),
+        ],
         NodeType::Compute => vec![
             "Partition PoW received successfully".to_owned(),
             "Winning PoW intake open".to_owned(),
+            "Partition PoW received successfully".to_owned(),
             "Received PoW successfully".to_owned(),
             "Pipeline halted".to_owned(),
+        ],
+        NodeType::Miner if cfg_pow == CfgPow::Parallel => vec![
+            "Pre-block received successfully".to_owned(),
+            "Partition PoW complete".to_owned(),
+            "Block PoW complete".to_owned(),
         ],
         NodeType::Miner => vec![
             "Received random number successfully".to_owned(),
             "Partition PoW complete".to_owned(),
             "Pre-block received successfully".to_owned(),
+            "Partition PoW complete".to_owned(),
             "Block PoW complete".to_owned(),
         ],
         NodeType::User => vec![],
     });
 
     create_first_block_act(&mut network).await;
-    proof_of_work_act(&mut network, CfgNum::All).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
 
@@ -2058,7 +2104,7 @@ async fn relaunch_with_new_raft_nodes() {
 
         // Create intiial snapshoot in compute and storage
         create_first_block_act(&mut network).await;
-        proof_of_work_act(&mut network, CfgNum::All).await;
+        proof_of_work_act(&mut network, CfgPow::First, CfgNum::All).await;
         send_block_to_storage_act(&mut network, CfgNum::All).await;
         network.close_raft_loops_and_drop().await
     };
@@ -2286,7 +2332,7 @@ async fn request_utxo_set_and_update_running_total_raft_1_node() {
     // Act
     //
     create_first_block_act(&mut network).await;
-    proof_of_work_act(&mut network, CfgNum::All).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
 
     let before = node_all_get_wallet_info(&mut network, user_nodes).await;
@@ -2869,7 +2915,7 @@ async fn reject_receipt_based_payment() {
         ),
     );
     add_transactions_act(&mut network, &create_receipt_asset_txs).await;
-    proof_of_work_act(&mut network, CfgNum::All).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
@@ -3433,14 +3479,9 @@ async fn compute_inject_next_event(
     c.inject_next_event(from_addr, request).unwrap();
 }
 
-async fn compute_flood_rand_num_to_requesters(network: &mut Network, compute: &str) {
+async fn compute_flood_rand_and_block_to_partition(network: &mut Network, compute: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    c.flood_rand_num_to_requesters().await.unwrap();
-}
-
-async fn compute_flood_block_to_partition(network: &mut Network, compute: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
-    c.flood_block_to_partition().await.unwrap();
+    c.flood_rand_and_block_to_partition().await.unwrap();
 }
 
 async fn compute_flood_transactions_to_partition(network: &mut Network, compute: &str) {
@@ -4150,6 +4191,25 @@ fn make_compute_seed_utxo_with_info(seed: &[(&str, Vec<(&str, TokenAmount)>)]) -
             )
         })
         .collect()
+}
+
+fn block_and_partition_evt_in_miner_pow(
+    c_miners: &[String],
+    in_miners: &[String],
+) -> BTreeMap<String, Vec<String>> {
+    let init_evt = |m: &String| (m.clone(), vec![]);
+    let mut evts = c_miners.iter().map(init_evt).collect::<BTreeMap<_, _>>();
+    for (key, evt) in evts.iter_mut() {
+        if in_miners.contains(key) {
+            evt.push("Pre-block received successfully".to_owned());
+            evt.push("Partition PoW complete".to_owned());
+            evt.push("Block PoW complete".to_owned());
+        } else {
+            evt.push("Received random number successfully".to_owned());
+            evt.push("Partition PoW complete".to_owned());
+        }
+    }
+    evts
 }
 
 fn panic_on_timeout<E>(response: &Result<Response, E>, tag: &str) {

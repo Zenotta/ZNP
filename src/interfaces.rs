@@ -126,6 +126,13 @@ pub struct BlockStoredInfo {
     pub shutdown: bool,
 }
 
+/// PoW additional info
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PowInfo {
+    pub participant_only: bool,
+    pub b_num: u64,
+}
+
 /// PoW structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProofOfWork {
@@ -416,12 +423,11 @@ pub trait StorageInterface {
 #[derive(Serialize, Deserialize, Clone)]
 pub enum MineRequest {
     SendBlock {
-        block: BlockHeader,
-        reward: TokenAmount,
-    },
-    SendRandomNum {
+        pow_info: PowInfo,
         rnum: Vec<u8>,
         win_coinbases: Vec<String>,
+        reward: TokenAmount,
+        block: Option<BlockHeader>,
     },
     SendBlockchainItem {
         key: String,
@@ -440,7 +446,6 @@ impl fmt::Debug for MineRequest {
         match *self {
             SendBlockchainItem { .. } => write!(f, "SendBlockchainItem"),
             SendBlock { .. } => write!(f, "SendBlock"),
-            SendRandomNum { .. } => write!(f, "SendRandomNum"),
             SendTransactions { .. } => write!(f, "SendTransactions"),
             Closing => write!(f, "Closing"),
         }
@@ -499,6 +504,7 @@ pub enum ComputeRequest {
         coinbase: Transaction,
     },
     SendPartitionEntry {
+        pow_info: PowInfo,
         partition_entry: ProofOfWork,
     },
     SendTransactions {

@@ -1,3 +1,4 @@
+use crate::configurations::UnicornFixedInfo;
 use crate::constants::{MINER_PARTICIPATION_UN, WINNING_MINER_UN};
 use crate::interfaces::WinningPoWInfo;
 use crate::unicorn::{construct_seed, construct_unicorn, UnicornFixedParam, UnicornInfo};
@@ -16,8 +17,8 @@ use tracing::log::{debug, info};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MiningPipelineStatus {
     Halted,
-    ParticipantIntake,
-    WinningPoWIntake,
+    ParticipantOnlyIntake,
+    AllItemsIntake,
 }
 
 impl Default for MiningPipelineStatus {
@@ -36,7 +37,7 @@ pub enum MiningPipelinePhaseChange {
 /// Different types of items that can be proposed to the block pipeline
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MiningPipelineItem {
-    MiningParticipant(SocketAddr),
+    MiningParticipant(SocketAddr, MiningPipelineStatus),
     CompleteParticipant,
     WinningPoW(SocketAddr, WinningPoWInfo),
     CompleteMining,
@@ -66,6 +67,10 @@ impl Participants {
 
     pub fn contains(&self, k: &SocketAddr) -> bool {
         self.lookup.contains(k)
+    }
+
+    pub fn lookup(&self) -> &BTreeSet<SocketAddr> {
+        &self.lookup
     }
 
     pub fn push(&mut self, k: SocketAddr) -> bool {
@@ -107,34 +112,108 @@ pub struct MiningPipelineInfo {
     mining_pipeline_status: MiningPipelineStatus,
     /// The timeout ids
     current_phase_timeout_peer_ids: BTreeSet<u64>,
+    /// Fixed info for unicorn generation
+    unicorn_fixed_param: UnicornFixedParam,
     /// Index of the last block,
-    pub current_block_num: Option<u64>,
+    current_block_num: Option<u64>,
     /// Current block ready to mine (consensused).
-    pub current_block: Option<Block>,
+    current_block: Option<Block>,
     /// All transactions present in current_block (consensused).
-    pub current_block_tx: BTreeMap<String, Transaction>,
+    current_block_tx: BTreeMap<String, Transaction>,
     /// The current reward for a given compute node
-    pub current_reward: TokenAmount,
+    current_reward: TokenAmount,
+}
+
+pub struct MiningPipelineInfoImport {
+    pub unicorn_fixed_param: UnicornFixedParam,
+    pub current_block_num: Option<u64>,
+    pub current_block: Option<Block>,
 }
 
 impl MiningPipelineInfo {
+    /// Specify the unicorn fixed params
+    pub fn with_unicorn_fixed_param(mut self, unicorn_fixed_info: UnicornFixedInfo) -> Self {
+        self.unicorn_fixed_param = UnicornFixedParam {
+            modulus: unicorn_fixed_info.modulus,
+            iterations: unicorn_fixed_info.iterations,
+            security: unicorn_fixed_info.security,
+        };
+        self
+    }
+
+    /// Gets the current reward for a given block
+    pub fn get_current_reward(&self) -> &TokenAmount {
+        &self.current_reward
+    }
+
     /// Check if computing the first block.
     pub fn current_block_num(&self) -> Option<u64> {
         self.current_block_num
     }
 
+    /// Current block to mine or being mined.
+    pub fn get_mining_block(&self) -> &Option<Block> {
+        &self.current_block
+    }
+
+    /// Current block to mine or being mined.
+    pub fn get_mining_block_tx(&self) -> &BTreeMap<String, Transaction> {
+        &self.current_block_tx
+    }
+
+    /// Set consensused committed block to mine.
+    pub fn set_committed_mining_block(
+        &mut self,
+        block: Block,
+        block_tx: BTreeMap<String, Transaction>,
+    ) {
+        self.current_block = Some(block);
+        self.current_block_tx = block_tx;
+    }
+
+    /// Take mining block when mining is completed, use to populate mined block.
+    pub fn take_mining_block(&mut self) -> Option<(Block, BTreeMap<String, Transaction>)> {
+        let block = std::mem::take(&mut self.current_block);
+        let block_tx = std::mem::take(&mut self.current_block_tx);
+        block.map(|b| (b, block_tx))
+    }
+
+    pub fn apply_ready_block_stored_info(&mut self, block_num: u64, reward: TokenAmount) {
+        // Reset block if not mined
+        self.current_block = Default::default();
+        self.current_block_tx = Default::default();
+
+        self.current_block_num = Some(block_num);
+        self.current_reward = reward;
+    }
+
+    /// Initialize block pipeline
+    pub fn init_block_pipeline_status(mut self, extra: PipelineEventInfo) -> Self {
+        if self.current_block.is_some() {
+            self.start_items_intake(extra);
+        }
+        self
+    }
+
     /// Start participants intake phase
-    pub fn start_participant_intake(&mut self) {
+    pub fn start_items_intake(&mut self, extra: PipelineEventInfo) {
+        self.mining_pipeline_status = if self.participants_intake.is_empty() {
+            MiningPipelineStatus::ParticipantOnlyIntake
+        } else {
+            //self.participants_intake = Default::default();
+            //self.participants_mining = Default::default();
+            self.unicorn_select_participants_mining(extra.partition_full_size);
+            MiningPipelineStatus::AllItemsIntake
+        };
+
         //Only keep relevant info for this phase
-        self.mining_pipeline_status = MiningPipelineStatus::ParticipantIntake;
-        self.participants_intake = Default::default();
-        self.participants_mining = Default::default();
         self.last_winning_hashes = Default::default();
         self.all_winning_pow = Default::default();
         self.winning_pow = Default::default();
         self.current_phase_timeout_peer_ids = Default::default();
 
         debug!("MINING PIPELINE STATUS: {:?}", self.mining_pipeline_status);
+        debug!("Participating Miners: {:?}", self.participants_mining);
     }
 
     /// Handle a mining pipeline item
@@ -155,16 +234,17 @@ impl MiningPipelineInfo {
 
         let pipeline_status = self.get_mining_pipeline_status().clone();
         match (pipeline_item, &pipeline_status) {
-            (MiningParticipant(addr), ParticipantIntake) => {
+            (MiningParticipant(addr, ParticipantOnlyIntake), ParticipantOnlyIntake)
+            | (MiningParticipant(addr, AllItemsIntake), AllItemsIntake) => {
                 self.add_to_participants(extra.proposer_id, addr);
             }
-            (CompleteParticipant, ParticipantIntake) => {
+            (CompleteParticipant, ParticipantOnlyIntake) => {
                 self.append_current_phase_timeout(extra.proposer_id);
             }
-            (WinningPoW(addr, info), WinningPoWIntake) => {
+            (WinningPoW(addr, info), AllItemsIntake) => {
                 self.add_to_winning_pow(extra.proposer_id, (addr, info));
             }
-            (CompleteMining, WinningPoWIntake) => {
+            (CompleteMining, AllItemsIntake) => {
                 self.append_current_phase_timeout(extra.proposer_id);
             }
             (item, status) => {
@@ -177,13 +257,13 @@ impl MiningPipelineInfo {
 
         match &pipeline_status {
             Halted => (),
-            ParticipantIntake => {
+            ParticipantOnlyIntake => {
                 if self.has_ready_select_participating_miners(extra.sufficient_majority) {
-                    self.start_participants_pow_intake(extra.partition_full_size);
+                    self.start_items_intake(extra);
                     return Some(MiningPipelinePhaseChange::StartPhasePowIntake);
                 }
             }
-            WinningPoWIntake => {
+            AllItemsIntake => {
                 if self.has_ready_select_winning_miner(extra.sufficient_majority) {
                     self.start_winning_pow_halted();
                     return Some(MiningPipelinePhaseChange::StartPhaseHalted);
@@ -198,8 +278,8 @@ impl MiningPipelineInfo {
     pub fn mining_event_at_timeout(&mut self) -> Option<MiningPipelineItem> {
         use MiningPipelineStatus::*;
         match self.get_mining_pipeline_status() {
-            ParticipantIntake => Some(MiningPipelineItem::CompleteParticipant),
-            WinningPoWIntake => Some(MiningPipelineItem::CompleteMining),
+            ParticipantOnlyIntake => Some(MiningPipelineItem::CompleteParticipant),
+            AllItemsIntake => Some(MiningPipelineItem::CompleteMining),
             Halted => None,
         }
     }
@@ -211,7 +291,7 @@ impl MiningPipelineInfo {
         let block = self.current_block.as_mut().unwrap();
         block.header.seed_value = seed;
 
-        self.start_participants_pow_intake(usize::MAX);
+        self.unicorn_select_participants_mining(usize::MAX);
         self.all_winning_pow.push(winning_pow);
         self.start_winning_pow_halted();
     }
@@ -278,10 +358,8 @@ impl MiningPipelineInfo {
     }
 
     /// Select miners to mine current block and move to Pow intake
-    pub fn start_participants_pow_intake(&mut self, partition_full_size: usize) {
+    pub fn unicorn_select_participants_mining(&mut self, partition_full_size: usize) {
         let mut participants = std::mem::take(&mut self.participants_intake);
-        let _timeouts = std::mem::take(&mut self.current_phase_timeout_peer_ids);
-
         for ps in participants.values_mut() {
             if ps.unsorted.len() <= partition_full_size {
                 continue;
@@ -294,9 +372,6 @@ impl MiningPipelineInfo {
         }
 
         self.participants_mining = participants;
-        self.mining_pipeline_status = MiningPipelineStatus::WinningPoWIntake;
-        debug!("MINING PIPELINE STATUS: {:?}", self.mining_pipeline_status);
-        debug!("Participating Miners: {:?}", self.participants_mining);
     }
 
     /// Selects a winning miner from the list via UNICORN
@@ -337,7 +412,7 @@ impl MiningPipelineInfo {
     }
 
     /// Sets the new UNICORN value based on the latest info
-    pub fn construct_unicorn(&mut self, fixed_params: &UnicornFixedParam) {
+    pub fn construct_unicorn(&mut self) {
         let block = self.current_block.as_mut().unwrap();
         let tx_inputs = &block.transactions;
 
@@ -349,7 +424,7 @@ impl MiningPipelineInfo {
         let all_participants = self.participants_mining.values().map(|p| &p.unsorted);
         let all_participants: Vec<_> = all_participants.flatten().copied().collect();
         let seed = construct_seed(tx_inputs, &all_participants, &self.last_winning_hashes);
-        self.unicorn_info = construct_unicorn(seed, fixed_params);
+        self.unicorn_info = construct_unicorn(seed, &self.unicorn_fixed_param);
         block.header.seed_value = get_unicorn_seed_value(&self.unicorn_info);
     }
 
@@ -398,6 +473,31 @@ impl MiningPipelineInfo {
         let prn = self.get_unicorn_prn(usage_number);
         let selection = 1 + prn as usize % (items.len() - 1);
         items.swap(0, selection);
+    }
+
+    /// Create ComputeConsensused from imported data in upgrade
+    pub fn from_import(value: MiningPipelineInfoImport) -> Self {
+        let MiningPipelineInfoImport {
+            unicorn_fixed_param,
+            current_block_num,
+            current_block,
+        } = value;
+
+        Self {
+            unicorn_fixed_param,
+            current_block_num,
+            current_block,
+            ..Default::default()
+        }
+    }
+
+    /// Convert to import type  
+    pub fn into_import(self) -> MiningPipelineInfoImport {
+        MiningPipelineInfoImport {
+            unicorn_fixed_param: self.unicorn_fixed_param,
+            current_block_num: self.current_block_num,
+            current_block: self.current_block,
+        }
     }
 }
 

@@ -240,6 +240,7 @@ pub fn upgrade_same_version_compute_db(mut dbs: ExtraNodeParams) -> Result<Extra
         if key == compute::REQUEST_LIST_KEY.as_bytes()
             || key == compute::USER_NOTIFY_LIST_KEY.as_bytes()
             || key == compute::POW_RANDOM_NUM_KEY.as_bytes()
+            || key == compute::POW_PREV_RANDOM_NUM_KEY.as_bytes()
         {
             batch.delete_cf(column, &key);
         } else if key == compute::RAFT_KEY_RUN.as_bytes() {
