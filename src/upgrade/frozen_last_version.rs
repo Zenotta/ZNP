@@ -3,8 +3,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod constants {
-    pub const NETWORK_VERSION: u32 = 1;
-    pub const NETWORK_VERSION_SERIALIZED: Option<&[u8]> = Some(b"1");
+    pub const NETWORK_VERSION: u32 = 2;
+    pub const NETWORK_VERSION_SERIALIZED: Option<&[u8]> = Some(b"2");
     pub const DB_PATH: &str = "src/db/db";
     pub const WALLET_PATH: &str = "src/wallet/wallet";
 }
@@ -32,11 +32,11 @@ pub mod naom {
     pub struct BlockHeader {
         pub version: u32,
         pub bits: usize,
-        pub nonce: Vec<u8>,
+        pub nonce_and_mining_tx_hash: (Vec<u8>, String),
         pub b_num: u64,
         pub seed_value: Vec<u8>, // for commercial
         pub previous_hash: Option<String>,
-        pub merkle_root_hash: String,
+        pub txs_merkle_root_and_hash: (String, String),
     }
 
     //
@@ -143,7 +143,6 @@ pub mod naom {
         pub value: Asset,
         pub locktime: u64,
         pub drs_block_hash: Option<String>,
-        pub drs_tx_hash: Option<String>,
         pub script_public_key: Option<String>,
     }
 
@@ -151,7 +150,13 @@ pub mod naom {
     pub enum Asset {
         Token(TokenAmount),
         Data(DataAsset),
-        Receipt(u64),
+        Receipt(ReceiptAsset),
+    }
+
+    #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
+    pub struct ReceiptAsset {
+        pub amount: u64,
+        pub drs_tx_hash: Option<String>,
     }
 
     #[derive(
@@ -173,7 +178,6 @@ pub mod interfaces {
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct StoredSerializingBlock {
         pub block: Block,
-        pub mining_tx_hash_and_nonces: BTreeMap<u64, (String, Vec<u8>)>,
     }
 
     #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -181,7 +185,6 @@ pub mod interfaces {
         pub block_hash: String,
         pub block_num: u64,
         pub nonce: Vec<u8>,
-        pub merkle_hash: String,
         pub mining_transactions: BTreeMap<String, Transaction>,
         pub shutdown: bool,
     }
@@ -216,7 +219,9 @@ pub mod compute {
 }
 
 pub mod compute_raft {
+    use super::block_pipeline::*;
     use super::naom::*;
+    use super::unicorn::UnicornFixedParam;
     use super::*;
 
     // Only serialize the UtxoSet
@@ -241,10 +246,12 @@ pub mod compute_raft {
 
     /// All fields that are consensused between the RAFT group.
     /// These fields need to be written and read from a committed log event.
-    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct ComputeConsensused {
         pub unanimous_majority: usize,
         pub sufficient_majority: usize,
+        pub partition_full_size: usize,
+        pub unicorn_fixed_param: UnicornFixedParam,
         pub tx_pool: BTreeMap<String, Transaction>,
         pub tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
         pub tx_current_block_previous_hash: Option<String>,
@@ -257,9 +264,85 @@ pub mod compute_raft {
             BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
         pub last_committed_raft_idx_and_term: (u64, u64),
         pub current_circulation: TokenAmount,
+        pub block_pipeline: MiningPipelineInfo,
         pub current_reward: TokenAmount,
         pub last_mining_transaction_hashes: Vec<String>,
         pub special_handling: Option<SpecialHandling>,
+    }
+}
+
+pub mod unicorn {
+    use super::*;
+    use crate::utils::rug_integer;
+    use rug::Integer;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+    pub struct Unicorn {
+        pub iterations: u64,
+        pub security_level: u32,
+        #[serde(with = "rug_integer")]
+        pub seed: Integer,
+        #[serde(with = "rug_integer")]
+        pub modulus: Integer,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+    pub struct UnicornFixedParam {
+        pub modulus: String,
+        pub iterations: u64,
+        pub security: u32,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+    pub struct UnicornInfo {
+        pub unicorn: Unicorn,
+        pub g_value: String,
+        #[serde(with = "rug_integer")]
+        pub witness: Integer,
+    }
+}
+
+pub mod block_pipeline {
+    use std::net::SocketAddr;
+
+    use super::naom::*;
+    use super::unicorn::UnicornInfo;
+    use super::*;
+
+    /// Different states of the mining pipeline
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum MiningPipelineStatus {
+        Halted,
+        ParticipantOnlyIntake,
+        AllItemsIntake,
+    }
+
+    /// Participants collection (unsorted: given order, and lookup collection)
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+    pub struct Participants {
+        unsorted: Vec<SocketAddr>,
+        lookup: BTreeSet<SocketAddr>,
+    }
+
+    #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct WinningPoWInfo {
+        pub nonce: Vec<u8>,
+        pub mining_tx: (String, Transaction),
+        pub p_value: u8,
+        pub d_value: u8,
+    }
+
+    /// Rolling info particular to a specific mining pipeline
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct MiningPipelineInfo {
+        pub participants: BTreeMap<u64, Participants>,
+        pub empty_participants: Participants,
+        pub last_winning_hashes: BTreeSet<String>,
+        pub all_winning_pow: Vec<(SocketAddr, WinningPoWInfo)>,
+        pub unicorn_info: UnicornInfo,
+        pub winning_pow: Option<(SocketAddr, WinningPoWInfo)>,
+        pub mining_pipeline_status: MiningPipelineStatus,
+        pub current_phase_timeout_peer_ids: BTreeSet<u64>,
     }
 }
 
@@ -276,11 +359,16 @@ pub mod storage {
     pub const DB_COL_BC_NAMED: &str = "block_chain_named";
     pub const DB_COL_BC_META: &str = "block_chain_meta";
     pub const DB_COL_BC_JSON: &str = "block_chain_json";
+    pub const DB_COL_BC_V0_4_0: &str = "block_chain_v0.4.0";
     pub const DB_COL_BC_V0_3_0: &str = "block_chain_v0.3.0";
     pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
 
     /// Version columns
-    pub const DB_COLS_BC: &[(&str, u32)] = &[(DB_COL_BC_V0_3_0, 1), (DB_COL_BC_V0_2_0, 0)];
+    pub const DB_COLS_BC: &[(&str, u32)] = &[
+        (DB_COL_BC_V0_4_0, 2),
+        (DB_COL_BC_V0_3_0, 1),
+        (DB_COL_BC_V0_2_0, 0),
+    ];
     pub const DB_POINTER_SEPARATOR: u8 = b':';
 
     // New but compatible with 0.2.0
@@ -293,6 +381,7 @@ pub mod storage {
             DB_COL_BC_NAMED,
             DB_COL_BC_META,
             DB_COL_BC_JSON,
+            DB_COL_BC_V0_4_0,
             DB_COL_BC_V0_3_0,
             DB_COL_BC_V0_2_0,
         ],
@@ -310,9 +399,9 @@ pub mod storage_raft {
         columns: &[],
     };
 
-    /// Stub CompleteBlock that should not be present in upgrade
+    /// Stub CompleteBlockBuilder that should not be present in upgrade
     #[derive(Clone, Debug, Serialize, Deserialize)]
-    pub struct CompleteBlock {}
+    pub struct CompleteBlockBuilder {}
 
     /// All fields that are consensused between the RAFT group.
     /// These fields need to be written and read from a committed log event.
@@ -320,8 +409,7 @@ pub mod storage_raft {
     pub struct StorageConsensused {
         pub sufficient_majority: usize,
         pub current_block_num: u64,
-        pub current_block_complete_timeout_peer_ids: BTreeSet<u64>,
-        pub current_block_completed_parts: BTreeMap<Vec<u8>, CompleteBlock>,
+        pub current_block_completed_parts: BTreeMap<Vec<u8>, CompleteBlockBuilder>,
         pub last_committed_raft_idx_and_term: (u64, u64),
         pub last_block_stored: Option<BlockStoredInfo>,
     }
@@ -349,7 +437,7 @@ pub mod wallet {
 
     pub type WalletSavedTransactions = BTreeMap<OutPoint, Asset>;
 
-    pub type PendingMap = BTreeMap<String, Transaction>;
+    pub type PendingMap = BTreeMap<String, (Transaction, Vec<(String, OutPoint, TokenAmount)>)>;
     pub type ReadyMap = BTreeMap<String, Vec<(OutPoint, TokenAmount)>>;
     pub type TransactionGenSer = (PendingMap, ReadyMap);
 
@@ -369,10 +457,11 @@ pub mod wallet {
         pub spent_transactions: WalletSavedTransactions,
     }
 
-    #[derive(Default, Debug, Copy, Clone, Serialize, Deserialize)]
+    #[derive(Default, Debug, Clone, Serialize, Deserialize)]
     pub struct AssetValues {
         pub tokens: TokenAmount,
-        pub receipts: u64,
+        // Note: Receipts from create transactions will have `drs_tx_hash` = `t_hash`
+        pub receipts: BTreeMap<String, u64>, /* `drs_tx_hash` - amount */
     }
 
     pub type KnownAddresses = Vec<String>;
@@ -394,13 +483,13 @@ pub mod convert {
     mod old {
         pub use super::super::*;
     }
-    use crate::constants::RECEIPT_DEFAULT_DRS_TX_HASH;
+    use crate::unicorn::UnicornFixedParam;
     use crate::{compute_raft, interfaces, storage_raft, transaction_gen, wallet};
     use naom::crypto::sign_ed25519::{PublicKey, SecretKey, Signature};
     use naom::primitives::asset::{AssetValues, ReceiptAsset};
     use naom::primitives::{
         asset::{Asset, DataAsset, TokenAmount},
-        block::{build_hex_txs_hash, Block, BlockHeader},
+        block::{Block, BlockHeader},
         druid::{DdeValues, DruidExpectation},
         transaction::{OutPoint, Transaction, TxIn, TxOut},
     };
@@ -409,22 +498,20 @@ pub mod convert {
 
     pub fn convert_block(old: old::naom::Block) -> Block {
         Block {
-            header: convert_block_header(old.header, &old.transactions),
+            header: convert_block_header(old.header),
             transactions: old.transactions,
         }
     }
 
-    pub fn convert_block_header(old: old::naom::BlockHeader, old_txs: &[String]) -> BlockHeader {
-        let merkle_root = old.merkle_root_hash;
-        let txs_hash = build_hex_txs_hash(old_txs);
+    pub fn convert_block_header(old: old::naom::BlockHeader) -> BlockHeader {
         BlockHeader {
             version: old.version,
             bits: old.bits,
-            nonce_and_mining_tx_hash: Default::default(),
+            nonce_and_mining_tx_hash: old.nonce_and_mining_tx_hash,
             b_num: old.b_num,
             seed_value: old.seed_value,
             previous_hash: old.previous_hash,
-            txs_merkle_root_and_hash: (merkle_root, txs_hash),
+            txs_merkle_root_and_hash: old.txs_merkle_root_and_hash,
         }
     }
 
@@ -517,16 +604,16 @@ pub mod convert {
         }
     }
 
-    pub fn convert_receipt_asset(old: u64) -> ReceiptAsset {
+    pub fn convert_receipt_asset(old: old::naom::ReceiptAsset) -> ReceiptAsset {
         ReceiptAsset {
-            amount: old,
-            drs_tx_hash: Some(RECEIPT_DEFAULT_DRS_TX_HASH.to_owned()),
+            amount: old.amount,
+            drs_tx_hash: old.drs_tx_hash,
         }
     }
 
-    /// Convert all previous `Receipt` assets to the "default" type with "default_drs_tx_hash"
-    pub fn convert_receipt_amount(old: u64) -> BTreeMap<String, u64> {
-        std::iter::once((RECEIPT_DEFAULT_DRS_TX_HASH.to_owned(), old)).collect()
+    /// Keep all existing DRS transaction hash values as is
+    pub fn convert_receipt_amount(old: BTreeMap<String, u64>) -> BTreeMap<String, u64> {
+        old
     }
 
     pub fn convert_data_asset(old: old::naom::DataAsset) -> DataAsset {
@@ -544,11 +631,12 @@ pub mod convert {
         Asset::Token(convert_token_amount(old))
     }
 
+    // TODO: This should get used in upgrade when the key-pair structure changes
     pub fn convert_address_store(old: old::wallet::AddressStore) -> wallet::AddressStore {
         wallet::AddressStore {
             public_key: convert_public_key(old.public_key),
             secret_key: convert_secret_key(old.secret_key),
-            address_version: Some(old::constants::NETWORK_VERSION as u64),
+            address_version: old.address_version,
         }
     }
 
@@ -594,14 +682,22 @@ pub mod convert {
         compute_raft::ComputeConsensusedImport {
             unanimous_majority: old.unanimous_majority,
             sufficient_majority: old.sufficient_majority,
-            partition_full_size: Default::default(),
-            unicorn_fixed_param: Default::default(),
+            partition_full_size: old.partition_full_size,
+            unicorn_fixed_param: convert_unicorn_fixed_param(old.unicorn_fixed_param),
             tx_current_block_num: old.tx_current_block_num,
             current_block: old.current_block.map(convert_block),
             utxo_set: convert_utxoset(old.utxo_set),
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
             current_circulation: convert_token_amount(old.current_circulation),
             special_handling,
+        }
+    }
+
+    pub fn convert_unicorn_fixed_param(old: old::unicorn::UnicornFixedParam) -> UnicornFixedParam {
+        UnicornFixedParam {
+            modulus: old.modulus,
+            iterations: old.iterations,
+            security: old.security,
         }
     }
 
@@ -660,20 +756,11 @@ pub mod convert {
         }
         for (tx_hash, tx) in old_pending {
             // Best effort regenerate the ready input
-            let mut src = Vec::new();
-            let tx = convert_transaction(tx);
-            for tx_in in &tx.inputs {
-                let out_p = tx_in.previous_out.clone().unwrap();
-                let address = (tx_in.script_signature.stack.get(5))
-                    .and_then(|v| match v {
-                        StackEntry::PubKeyHash(address) => Some(address.clone()),
-                        _ => None,
-                    })
-                    .unwrap();
-
-                src.push((address, out_p, TokenAmount(1)));
-            }
-            pending.insert(tx_hash, (tx, src));
+            let src =
+                tx.1.into_iter()
+                    .map(|(v, o, a)| (v, convert_outpoint(o), convert_token_amount(a)))
+                    .collect();
+            pending.insert(tx_hash, (convert_transaction(tx.0), src));
         }
 
         (pending, ready)
