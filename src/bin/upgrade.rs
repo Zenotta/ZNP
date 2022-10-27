@@ -56,7 +56,7 @@ fn process_read(db_modes: Vec<(String, DbMode)>) -> Result<(), UpgradeError> {
             let raft_name = raft_for_spec(spec);
             println!("/// Database for {}{}, {:?}", node_type, raft_name, mode);
 
-            let name = format!("{}{}_DB_V0_3_0", spec.node_type, raft_name).to_ascii_uppercase();
+            let name = format!("{}{}_DB_V0_4_0", spec.node_type, raft_name).to_ascii_uppercase();
             println!("pub const {}: &[DbEntryType] = &[", name);
 
             let db = get_db_to_dump_no_checks(mode, spec, None)?;
