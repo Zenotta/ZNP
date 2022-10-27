@@ -193,8 +193,11 @@ pub fn upgrade_compute_db_batch<'a>(
             || key == old::compute::USER_NOTIFY_LIST_KEY.as_bytes()
         {
             batch.delete_cf(column, &key);
-        } else if key == compute::RAFT_KEY_RUN.as_bytes() {
-            // Keep modified
+        } else if key == compute::RAFT_KEY_RUN.as_bytes()
+            || key == compute::POW_PREV_RANDOM_NUM_KEY.as_bytes()
+            || key == compute::POW_RANDOM_NUM_KEY.as_bytes()
+        {
+            // Keep unmodified
         } else {
             return Err(key_value_error("Unexpected key", &key, &value));
         }
@@ -338,7 +341,7 @@ pub fn upgrade_storage_db_batch<'a>(
         }
     }
 
-    let column = old::storage::DB_COL_BC_V0_3_0;
+    let column = old::storage::DB_COL_BC_V0_4_0;
     for (key, value) in db.iter_cf_clone(column) {
         if is_transaction_key(&key) {
             let _: old::naom::Transaction = tracked_deserialize("Tx deserialize", &key, &value)?;
