@@ -1441,7 +1441,6 @@ impl ComputeNode {
                     }
                     if self.current_trigger_messages_count >= RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT
                     {
-                        warn!("PARTICIPATING MINERS NOT FOUND, PROPOSING PIPELINE RESET");
                         self.current_trigger_messages_count = Default::default();
                         self.node_raft
                             .propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline)

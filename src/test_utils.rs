@@ -1063,7 +1063,7 @@ async fn init_storage(
     extra: ExtraNodeParams,
 ) -> ArcStorageNode {
     let node_info = &info.node_infos[name];
-    let storage_raft = if config.storage_raft { 1 } else { 0 };
+    let storage_raft = usize::from(config.storage_raft);
 
     let config = StorageNodeConfig {
         storage_node_idx: node_info.index,

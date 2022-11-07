@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryInto;
 use std::fmt;
 use std::net::SocketAddr;
-use tracing::log::{debug, info, warn};
+use tracing::log::{debug, info};
 
 /// Different states of the mining pipeline
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -316,7 +316,7 @@ impl MiningPipelineInfo {
         self.participants_mining = Default::default();
         self.current_phase_timeout_peer_ids = Default::default();
         self.start_items_intake(extra);
-        return Some(MiningPipelinePhaseChange::Reset);
+        Some(MiningPipelinePhaseChange::Reset)
     }
 
     /// New mining event to propose

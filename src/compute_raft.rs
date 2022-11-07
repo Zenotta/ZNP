@@ -37,6 +37,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum ComputeRaftItem {
     FirstBlock(BTreeMap<String, Transaction>),
     Block(BlockStoredInfo),
@@ -587,7 +588,7 @@ impl ComputeRaft {
                 self.consensused.block_pipeline.add_proposed_key(key);
                 return true;
             }
-            return false;
+            false
         } else {
             false
         }
@@ -1420,7 +1421,7 @@ mod test {
             &["000311", "000312"],
             &mut BTreeMap::new(),
         ));
-        expected_unused_utxo_hashes.extend(&["000010", "000011"]);
+        expected_unused_utxo_hashes.extend(["000010", "000011"]);
         // 3. Add double spend between DRUID droplet
         // Keep first one added
         node.append_to_tx_druid_pool(valid_transaction(
@@ -1433,7 +1434,7 @@ mod test {
             &["000521", "000523"],
             &mut BTreeMap::new(),
         ));
-        expected_unused_utxo_hashes.extend(&["000021"]);
+        expected_unused_utxo_hashes.extend(["000021"]);
         // 4. Add double spend between DRUID droplet and transaction
         // Keep DRUID droplet
         node.append_to_tx_pool(valid_transaction(
