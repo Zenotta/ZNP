@@ -1,6 +1,7 @@
 use crate::configurations::UnicornFixedInfo;
 use crate::constants::{MINER_PARTICIPATION_UN, WINNING_MINER_UN};
 use crate::interfaces::WinningPoWInfo;
+use crate::raft_util::RaftContextKey;
 use crate::unicorn::{construct_seed, construct_unicorn, UnicornFixedParam, UnicornInfo};
 use keccak_prime::fortuna::Fortuna;
 use naom::primitives::asset::TokenAmount;
@@ -11,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryInto;
 use std::fmt;
 use std::net::SocketAddr;
-use tracing::log::{debug, info};
+use tracing::log::{debug, info, warn};
 
 /// Different states of the mining pipeline
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -32,6 +33,7 @@ impl Default for MiningPipelineStatus {
 pub enum MiningPipelinePhaseChange {
     StartPhasePowIntake,
     StartPhaseHalted,
+    Reset,
 }
 
 /// Different types of items that can be proposed to the block pipeline
@@ -41,13 +43,14 @@ pub enum MiningPipelineItem {
     CompleteParticipant,
     WinningPoW(SocketAddr, WinningPoWInfo),
     CompleteMining,
+    ResetPipeline,
 }
 
 /// Participants collection (unsorted: given order, and lookup collection)
 #[derive(Default, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Participants {
-    unsorted: Vec<SocketAddr>,
-    lookup: BTreeSet<SocketAddr>,
+    pub unsorted: Vec<SocketAddr>,
+    pub lookup: BTreeSet<SocketAddr>,
 }
 
 impl fmt::Debug for Participants {
@@ -88,6 +91,7 @@ impl Participants {
 pub struct PipelineEventInfo {
     pub proposer_id: u64,
     pub sufficient_majority: usize,
+    pub unanimous_majority: usize,
     pub partition_full_size: usize,
 }
 
@@ -112,6 +116,8 @@ pub struct MiningPipelineInfo {
     mining_pipeline_status: MiningPipelineStatus,
     /// The timeout ids
     current_phase_timeout_peer_ids: BTreeSet<u64>,
+    /// The timeout ids for a forceful pipeline change
+    current_phase_reset_pipeline_peer_ids: BTreeSet<u64>,
     /// Fixed info for unicorn generation
     unicorn_fixed_param: UnicornFixedParam,
     /// Index of the last block,
@@ -122,6 +128,8 @@ pub struct MiningPipelineInfo {
     current_block_tx: BTreeMap<String, Transaction>,
     /// The current reward for a given compute node
     current_reward: TokenAmount,
+    /// Proposed keys for current mining pipeline cycle
+    proposed_keys: BTreeSet<RaftContextKey>,
 }
 
 pub struct MiningPipelineInfoImport {
@@ -200,17 +208,16 @@ impl MiningPipelineInfo {
         self.mining_pipeline_status = if self.participants_intake.is_empty() {
             MiningPipelineStatus::ParticipantOnlyIntake
         } else {
-            //self.participants_intake = Default::default();
-            //self.participants_mining = Default::default();
             self.unicorn_select_participants_mining(extra.partition_full_size);
             MiningPipelineStatus::AllItemsIntake
         };
 
-        //Only keep relevant info for this phase
+        // Only keep relevant info for this phase
         self.last_winning_hashes = Default::default();
         self.all_winning_pow = Default::default();
         self.winning_pow = Default::default();
         self.current_phase_timeout_peer_ids = Default::default();
+        self.current_phase_reset_pipeline_peer_ids = Default::default();
 
         debug!("MINING PIPELINE STATUS: {:?}", self.mining_pipeline_status);
         debug!("Participating Miners: {:?}", self.participants_mining);
@@ -247,12 +254,20 @@ impl MiningPipelineInfo {
             (CompleteMining, AllItemsIntake) => {
                 self.append_current_phase_timeout(extra.proposer_id);
             }
+            (ResetPipeline, _) => {
+                self.append_reset_pipeline_timeout(extra.proposer_id);
+            }
             (item, status) => {
                 debug!(
                     "Failed to add entry {:?} with pipeline status: {:?}",
                     item, status
                 );
             }
+        }
+
+        // There's been a vote for a forceful pipeline change instead of default flow
+        if self.has_ready_reset_pipeline(extra.unanimous_majority) {
+            return self.handle_reset_pipeline(extra);
         }
 
         match &pipeline_status {
@@ -272,6 +287,36 @@ impl MiningPipelineInfo {
         }
 
         None
+    }
+
+    /// Clear all proposed keys
+    pub fn clear_proposed_keys(&mut self) {
+        self.proposed_keys = Default::default();
+    }
+
+    /// Get proposed RaftContextKey set
+    pub fn get_proposed_keys(&self) -> &BTreeSet<RaftContextKey> {
+        &self.proposed_keys
+    }
+
+    /// Add a RaftContextKey to the proposed set
+    pub fn add_proposed_key(&mut self, key: RaftContextKey) {
+        self.proposed_keys.insert(key);
+    }
+
+    pub fn handle_reset_pipeline(
+        &mut self,
+        extra: PipelineEventInfo,
+    ) -> Option<MiningPipelinePhaseChange> {
+        self.current_phase_timeout_peer_ids = Default::default();
+        self.current_phase_reset_pipeline_peer_ids = Default::default();
+
+        // Clear participants intake
+        self.participants_intake = Default::default();
+        self.participants_mining = Default::default();
+        self.current_phase_timeout_peer_ids = Default::default();
+        self.start_items_intake(extra);
+        return Some(MiningPipelinePhaseChange::Reset);
     }
 
     /// New mining event to propose
@@ -357,6 +402,11 @@ impl MiningPipelineInfo {
             && self.participants_intake.len() >= sufficient_majority
     }
 
+    /// Has enough majority vote to change the mining pipeline status forcefully
+    pub fn has_ready_reset_pipeline(&mut self, unanimous_majority: usize) -> bool {
+        self.current_phase_reset_pipeline_peer_ids.len() >= unanimous_majority
+    }
+
     /// Select miners to mine current block and move to Pow intake
     pub fn unicorn_select_participants_mining(&mut self, partition_full_size: usize) {
         let mut participants = std::mem::take(&mut self.participants_intake);
@@ -401,7 +451,7 @@ impl MiningPipelineInfo {
         info!("Winning PoW Entry: {:?}", self.winning_pow);
     }
 
-    ///Inserts a prosper_id into the current_block_complete_timeout_peer_ids.
+    /// Inserts a prosper_id into the current_block_complete_timeout_peer_ids.
     /// proposer_id is take from key
     ///
     /// ### Arguments
@@ -409,6 +459,17 @@ impl MiningPipelineInfo {
     /// * `proposer_id` - The proposer_id to be appended.
     pub fn append_current_phase_timeout(&mut self, proposer_id: u64) {
         self.current_phase_timeout_peer_ids.insert(proposer_id);
+    }
+
+    /// Inserts a prosper_id into the current_phase_reset_pipeline_peer_ids.
+    /// proposer_id is take from key
+    ///
+    /// ### Arguments
+    ///
+    /// * `proposer_id` - The proposer_id to be appended.
+    pub fn append_reset_pipeline_timeout(&mut self, proposer_id: u64) {
+        self.current_phase_reset_pipeline_peer_ids
+            .insert(proposer_id);
     }
 
     /// Sets the new UNICORN value based on the latest info
@@ -491,7 +552,7 @@ impl MiningPipelineInfo {
         }
     }
 
-    /// Convert to import type  
+    /// Convert to import type
     pub fn into_import(self) -> MiningPipelineInfoImport {
         MiningPipelineInfoImport {
             unicorn_fixed_param: self.unicorn_fixed_param,

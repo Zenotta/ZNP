@@ -53,6 +53,7 @@ pub enum CommittedItem {
     BlockShutdown,
     StartPhasePowIntake,
     StartPhaseHalted,
+    ResetPipeline,
     Transactions,
     Snapshot,
 }
@@ -63,6 +64,7 @@ impl From<MiningPipelinePhaseChange> for CommittedItem {
         match other {
             StartPhasePowIntake => CommittedItem::StartPhasePowIntake,
             StartPhaseHalted => CommittedItem::StartPhaseHalted,
+            Reset => CommittedItem::ResetPipeline,
         }
     }
 }
@@ -457,6 +459,14 @@ impl ComputeRaft {
                         self.set_next_propose_mining_event_timeout_at();
                         return Some(v.into());
                     }
+                    Some(v @ MiningPipelinePhaseChange::Reset) => {
+                        let proposed_block_pipeline_keys =
+                            self.consensused.block_pipeline.get_proposed_keys();
+                        self.proposed_in_flight
+                            .remove_all_keys(proposed_block_pipeline_keys);
+                        self.consensused.block_pipeline.clear_proposed_keys();
+                        return Some(v.into());
+                    }
                     None => return None,
                 }
             }
@@ -573,10 +583,19 @@ impl ComputeRaft {
         if let Some(block) = self.get_mining_block() {
             let b_num = block.header.b_num;
             let item = ComputeRaftItem::PipelineItem(item, b_num);
-            self.propose_item_dedup(&item, b_num).await.is_some()
+            if let Some(key) = self.propose_item_dedup(&item, b_num).await {
+                self.consensused.block_pipeline.add_proposed_key(key);
+                return true;
+            }
+            return false;
         } else {
             false
         }
+    }
+
+    /// Clear block pipeline proposed keys
+    pub fn clear_block_pipeline_proposed_keys(&mut self) {
+        self.consensused.block_pipeline.clear_proposed_keys();
     }
 
     /// Process as a result of timeout_propose_transactions.
@@ -843,6 +862,7 @@ impl ComputeConsensused {
     pub fn init_block_pipeline_status(mut self) -> Self {
         let extra = PipelineEventInfo {
             proposer_id: 0,
+            unanimous_majority: self.unanimous_majority,
             sufficient_majority: self.sufficient_majority,
             partition_full_size: self.partition_full_size,
         };
@@ -889,7 +909,7 @@ impl ComputeConsensused {
         }
     }
 
-    /// Convert to import type  
+    /// Convert to import type
     pub fn into_import(
         self,
         special_handling: Option<SpecialHandling>,
@@ -1241,6 +1261,7 @@ impl ComputeConsensused {
     pub fn start_items_intake(&mut self) {
         let extra = PipelineEventInfo {
             proposer_id: 0,
+            unanimous_majority: self.unanimous_majority,
             sufficient_majority: self.sufficient_majority,
             partition_full_size: self.partition_full_size,
         };
@@ -1256,6 +1277,7 @@ impl ComputeConsensused {
     ) -> Option<MiningPipelinePhaseChange> {
         let extra = PipelineEventInfo {
             proposer_id: key.proposer_id,
+            unanimous_majority: self.unanimous_majority,
             sufficient_majority: self.sufficient_majority,
             partition_full_size: self.partition_full_size,
         };
@@ -1606,6 +1628,7 @@ mod test {
             routes_pow: Default::default(),
             backup_block_modulo: Default::default(),
             backup_restore: Default::default(),
+            enable_trigger_messages_pipeline_reset: Default::default(),
         };
         let mut node = ComputeRaft::new(&compute_config, Default::default()).await;
         node.set_key_run(0);

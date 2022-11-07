@@ -142,6 +142,8 @@ pub struct ComputeNodeConfig {
     pub backup_block_modulo: Option<u64>,
     /// Restore backup if true
     pub backup_restore: Option<bool>,
+    /// Enable trigger messages to reset the pipeline when it gets stuck
+    pub enable_trigger_messages_pipeline_reset: Option<bool>,
 }
 
 /// Configuration option for a storage node

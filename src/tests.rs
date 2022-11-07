@@ -974,6 +974,11 @@ async fn proof_of_work_common(network_config: NetworkConfig, cfg_num: CfgNum) {
 }
 
 async fn proof_of_work_act(network: &mut Network, cfg_pow: CfgPow, cfg_num: CfgNum) {
+    proof_of_work_participation_act(network, cfg_num, cfg_pow).await;
+    proof_of_work_block_act(network, cfg_num).await;
+}
+
+async fn proof_of_work_participation_act(network: &mut Network, cfg_num: CfgNum, cfg_pow: CfgPow) {
     let active_nodes = network.all_active_nodes().clone();
     let compute_nodes = &active_nodes[&NodeType::Compute];
     let c_mined = &node_select(compute_nodes, cfg_num);
@@ -996,6 +1001,13 @@ async fn proof_of_work_act(network: &mut Network, cfg_pow: CfgPow, cfg_num: CfgN
 
         node_all_handle_event(network, compute_nodes, &["Winning PoW intake open"]).await;
     }
+}
+
+async fn proof_of_work_block_act(network: &mut Network, cfg_num: CfgNum) {
+    let active_nodes = network.all_active_nodes().clone();
+    let compute_nodes = &active_nodes[&NodeType::Compute];
+    let c_mined = &node_select(compute_nodes, cfg_num);
+    let active_compute_to_miner_mapping = network.active_compute_to_miner_mapping().clone();
 
     for compute in c_mined {
         let c_miners = &active_compute_to_miner_mapping.get(compute).unwrap();
@@ -1803,15 +1815,75 @@ async fn handle_message_lost_restart_upgrade_block_complete_raft_1_node() {
         CfgModif::RestartUpgradeEventsAll(&[
             (NodeType::Compute, "Snapshot applied"),
             (NodeType::Compute, "Received first full partition request"),
-            //(NodeType::Compute, "Partition PoW received successfully"),
             (NodeType::Storage, "Snapshot applied"),
-            //            (NodeType::Miner, "Received random number successfully"),
-            //            (NodeType::Miner, "Partition PoW complete"),
         ]),
     )];
 
     let network_config = complete_network_config_with_n_compute_raft(10480, 1);
     handle_message_lost_common_with_pow(network_config, CfgPow::First, &modify_cfg).await
+}
+
+/// In this test we simulate a network partition where the miners chosen to mine the block
+/// suddenly disconnect, leaving the pipeline in a stuck state.
+///
+/// To address this issue the pipeline needs to reset to participant intake
+#[tokio::test(flavor = "current_thread")]
+async fn handle_messages_lost_reset_pipeline_stage() {
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11520, 1);
+    // Enable pipeline resets when message retrigger threshold has been reached
+    network_config.enable_pipeline_reset = Some(true);
+    network_config.test_duration_divider = 10;
+    let mut network = Network::create_from_config(&network_config).await;
+
+    let modify_cfg = vec![
+        // Miner 1 get's dropped as soon as it's supposed to mine the block
+        ("After Winning PoW intake open", CfgModif::Drop("miner1")),
+        // The pipeline status changes back to participant intake after a the threshold
+        // for retrigger messages has been reached
+        (
+            "After Winning PoW intake open",
+            CfgModif::HandleEvents(&[("compute1", "Pipeline reset")]),
+        ),
+        // After the pipeline status has been reset, the pipeline should be able to
+        // accept participants again, so we respawn Miner 1
+        ("After Winning PoW intake open", CfgModif::Respawn("miner1")),
+        (
+            "After Winning PoW intake open",
+            CfgModif::Reconnect("miner1"),
+        ),
+        (
+            "After Winning PoW intake open",
+            CfgModif::HandleEvents(&[("compute1", "Received partition request successfully")]),
+        ),
+    ];
+
+    //
+    // Act
+    //
+    create_first_block_act(&mut network).await;
+
+    // Normal PoW procedure
+    proof_of_work_participation_act(&mut network, CfgNum::All, CfgPow::First).await;
+
+    // Disconnect Miner 1 and wait for pipeline reset
+    // Reconnect Miner 1 and continue with pipeline from participant intake
+    modify_network(&mut network, "After Winning PoW intake open", &modify_cfg).await;
+
+    // Normal PoW procedure
+    proof_of_work_participation_act(&mut network, CfgNum::All, CfgPow::First).await;
+    proof_of_work_block_act(&mut network, CfgNum::All).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    //
+    // Assert
+    //
+    let actual0 = storage_get_last_stored_info(&mut network, "storage1").await;
+    let actual0_values = actual0.1.as_ref();
+    let actual0_values = actual0_values.map(|(_, b_num, min_tx)| (*b_num, *min_tx));
+    assert_eq!(actual0_values, Some((0, 1)), "Actual: {:?}", actual0);
 }
 
 async fn handle_message_lost_common(
@@ -3251,7 +3323,10 @@ async fn compute_handle_event_for_node<E: Future<Output = &'static str> + Unpin>
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>
         {
-            info!("Compute handle_next_event {} sucess ({})", reason_val, addr);
+            info!(
+                "Compute handle_next_event {} success ({})",
+                reason_val, addr
+            );
         }
         other => {
             error!(
@@ -3757,7 +3832,10 @@ async fn storage_handle_event_for_node<E: Future<Output = &'static str> + Unpin>
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>
         {
-            info!("Storage handle_next_event {} sucess ({})", reason_val, addr);
+            info!(
+                "Storage handle_next_event {} success ({})",
+                reason_val, addr
+            );
         }
         other => {
             error!(
@@ -3817,7 +3895,7 @@ async fn user_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>
         {
-            info!("User handle_next_event {} sucess ({})", reason_val, addr);
+            info!("User handle_next_event {} success ({})", reason_val, addr);
         }
         other => {
             error!(
@@ -4067,7 +4145,7 @@ async fn miner_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>
         {
-            info!("Miner handle_next_event {} sucess ({})", reason_val, addr);
+            info!("Miner handle_next_event {} success ({})", reason_val, addr);
         }
         other => {
             error!(
@@ -4446,6 +4524,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         routes_pow: Default::default(),
         backup_block_modulo: Default::default(),
         backup_restore: Default::default(),
+        enable_pipeline_reset: Default::default(),
     }
 }
 

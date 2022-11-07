@@ -2,7 +2,7 @@ use crate::block_pipeline::{MiningPipelineItem, MiningPipelineStatus, Participan
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::{ComputeNodeConfig, ExtraNodeParams, TlsPrivateInfo};
-use crate::constants::{DB_PATH, PEER_LIMIT};
+use crate::constants::{DB_PATH, PEER_LIMIT, RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
@@ -137,6 +137,8 @@ pub struct ComputeNode {
     druid_pool: DruidPool,
     previous_random_num: Vec<u8>,
     current_random_num: Vec<u8>,
+    current_trigger_messages_count: usize,
+    enable_trigger_messages_pipeline_reset: bool,
     partition_full_size: usize,
     request_list: BTreeSet<SocketAddr>,
     request_list_first_flood: Option<usize>,
@@ -192,6 +194,9 @@ impl ComputeNode {
 
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
         let api_keys = to_api_keys(config.api_keys.clone());
+        let enable_trigger_messages_pipeline_reset = config
+            .enable_trigger_messages_pipeline_reset
+            .unwrap_or(false);
         let api_info = (api_addr, api_tls_info, api_keys, api_pow_info, node.clone());
 
         ComputeNode {
@@ -202,6 +207,8 @@ impl ComputeNode {
             threaded_calls: Default::default(),
             current_mined_block: None,
             druid_pool: Default::default(),
+            current_trigger_messages_count: Default::default(),
+            enable_trigger_messages_pipeline_reset,
             previous_random_num: Default::default(),
             current_random_num: Default::default(),
             request_list: Default::default(),
@@ -556,6 +563,15 @@ impl ComputeNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Pipeline reset",
+            }) => {
+                warn!(
+                    "Pipeline reset to :{:?}",
+                    self.node_raft.get_mining_pipeline_status()
+                );
+            }
+            Ok(Response {
+                success: true,
                 reason: "Transactions added to tx pool",
             }) => {
                 debug!("Transactions received and processed successfully");
@@ -686,6 +702,9 @@ impl ComputeNode {
                     if !self.node_raft.propose_mining_event_at_timeout().await {
                         self.node_raft.re_propose_uncommitted_current_b_num().await;
                         self.resend_trigger_message().await;
+                    } else {
+                        // Reset trigger messages count
+                        self.current_trigger_messages_count = Default::default();
                     }
                 }
                 Some(event) = self.local_events.rx.recv(), if ready => {
@@ -746,6 +765,10 @@ impl ComputeNode {
                     reason: "Pipeline halted",
                 }))
             }
+            Some(CommittedItem::ResetPipeline) => Some(Ok(Response {
+                success: true,
+                reason: "Pipeline reset",
+            })),
             Some(CommittedItem::Transactions) => {
                 delete_local_transactions(
                     &mut self.db,
@@ -1203,6 +1226,7 @@ impl ComputeNode {
             .unwrap();
 
         self.current_mined_block = None;
+        self.node_raft.clear_block_pipeline_proposed_keys();
     }
 
     /// Load and apply the local database to our state
@@ -1399,6 +1423,30 @@ impl ComputeNode {
                 info!("Resend block and rand to partition miners");
                 if let Err(e) = self.flood_rand_and_block_to_partition().await {
                     error!("Resend block and rand to partition miners failed {:?}", e);
+                }
+                if self.enable_trigger_messages_pipeline_reset {
+                    let mining_participants = &self.node_raft.get_mining_participants().unsorted;
+                    let disconnected_participants =
+                        self.node.unconnected_peers(mining_participants).await;
+
+                    // If all miners participating in this mining round disconnected
+                    // and we've reached the appropriate threshold for maximum number of
+                    // retries, we need to propose the pipeline revert to participant intake
+                    //
+                    // NB: This vote requires a unanimous_majority vote
+                    //
+                    // TODO: Apply the same logic to any other pipeline stages that might get stuck
+                    if disconnected_participants.len() == mining_participants.len() {
+                        self.current_trigger_messages_count += 1;
+                    }
+                    if self.current_trigger_messages_count >= RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT
+                    {
+                        warn!("PARTICIPATING MINERS NOT FOUND, PROPOSING PIPELINE RESET");
+                        self.current_trigger_messages_count = Default::default();
+                        self.node_raft
+                            .propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline)
+                            .await;
+                    }
                 }
             }
         }

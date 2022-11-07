@@ -172,6 +172,14 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .help("Use PKCS8 private key as a string to use for this node TLS certificate.")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("enable_pipeline_reset")
+                .long("enable_pipeline_reset")
+                .help(
+                    "Enable the compute node to vote for a pipeline reset if it should get stuck.",
+                )
+                .takes_value(true),
+        )
 }
 
 fn load_settings(matches: &clap::ArgMatches) -> config::Config {
@@ -210,6 +218,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .set_default("compute_mining_event_timeout", 500)
         .unwrap();
+    settings
+        .set_default("enable_pipeline_reset", false)
+        .unwrap();
 
     settings
         .merge(config::File::with_name(setting_file))
@@ -229,6 +240,14 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     }
     if let Some(use_tls) = matches.value_of("api_use_tls") {
         settings.set("compute_api_use_tls", use_tls).unwrap();
+    }
+    if let Some(enable_pipeline_reset) = matches.value_of("enable_pipeline_reset") {
+        settings
+            .set(
+                "enable_trigger_messages_pipeline_reset",
+                enable_pipeline_reset,
+            )
+            .unwrap();
     }
 
     if let Some(index) = matches.value_of("index") {
