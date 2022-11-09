@@ -3,7 +3,7 @@ use crate::raft::RaftData;
 use bincode::{deserialize, serialize};
 use naom::crypto::sha3_256;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use tracing::{debug, warn};
 
@@ -111,6 +111,15 @@ impl RaftInFlightProposals {
 
         raft_active.propose_data(data, context).await;
         Some(key)
+    }
+
+    /// Remove all items with provided keys
+    pub fn remove_all_keys(&mut self, keys: &BTreeSet<RaftContextKey>) {
+        for key in keys.iter() {
+            self.proposed_in_flight.remove(key);
+            self.proposed_keys_b_num.remove(key);
+            self.already_proposed_hashes.retain(|_, (k, _)| *k != *key);
+        }
     }
 
     /// Re-Propose an item in flight to raft.

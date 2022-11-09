@@ -182,11 +182,11 @@ async fn disconnect_connection(subset: bool) {
             (Err(CommsError::PeerNotFound), Err(CommsError::PeerNotFound))
         )
     };
-    let sucess3 = matches!(
+    let success3 = matches!(
         actual3,
         (Err(CommsError::PeerNotFound), Err(CommsError::PeerNotFound)),
     );
-    assert!(success2 && sucess3, "{:?}", (actual2, actual3));
+    assert!(success2 && success3, "{:?}", (actual2, actual3));
 
     complete_compute_nodes(nodes).await;
 }

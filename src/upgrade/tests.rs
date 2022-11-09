@@ -690,6 +690,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         routes_pow: Default::default(),
         backup_block_modulo: Default::default(),
         backup_restore: Default::default(),
+        enable_pipeline_reset: Default::default(),
     }
     .with_groups(1, 1)
 }

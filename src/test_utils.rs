@@ -92,6 +92,7 @@ pub struct NetworkConfig {
     pub routes_pow: BTreeMap<String, usize>,
     pub backup_block_modulo: Option<u64>,
     pub backup_restore: Option<bool>,
+    pub enable_pipeline_reset: Option<bool>,
 }
 
 /// Node info to create node
@@ -1062,7 +1063,7 @@ async fn init_storage(
     extra: ExtraNodeParams,
 ) -> ArcStorageNode {
     let node_info = &info.node_infos[name];
-    let storage_raft = if config.storage_raft { 1 } else { 0 };
+    let storage_raft = usize::from(config.storage_raft);
 
     let config = StorageNodeConfig {
         storage_node_idx: node_info.index,
@@ -1103,7 +1104,7 @@ async fn init_compute(
     extra: ExtraNodeParams,
 ) -> ArcComputeNode {
     let node_info = &info.node_infos[name];
-    let compute_raft = if config.compute_raft { 1 } else { 0 };
+    let compute_raft = usize::from(config.compute_raft);
 
     let config = ComputeNodeConfig {
         compute_db_mode: node_info.db_mode,
@@ -1129,6 +1130,7 @@ async fn init_compute(
         routes_pow: Default::default(),
         backup_block_modulo: config.backup_block_modulo,
         backup_restore: config.backup_restore,
+        enable_trigger_messages_pipeline_reset: config.enable_pipeline_reset,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Compute {}", info);

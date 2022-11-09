@@ -1132,7 +1132,7 @@ pub fn put_to_block_chain_at<K: AsRef<[u8]>, V: AsRef<[u8]>>(
 /// * `batch`   - Database writer
 /// * `pointer` - The block version pointer
 pub fn put_named_last_block_to_block_chain(batch: &mut SimpleDbWriteBatch, pointer: &[u8]) {
-    batch.put_cf(DB_COL_BC_NAMED, LAST_BLOCK_HASH_KEY, &pointer);
+    batch.put_cf(DB_COL_BC_NAMED, LAST_BLOCK_HASH_KEY, pointer);
 }
 
 /// Update database with contiguous value
@@ -1204,7 +1204,7 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
 fn version_pointer<K: AsRef<[u8]>>(cf: &'static str, key: K) -> Vec<u8> {
     let mut r = Vec::new();
     r.extend(cf.as_bytes());
-    r.extend(&[DB_POINTER_SEPARATOR]);
+    r.extend([DB_POINTER_SEPARATOR]);
     r.extend(key.as_ref());
     r
 }
