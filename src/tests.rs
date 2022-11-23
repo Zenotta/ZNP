@@ -17,6 +17,7 @@ use crate::test_utils::{
     remove_all_node_dbs, Network, NetworkConfig, NodeType, RbReceiverData, RbSenderData,
 };
 use crate::tracked_utxo::TrackedUtxoBalance;
+use crate::transactor::TransactionBuilder;
 use crate::user::UserNode;
 use crate::utils::{
     apply_mining_tx, calculate_reward, construct_valid_block_pow_hash,

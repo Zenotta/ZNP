@@ -6,12 +6,14 @@ use crate::interfaces::{
     UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::transaction_gen::{PendingMap, TransactionGen};
+use crate::transactor::TransactionBuilder;
 use crate::utils::{
     generate_half_druid, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, to_api_keys,
     to_route_pow_infos, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
     RoutesPoWInfo,
 };
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
+use async_trait::async_trait;
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
@@ -662,29 +664,6 @@ impl UserNode {
         Ok(())
     }
 
-    /// Sends the next internal payment transaction to be processed by the connected Compute
-    /// node
-    ///
-    /// ### Arguments
-    ///
-    /// * `compute_peer` - Compute peer to send the payment tx to
-    /// * `transactions` - Transactions to send
-    pub async fn send_transactions_to_compute(
-        &mut self,
-        compute_peer: SocketAddr,
-        transactions: Vec<Transaction>,
-    ) -> Result<()> {
-        let _peer_span = info_span!("sending transactions to compute node for processing");
-        self.node
-            .send(
-                compute_peer,
-                ComputeRequest::SendTransactions { transactions },
-            )
-            .await?;
-
-        Ok(())
-    }
-
     /// Request a UTXO set/subset from Compute for updating the running total
     ///
     /// ### Arguments
@@ -752,24 +731,6 @@ impl UserNode {
         }
     }
 
-    /// Store payment transaction
-    ///
-    /// ### Arguments
-    ///
-    /// * `transaction` - Transaction to be received and saved to wallet
-    pub async fn store_payment_transaction(&mut self, transaction: Transaction) {
-        let hash = construct_tx_hash(&transaction);
-
-        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
-
-        let our_payments = self
-            .wallet_db
-            .save_usable_payments_to_wallet(payments)
-            .await
-            .unwrap();
-        debug!("store_payment_transactions: {:?}", our_payments);
-    }
-
     /// Process pending paiment transaction with received address
     ///
     /// ### Arguments
@@ -801,7 +762,7 @@ impl UserNode {
         )
     }
 
-    /// Process specified paiment, updating wallet and next_payment
+    /// Process specified payment, updating wallet and next_payment
     ///
     /// ### Arguments
     ///
@@ -832,35 +793,6 @@ impl UserNode {
             success: true,
             reason: "Next payment transaction ready",
         }
-    }
-
-    /// Get `Vec<TxIn>` and `Vec<TxOut>` values for a transaction
-    ///
-    /// ### Arguments
-    ///
-    /// * `asset_required`              - The required `Asset`
-    /// * `tx_outs`                     - Initial `Vec<TxOut>` value
-    pub async fn fetch_tx_ins_and_tx_outs(
-        &mut self,
-        asset_required: Asset,
-        mut tx_outs: Vec<TxOut>,
-    ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
-        let (tx_cons, total_amount, tx_used) = self
-            .wallet_db
-            .fetch_inputs_for_payment(asset_required.clone())
-            .await?;
-
-        if let Some(excess) = total_amount.get_excess(&asset_required) {
-            let (excess_address, _) = self.wallet_db.generate_payment_address().await;
-            tx_outs.push(TxOut::new_asset(excess_address, excess));
-        }
-
-        let tx_ins = self
-            .wallet_db
-            .consume_inputs_for_payment(tx_cons, tx_used)
-            .await;
-
-        Ok((tx_ins, tx_outs))
     }
 
     /// Sends a payment transaction to the receiving party
@@ -1246,6 +1178,63 @@ impl UserNode {
     /// Get `Node` member
     pub fn get_node(&self) -> &Node {
         &self.node
+    }
+}
+
+#[async_trait]
+impl TransactionBuilder for UserNode {
+    type Error = UserError;
+
+    async fn fetch_tx_ins_and_tx_outs(
+        &mut self,
+        asset_required: Asset,
+        mut tx_outs: Vec<TxOut>,
+    ) -> std::result::Result<(Vec<TxIn>, Vec<TxOut>), UserError> {
+        let (tx_cons, total_amount, tx_used) = self
+            .wallet_db
+            .fetch_inputs_for_payment(asset_required.clone())
+            .await?;
+
+        if let Some(excess) = total_amount.get_excess(&asset_required) {
+            let (excess_address, _) = self.wallet_db.generate_payment_address().await;
+            tx_outs.push(TxOut::new_asset(excess_address, excess));
+        }
+
+        let tx_ins = self
+            .wallet_db
+            .consume_inputs_for_payment(tx_cons, tx_used)
+            .await;
+
+        Ok((tx_ins, tx_outs))
+    }
+
+    async fn send_transactions_to_compute(
+        &mut self,
+        compute_peer: SocketAddr,
+        transactions: Vec<Transaction>,
+    ) -> Result<()> {
+        let _peer_span = info_span!("sending transactions to compute node for processing");
+        self.node
+            .send(
+                compute_peer,
+                ComputeRequest::SendTransactions { transactions },
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn store_payment_transaction(&mut self, transaction: Transaction) {
+        let hash = construct_tx_hash(&transaction);
+
+        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
+
+        let our_payments = self
+            .wallet_db
+            .save_usable_payments_to_wallet(payments)
+            .await
+            .unwrap();
+        debug!("store_payment_transactions: {:?}", our_payments);
     }
 }
 

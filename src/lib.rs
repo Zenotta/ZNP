@@ -29,6 +29,7 @@ mod tests;
 mod threaded_call;
 mod tracked_utxo;
 mod transaction_gen;
+mod transactor;
 mod unicorn;
 pub mod upgrade;
 mod user;

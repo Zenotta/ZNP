@@ -5,19 +5,21 @@ use crate::interfaces::{
     BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, PowInfo, ProofOfWork,
     Response, StorageRequest,
 };
+use crate::transactor::TransactionBuilder;
 use crate::utils::{
     self, apply_mining_tx, format_parition_pow_address, generate_pow_for_block,
     get_paiments_for_wallet, to_api_keys, to_route_pow_infos, ApiKeys, DeserializedBlockchainItem,
     LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
     RunningTaskOrResult,
 };
-use crate::wallet::WalletDb;
+use crate::wallet::{WalletDb, WalletDbError};
 use crate::Node;
+use async_trait::async_trait;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::primitives::asset::TokenAmount;
+use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::{self, BlockHeader};
-use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction::{Transaction, TxIn, TxOut};
 use naom::utils::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -31,7 +33,7 @@ use std::{
     time::SystemTime,
 };
 use tokio::task;
-use tracing::{debug, error, error_span, info, trace, warn};
+use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;
 
 /// Key for last pow coinbase produced
@@ -70,6 +72,7 @@ pub enum MinerError {
     Network(CommsError),
     Serialization(bincode::Error),
     AsyncTask(task::JoinError),
+    WalletError(WalletDbError),
 }
 
 impl fmt::Display for MinerError {
@@ -79,6 +82,7 @@ impl fmt::Display for MinerError {
             Self::Network(err) => write!(f, "Network error: {}", err),
             Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
             Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Self::WalletError(err) => write!(f, "Wallet error: {}", err),
         }
     }
 }
@@ -90,6 +94,7 @@ impl Error for MinerError {
             Self::Network(ref e) => Some(e),
             Self::AsyncTask(e) => Some(e),
             Self::Serialization(ref e) => Some(e),
+            Self::WalletError(ref e) => Some(e),
         }
     }
 }
@@ -109,6 +114,12 @@ impl From<CommsError> for MinerError {
 impl From<task::JoinError> for MinerError {
     fn from(other: task::JoinError) -> Self {
         Self::AsyncTask(other)
+    }
+}
+
+impl From<WalletDbError> for MinerError {
+    fn from(other: WalletDbError) -> Self {
+        Self::WalletError(other)
     }
 }
 
@@ -949,6 +960,63 @@ impl MinerInterface for MinerNode {
             success: true,
             reason: "Blockchain item received",
         }
+    }
+}
+
+#[async_trait]
+impl TransactionBuilder for MinerNode {
+    type Error = MinerError;
+
+    async fn fetch_tx_ins_and_tx_outs(
+        &mut self,
+        asset_required: Asset,
+        mut tx_outs: Vec<TxOut>,
+    ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
+        let (tx_cons, total_amount, tx_used) = self
+            .wallet_db
+            .fetch_inputs_for_payment(asset_required.clone())
+            .await?;
+
+        if let Some(excess) = total_amount.get_excess(&asset_required) {
+            let (excess_address, _) = self.wallet_db.generate_payment_address().await;
+            tx_outs.push(TxOut::new_asset(excess_address, excess));
+        }
+
+        let tx_ins = self
+            .wallet_db
+            .consume_inputs_for_payment(tx_cons, tx_used)
+            .await;
+
+        Ok((tx_ins, tx_outs))
+    }
+
+    async fn send_transactions_to_compute(
+        &mut self,
+        compute_peer: SocketAddr,
+        transactions: Vec<Transaction>,
+    ) -> Result<()> {
+        let _peer_span = info_span!("sending transactions to compute node for processing");
+        self.node
+            .send(
+                compute_peer,
+                ComputeRequest::SendTransactions { transactions },
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn store_payment_transaction(&mut self, transaction: Transaction) {
+        let hash = construct_tx_hash(&transaction);
+
+        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
+
+        let our_payments = self
+            .wallet_db
+            .save_usable_payments_to_wallet(payments)
+            .await
+            .unwrap();
+        debug!("store_payment_transactions: {:?}", our_payments);
     }
 }
 
