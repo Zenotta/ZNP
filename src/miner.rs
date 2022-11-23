@@ -20,7 +20,7 @@ use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::{self, BlockHeader};
 use naom::primitives::transaction::{Transaction, TxIn, TxOut};
-use naom::utils::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
+use naom::utils::transaction_utils::{construct_coinbase_tx, construct_tx_core, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::{
@@ -41,6 +41,9 @@ pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
 
 /// Key for last pow coinbase produced
 pub const MINING_ADDRESS_KEY: &str = "MiningAddressKey";
+
+/// Maximum number of keys that can be held in the Wallet before aggregation
+pub const MAX_NO_OF_WINNINGS_HELD: usize = 1000;
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -603,9 +606,11 @@ impl MinerNode {
             return false;
         }
 
+        // Commit our previous winnings if present
         if self.is_current_coinbase_found(&win_coinbases) {
             self.commit_found_coinbase().await;
         }
+
         self.start_generate_partition_pow(peer, pow_info, rand_num)
             .await;
         true
@@ -843,6 +848,32 @@ impl MinerNode {
             .save_usable_payments_to_wallet(payments)
             .await
             .unwrap();
+
+        self.check_for_threshold_and_send_aggregation_tx().await;
+    }
+
+    /// Checks and aggregates all the winnings into a single address if the number of addresses stored
+    /// breaches the set threshold `MAX_NO_OF_WINNINGS_HELD`
+    async fn check_for_threshold_and_send_aggregation_tx(&mut self) {
+        // Check if we have a reached the threshold of addresses stored
+        if self.wallet_db.number_of_addresses_stored() >= MAX_NO_OF_WINNINGS_HELD {
+            // Begin aggregating all winnings under a single address
+            let aggregating_addr = generate_mining_address(&self.wallet_db).await;
+            let running_total = self.wallet_db.get_fund_store().running_total().tokens;
+            let tx_out = vec![TxOut::new_token_amount(aggregating_addr, running_total)];
+
+            // Build the aggregating Transaction
+            let (tx_in, tx_out) = self
+                .fetch_tx_ins_and_tx_outs(Asset::Token(running_total), tx_out)
+                .await
+                .unwrap();
+            let aggregating_tx = construct_tx_core(tx_in, tx_out);
+
+            // Send aggregating Transaction to compute node
+            self.send_transactions_to_compute(self.compute_addr, vec![aggregating_tx])
+                .await
+                .unwrap();
+        }
     }
 
     /// Generates a valid PoW for a block specifically
