@@ -17,7 +17,7 @@ use crate::test_utils::{
     remove_all_node_dbs, Network, NetworkConfig, NodeType, RbReceiverData, RbSenderData,
 };
 use crate::tracked_utxo::TrackedUtxoBalance;
-use crate::transactor::TransactionBuilder;
+use crate::transactor::Transactor;
 use crate::user::UserNode;
 use crate::utils::{
     apply_mining_tx, calculate_reward, construct_valid_block_pow_hash,
@@ -4029,7 +4029,15 @@ async fn user_send_request_utxo_set(
     address_list: UtxoFetchType,
 ) {
     let mut u = network.user(user).unwrap().lock().await;
-    u.send_request_utxo_set(address_list).await.unwrap();
+    let compute_addr = u.compute_address();
+    UserNode::send_request_utxo_set(
+        u.get_node_mut(),
+        address_list,
+        compute_addr,
+        crate::interfaces::NodeType::User,
+    )
+    .await
+    .unwrap();
 }
 
 async fn user_send_receipt_based_payment_request(

@@ -3,9 +3,9 @@ use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
     BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, PowInfo, ProofOfWork,
-    Response, StorageRequest, UtxoFetchType, UtxoSet,
+    Response, StorageRequest, UtxoSet,
 };
-use crate::transactor::TransactionBuilder;
+use crate::transactor::Transactor;
 use crate::utils::{
     self, apply_mining_tx, format_parition_pow_address, generate_pow_for_block,
     get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, to_api_keys, to_route_pow_infos,
@@ -19,7 +19,7 @@ use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::{self, BlockHeader};
-use naom::primitives::transaction::{Transaction, TxIn, TxOut};
+use naom::primitives::transaction::{Transaction, TxOut};
 use naom::utils::transaction_utils::{construct_coinbase_tx, construct_tx_core, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -139,6 +139,7 @@ pub struct MinerNode {
     last_pow: Option<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
+    last_aggregation_address: Option<String>,
     wait_partition_task: bool,
     received_utxo_set: Option<UtxoSet>,
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, PowInfo, SocketAddr)>,
@@ -196,6 +197,7 @@ impl MinerNode {
             last_pow: None,
             current_coinbase: None,
             current_payment_address: None,
+            last_aggregation_address: None,
             received_utxo_set: None,
             wait_partition_task: Default::default(),
             mining_partition_task: Default::default(),
@@ -869,19 +871,26 @@ impl MinerNode {
             // Begin aggregating all winnings under a single address
             let aggregating_addr = generate_mining_address(&self.wallet_db).await;
             let running_total = self.wallet_db.get_fund_store().running_total().tokens;
-            let tx_out = vec![TxOut::new_token_amount(aggregating_addr, running_total)];
+            let tx_out = vec![TxOut::new_token_amount(aggregating_addr.clone(), running_total)];
 
             // Build the aggregating Transaction
-            let (tx_in, tx_out) = self
-                .fetch_tx_ins_and_tx_outs(Asset::Token(running_total), tx_out)
-                .await
-                .unwrap();
+            let (tx_in, tx_out) = MinerNode::fetch_tx_ins_and_tx_outs(
+                &mut self.wallet_db,
+                Asset::Token(running_total),
+                tx_out,
+            )
+            .await
+            .unwrap();
             let aggregating_tx = construct_tx_core(tx_in, tx_out);
 
             // Send aggregating Transaction to compute node
-            self.send_transactions_to_compute(self.compute_addr, vec![aggregating_tx])
+            self.send_transactions_to_compute(self.compute_addr, vec![aggregating_tx.clone()])
                 .await
                 .unwrap();
+
+            self.last_aggregation_address = Some(aggregating_addr);
+
+            MinerNode::store_payment_transaction(&mut self.wallet_db, aggregating_tx).await;
         }
     }
 
@@ -1004,31 +1013,8 @@ impl MinerInterface for MinerNode {
 }
 
 #[async_trait]
-impl TransactionBuilder for MinerNode {
+impl Transactor for MinerNode {
     type Error = MinerError;
-
-    async fn fetch_tx_ins_and_tx_outs(
-        &mut self,
-        asset_required: Asset,
-        mut tx_outs: Vec<TxOut>,
-    ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
-        let (tx_cons, total_amount, tx_used) = self
-            .wallet_db
-            .fetch_inputs_for_payment(asset_required.clone())
-            .await?;
-
-        if let Some(excess) = total_amount.get_excess(&asset_required) {
-            let (excess_address, _) = self.wallet_db.generate_payment_address().await;
-            tx_outs.push(TxOut::new_asset(excess_address, excess));
-        }
-
-        let tx_ins = self
-            .wallet_db
-            .consume_inputs_for_payment(tx_cons, tx_used)
-            .await;
-
-        Ok((tx_ins, tx_outs))
-    }
 
     async fn send_transactions_to_compute(
         &mut self,
@@ -1043,32 +1029,6 @@ impl TransactionBuilder for MinerNode {
             )
             .await?;
 
-        Ok(())
-    }
-
-    async fn store_payment_transaction(&mut self, transaction: Transaction) {
-        let hash = construct_tx_hash(&transaction);
-
-        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
-
-        let our_payments = self
-            .wallet_db
-            .save_usable_payments_to_wallet(payments)
-            .await
-            .unwrap();
-        debug!("store_payment_transactions: {:?}", our_payments);
-    }
-
-    async fn send_request_utxo_set(&mut self, address_list: UtxoFetchType) -> Result<()> {
-        self.node
-            .send(
-                self.compute_address(),
-                ComputeRequest::SendUtxoRequest {
-                    address_list,
-                    requester_node_type: NodeType::Miner,
-                },
-            )
-            .await?;
         Ok(())
     }
 
