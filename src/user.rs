@@ -269,12 +269,12 @@ impl UserNode {
     /// Backup persistent storage
     pub async fn backup_persistent_store(&mut self) {
         if let Err(e) = self.wallet_db.backup_persistent_store().await {
-            error!("Error bakup up main db: {:?}", e);
+            error!("Error backup up main db: {:?}", e);
         }
     }
 
     /// Update the running total from a retrieved UTXO set/subset
-    pub async fn update_running_total(&mut self) {
+    async fn update_running_total(&mut self) {
         let utxo_set = self.received_utxo_set.take();
         let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
 
@@ -592,17 +592,6 @@ impl UserNode {
             reason: "Shutdown",
         })
     }
-
-    pub async fn send_request_utxo_set(&mut self, address_list: UtxoFetchType) -> Result<()> {
-        self.node
-            .send(
-                self.compute_address(),
-                ComputeRequest::SendUtxoRequest { address_list },
-            )
-            .await?;
-        Ok(())
-    }
-
     pub fn get_next_payment_transaction(&self) -> Option<(Option<SocketAddr>, Transaction)> {
         self.next_payment.clone()
     }
@@ -975,20 +964,6 @@ impl UserNode {
         &self.last_block_notified
     }
 
-    /// Receive the requested UTXO set/subset from Compute
-    ///
-    /// ### Arguments
-    ///
-    /// * `utxo_set` - The requested UTXO set
-    fn receive_utxo_set(&mut self, utxo_set: UtxoSet) -> Response {
-        self.received_utxo_set = Some(utxo_set);
-
-        Response {
-            success: true,
-            reason: "Received UTXO set",
-        }
-    }
-
     /// Receives a request for a new payment address to be produced
     ///
     /// ### Arguments
@@ -1189,7 +1164,7 @@ impl TransactionBuilder for UserNode {
         &mut self,
         asset_required: Asset,
         mut tx_outs: Vec<TxOut>,
-    ) -> std::result::Result<(Vec<TxIn>, Vec<TxOut>), UserError> {
+    ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
         let (tx_cons, total_amount, tx_used) = self
             .wallet_db
             .fetch_inputs_for_payment(asset_required.clone())
@@ -1235,6 +1210,37 @@ impl TransactionBuilder for UserNode {
             .await
             .unwrap();
         debug!("store_payment_transactions: {:?}", our_payments);
+    }
+
+    async fn send_request_utxo_set(&mut self, address_list: UtxoFetchType) -> Result<()> {
+        self.node
+            .send(
+                self.compute_address(),
+                ComputeRequest::SendUtxoRequest {
+                    address_list,
+                    requester_node_type: NodeType::User,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    fn receive_utxo_set(&mut self, utxo_set: UtxoSet) -> Response {
+        self.received_utxo_set = Some(utxo_set);
+
+        Response {
+            success: true,
+            reason: "Received UTXO set",
+        }
+    }
+    async fn update_running_total(&mut self) {
+        let utxo_set = self.received_utxo_set.take();
+        let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
+
+        self.wallet_db
+            .save_usable_payments_to_wallet(payments)
+            .await
+            .unwrap();
     }
 }
 

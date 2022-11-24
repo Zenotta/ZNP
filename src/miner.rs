@@ -3,14 +3,14 @@ use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
     BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, PowInfo, ProofOfWork,
-    Response, StorageRequest,
+    Response, StorageRequest, UtxoFetchType, UtxoSet,
 };
 use crate::transactor::TransactionBuilder;
 use crate::utils::{
     self, apply_mining_tx, format_parition_pow_address, generate_pow_for_block,
-    get_paiments_for_wallet, to_api_keys, to_route_pow_infos, ApiKeys, DeserializedBlockchainItem,
-    LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
-    RunningTaskOrResult,
+    get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, to_api_keys, to_route_pow_infos,
+    ApiKeys, DeserializedBlockchainItem, LocalEvent, LocalEventChannel, LocalEventSender,
+    ResponseResult, RoutesPoWInfo, RunningTaskOrResult,
 };
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::Node;
@@ -140,6 +140,7 @@ pub struct MinerNode {
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
     wait_partition_task: bool,
+    received_utxo_set: Option<UtxoSet>,
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, PowInfo, SocketAddr)>,
     mining_block_task: RunningTaskOrResult<BlockPoWInfo>,
     blockchain_item_received: Option<(String, BlockchainItem, SocketAddr)>,
@@ -195,6 +196,7 @@ impl MinerNode {
             last_pow: None,
             current_coinbase: None,
             current_payment_address: None,
+            received_utxo_set: None,
             wait_partition_task: Default::default(),
             mining_partition_task: Default::default(),
             mining_block_task: Default::default(),
@@ -354,6 +356,12 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Received UTXO set",
+            }) => {
+                self.update_running_total().await;
+            }
+            Ok(Response {
+                success: true,
                 reason,
             }) => {
                 error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
@@ -506,6 +514,7 @@ impl MinerNode {
                 self.receive_trans_verification(tx_merkle_verification)
                     .await
             }
+            SendUtxoSet { utxo_set } => Some(self.receive_utxo_set(utxo_set)),
             Closing => self.receive_closing(peer),
         }
     }
@@ -1048,6 +1057,38 @@ impl TransactionBuilder for MinerNode {
             .await
             .unwrap();
         debug!("store_payment_transactions: {:?}", our_payments);
+    }
+
+    async fn send_request_utxo_set(&mut self, address_list: UtxoFetchType) -> Result<()> {
+        self.node
+            .send(
+                self.compute_address(),
+                ComputeRequest::SendUtxoRequest {
+                    address_list,
+                    requester_node_type: NodeType::Miner,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    fn receive_utxo_set(&mut self, utxo_set: UtxoSet) -> Response {
+        self.received_utxo_set = Some(utxo_set);
+
+        Response {
+            success: true,
+            reason: "Received UTXO set",
+        }
+    }
+
+    async fn update_running_total(&mut self) {
+        let utxo_set = self.received_utxo_set.take();
+        let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
+
+        self.wallet_db
+            .save_usable_payments_to_wallet(payments)
+            .await
+            .unwrap();
     }
 }
 

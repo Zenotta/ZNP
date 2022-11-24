@@ -1,3 +1,5 @@
+use crate::interfaces::{UtxoFetchType, UtxoSet};
+use crate::Response;
 use async_trait::async_trait;
 use naom::primitives::asset::Asset;
 use naom::primitives::transaction::{Transaction, TxIn, TxOut};
@@ -40,4 +42,23 @@ pub trait TransactionBuilder {
     ///
     /// * `transaction` - Transaction to be received and saved to wallet
     async fn store_payment_transaction(&mut self, transaction: Transaction);
+
+    /// Send a request to the compute nodes to receive latest UTXO set
+    ///
+    /// ### Arguments
+    /// * `address_list` - List of addresses for which UTXOs are requested
+    async fn send_request_utxo_set(
+        &mut self,
+        address_list: UtxoFetchType,
+    ) -> Result<(), Self::Error>;
+
+    /// Receive the requested UTXO set/subset from Compute
+    ///
+    /// ### Arguments
+    ///
+    /// * `utxo_set` - The requested UTXO set
+    fn receive_utxo_set(&mut self, utxo_set: UtxoSet) -> Response;
+
+    /// Updates the local running total with the latest received UTXO set
+    async fn update_running_total(&mut self);
 }
