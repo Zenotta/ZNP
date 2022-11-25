@@ -144,10 +144,6 @@ impl WalletDb {
         }
     }
 
-    pub fn number_of_addresses_stored(&self) -> usize {
-        self.db.lock().unwrap().count_cf(DB_COL_DEFAULT)
-    }
-
     /// Test old passphrase and then change to a new passphrase
     ///
     /// ### Arguments

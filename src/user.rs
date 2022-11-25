@@ -8,9 +8,8 @@ use crate::interfaces::{
 use crate::transaction_gen::{PendingMap, TransactionGen};
 use crate::transactor::Transactor;
 use crate::utils::{
-    generate_half_druid, get_paiments_for_wallet_from_utxo, to_api_keys,
-    to_route_pow_infos, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
-    RoutesPoWInfo,
+    generate_half_druid, get_paiments_for_wallet_from_utxo, to_api_keys, to_route_pow_infos,
+    ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
 };
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
 use async_trait::async_trait;

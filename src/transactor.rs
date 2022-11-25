@@ -1,14 +1,14 @@
 use crate::comms_handler::Node;
 use crate::interfaces::{NodeType, UtxoFetchType, UtxoSet};
+use crate::utils::get_paiments_for_wallet;
 use crate::wallet::WalletDb;
 use crate::{ComputeRequest, Response};
 use async_trait::async_trait;
 use naom::primitives::asset::Asset;
 use naom::primitives::transaction::{Transaction, TxIn, TxOut};
-use std::net::SocketAddr;
 use naom::utils::transaction_utils::construct_tx_hash;
+use std::net::SocketAddr;
 use tracing::debug;
-use crate::utils::get_paiments_for_wallet;
 
 /// A common trait that can be implemented by nodes as necessary to
 /// build transactions from their local wallets.
