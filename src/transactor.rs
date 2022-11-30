@@ -5,7 +5,7 @@ use crate::wallet::WalletDb;
 use crate::{ComputeRequest, Response};
 use async_trait::async_trait;
 use naom::primitives::asset::Asset;
-use naom::primitives::transaction::{Transaction, TxIn, TxOut};
+use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use naom::utils::transaction_utils::construct_tx_hash;
 use std::net::SocketAddr;
 use tracing::debug;
@@ -41,6 +41,28 @@ pub trait Transactor {
         let tx_ins = wallet_db.consume_inputs_for_payment(tx_cons, tx_used).await;
 
         Ok((tx_ins, tx_outs))
+    }
+
+    /// Get `Vec<TxIn>` and `Vec<TxOut>` values for a transaction
+    ///
+    /// ### Arguments
+    ///
+    /// * `wallet_db`: Mutable ref of the WalletDB instance
+    /// * `txs` - Outpoints and Assets which correspond to addresses in the transaction store
+    async fn fetch_tx_ins_and_tx_outs_from_supplied_txs(
+        wallet_db: &mut WalletDb,
+        txs: Vec<(OutPoint, Asset)>,
+    ) -> Result<(Vec<TxIn>, Asset), Self::Error> {
+        let (tx_cons, total_amount, tx_used) = wallet_db
+            .fetch_inputs_for_payment_from_supplied_txs(txs)
+            .await
+            .unwrap();
+
+        tracing::trace!("Total amount collected by store {total_amount:?}");
+
+        let tx_ins = wallet_db.consume_inputs_for_payment(tx_cons, tx_used).await;
+
+        Ok((tx_ins, total_amount))
     }
 
     /// Sends the next internal payment transaction to be processed by the connected Compute

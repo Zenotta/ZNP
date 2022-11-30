@@ -19,7 +19,7 @@ use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::{self, BlockHeader};
-use naom::primitives::transaction::{Transaction, TxOut};
+use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::utils::transaction_utils::{construct_coinbase_tx, construct_tx_core, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -43,7 +43,7 @@ pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
 pub const MINING_ADDRESS_KEY: &str = "MiningAddressKey";
 
 /// Maximum number of keys that can be held in the Wallet before aggregation
-pub const MAX_NO_OF_WINNINGS_HELD: usize = 1000;
+pub const NO_OF_ADDRESSES_FOR_AGGREGATION_TX: usize = 1000;
 
 /// Number of winnings after which Miner requests for UTXO set to
 /// confirm the previous aggregation transaction
@@ -362,7 +362,7 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Received UTXO set",
+                reason: "Received UTXO set for aggregating tx",
             }) => {
                 self.update_running_total().await;
             }
@@ -623,6 +623,22 @@ impl MinerNode {
 
         // Commit our previous winnings if present
         if self.is_current_coinbase_found(&win_coinbases) {
+            // Request for UTXO set to confirm that aggregation tx has went through.
+            if let Some(ref addr) = self.last_aggregation_address {
+                let compute_addr = self.compute_address();
+
+                MinerNode::send_request_utxo_set(
+                    &mut self.node,
+                    UtxoFetchType::AnyOf(vec![addr.clone()]),
+                    compute_addr,
+                    NodeType::Miner,
+                )
+                .await
+                .unwrap();
+
+                trace!("Sending UTXO request from Miner node to confirm our previous aggregation of winnings");
+            }
+
             self.commit_found_coinbase().await;
         }
 
@@ -871,30 +887,49 @@ impl MinerNode {
     /// Checks and aggregates all the winnings into a single address if the number of addresses stored
     /// breaches the set threshold `MAX_NO_OF_WINNINGS_HELD`
     async fn check_for_threshold_and_send_aggregation_tx(&mut self) {
-        let no_of_winnings_held = self.wallet_db.get_known_addresses().len();
+        let known_addresses_len = self.wallet_db.get_known_addresses().len();
 
         trace!(
-            "Checking if we are holding more {MAX_NO_OF_WINNINGS_HELD:?} addresses to aggregate"
+            "Checking if we are holding more than {NO_OF_ADDRESSES_FOR_AGGREGATION_TX:?} addresses to trigger aggregation tx"
         );
         // Check if we have a reached the threshold of addresses stored
-        if no_of_winnings_held >= MAX_NO_OF_WINNINGS_HELD {
+        if known_addresses_len >= NO_OF_ADDRESSES_FOR_AGGREGATION_TX {
             trace!("Winnings aggregation triggered");
-            // Begin aggregating all winnings under a single address
-            let aggregating_addr = generate_mining_address(&self.wallet_db).await;
-            let running_total = self.wallet_db.get_fund_store().running_total().tokens;
-            let tx_out = vec![TxOut::new_token_amount(
-                aggregating_addr.clone(),
-                running_total,
-            )];
 
-            // Build the aggregating Transaction
-            let (tx_in, tx_out) = MinerNode::fetch_tx_ins_and_tx_outs(
+            // Begin aggregating `NO_OF_ADDRESSES_FOR_AGGREGATION_TX` address's winnings under a single address
+            let aggregating_addr = generate_mining_address(&self.wallet_db).await;
+
+            let mut valid_addresses: Vec<(OutPoint, Asset)> = vec![];
+
+            // Collect Token only assets
+            for (op, asset) in self
+                .wallet_db
+                .get_fund_store()
+                .transactions()
+                .iter()
+                .skip_while(|(_, asset)| !asset.is_token())
+            {
+                valid_addresses.push((op.clone(), asset.clone()));
+
+                // Stop once we have collected a `NO_OF_ADDRESSES_FOR_AGGREGATION_TX` addresses
+                if valid_addresses.len() == NO_OF_ADDRESSES_FOR_AGGREGATION_TX {
+                    break;
+                }
+            }
+
+            // Build the aggregating transaction
+            let (tx_in, total) = MinerNode::fetch_tx_ins_and_tx_outs_from_supplied_txs(
                 &mut self.wallet_db,
-                Asset::Token(running_total),
-                tx_out,
+                valid_addresses,
             )
             .await
             .unwrap();
+
+            let tx_out = vec![TxOut::new_token_amount(
+                aggregating_addr.clone(),
+                total.token_amount(),
+            )];
+
             let aggregating_tx = construct_tx_core(tx_in, tx_out);
 
             trace!("Sending aggregation tx to compute node");
@@ -911,25 +946,6 @@ impl MinerNode {
 
             trace!("Pruning the wallet of old keys after aggregation");
             self.wallet_db.destroy_spent_transactions_and_keys().await;
-        }
-
-        // Request for UTXO set to confirm that aggregation tx has went through.
-        if let Some(ref addr) = self.last_aggregation_address {
-            // We request only after getting 5 mining wins(and not repeatedly) to not burden the compute nodes.
-            if no_of_winnings_held == COUNT_FOR_UTXO_REQ {
-                let compute_addr = self.compute_address();
-
-                MinerNode::send_request_utxo_set(
-                    &mut self.node,
-                    UtxoFetchType::AnyOf(vec![addr.clone()]),
-                    compute_addr,
-                    NodeType::Miner,
-                )
-                .await
-                .unwrap();
-
-                trace!("Sending UTXO request from Miner node to confirm aggregation of winnings");
-            }
         }
     }
 
@@ -1076,7 +1092,7 @@ impl Transactor for MinerNode {
 
         Response {
             success: true,
-            reason: "Received UTXO set",
+            reason: "Received UTXO set for aggregating tx",
         }
     }
 
@@ -1088,6 +1104,10 @@ impl Transactor for MinerNode {
             .save_usable_payments_to_wallet(payments)
             .await
             .unwrap();
+
+        // Since we have received the UTXO set for the aggregating tx, let's check for wallet threshold to
+        // aggregate another batch of addresses
+        self.check_for_threshold_and_send_aggregation_tx().await;
     }
 }
 

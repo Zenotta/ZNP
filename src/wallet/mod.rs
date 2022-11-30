@@ -9,7 +9,7 @@ use naom::crypto::pbkdf2 as pwhash;
 use naom::crypto::secretbox_chacha20_poly1305 as secretbox;
 use naom::crypto::sign_ed25519 as sign;
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
-use naom::primitives::asset::Asset;
+use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
 use naom::utils::transaction_utils::{
     construct_address_for, construct_payment_tx_ins, construct_tx_in_signable_hash,
@@ -431,6 +431,26 @@ impl WalletDb {
         .await?
     }
 
+    /// Fetches valid TxIns based on the supplied addresses
+    ///
+    /// TODO: Replace errors here with Error enum types that the Result can return
+    ///
+    /// ### Arguments
+    ///
+    /// * `txs` - Outpoints and Assets which correspond to addresses in the transaction store
+    pub async fn fetch_inputs_for_payment_from_supplied_txs(
+        &self,
+        txs: Vec<(OutPoint, Asset)>,
+    ) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
+        let db = self.db.clone();
+        let encryption_key = self.encryption_key.clone();
+        task::spawn_blocking(move || {
+            let db = db.lock().unwrap();
+            fetch_inputs_from_supplied_txs_for_payment_from_db(&db, txs, &encryption_key)
+        })
+        .await?
+    }
+
     /// Consume given used transaction and produce TxIns
     ///
     /// ### Arguments
@@ -764,6 +784,29 @@ pub fn fetch_inputs_for_payment_from_db(
         }
         if let Some(true) = amount_made.is_greater_or_equal_to(&asset_required) {
             break;
+        }
+    }
+
+    Ok((tx_cons, amount_made, tx_used))
+}
+
+/// Make TxConstructors from stored TxOut
+/// Also return the used info for db cleanup
+#[allow(clippy::type_complexity)]
+pub fn fetch_inputs_from_supplied_txs_for_payment_from_db(
+    db: &SimpleDb,
+    addresses: Vec<(OutPoint, Asset)>,
+    encryption_key: &secretbox::Key,
+) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
+    let mut tx_cons = Vec::new();
+    let mut tx_used = Vec::new();
+    let mut amount_made = Asset::Token(TokenAmount(0));
+
+    for (out_p, amount) in addresses {
+        if amount_made.add_assign(&amount) {
+            let (cons, used) = tx_constructor_from_prev_out(db, out_p, encryption_key);
+            tx_cons.push(cons);
+            tx_used.push(used);
         }
     }
 
