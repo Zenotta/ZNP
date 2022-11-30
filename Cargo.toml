@@ -46,4 +46,4 @@ warp = { version = "0.3.1", features = ["tls"] }
 mock = []
 
 [patch.crates-io]
-raft = {git =  "https://github.com/jeanphilippeD/raft-rs", branch = "0.5.1"}
+raft = { git = "https://github.com/Zenotta/raft-rs", branch = "0.5.1" }
