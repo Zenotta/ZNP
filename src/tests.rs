@@ -4030,8 +4030,7 @@ async fn user_send_request_utxo_set(
 ) {
     let mut u = network.user(user).unwrap().lock().await;
     let compute_addr = u.compute_address();
-    UserNode::send_request_utxo_set(
-        u.get_node_mut(),
+    u.send_request_utxo_set(
         address_list,
         compute_addr,
         crate::interfaces::NodeType::User,

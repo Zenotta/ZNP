@@ -1,14 +1,8 @@
-use crate::comms_handler::Node;
 use crate::interfaces::{NodeType, UtxoFetchType, UtxoSet};
-use crate::utils::get_paiments_for_wallet;
-use crate::wallet::WalletDb;
-use crate::{ComputeRequest, Response};
+use crate::Response;
 use async_trait::async_trait;
-use naom::primitives::asset::Asset;
-use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
-use naom::utils::transaction_utils::construct_tx_hash;
+use naom::primitives::transaction::Transaction;
 use std::net::SocketAddr;
-use tracing::debug;
 
 /// A common trait that can be implemented by nodes as necessary to
 /// build transactions from their local wallets.
@@ -16,54 +10,6 @@ use tracing::debug;
 #[async_trait]
 pub trait Transactor {
     type Error;
-
-    /// Get `Vec<TxIn>` and `Vec<TxOut>` values for a transaction
-    ///
-    /// ### Arguments
-    ///
-    /// * `asset_required`              - The required `Asset`
-    /// * `tx_outs`                     - Initial `Vec<TxOut>` value
-    async fn fetch_tx_ins_and_tx_outs(
-        wallet_db: &mut WalletDb,
-        asset_required: Asset,
-        mut tx_outs: Vec<TxOut>,
-    ) -> Result<(Vec<TxIn>, Vec<TxOut>), Self::Error> {
-        let (tx_cons, total_amount, tx_used) = wallet_db
-            .fetch_inputs_for_payment(asset_required.clone())
-            .await
-            .unwrap();
-
-        if let Some(excess) = total_amount.get_excess(&asset_required) {
-            let (excess_address, _) = wallet_db.generate_payment_address().await;
-            tx_outs.push(TxOut::new_asset(excess_address, excess));
-        }
-
-        let tx_ins = wallet_db.consume_inputs_for_payment(tx_cons, tx_used).await;
-
-        Ok((tx_ins, tx_outs))
-    }
-
-    /// Get `Vec<TxIn>` and `Vec<TxOut>` values for a transaction
-    ///
-    /// ### Arguments
-    ///
-    /// * `wallet_db`: Mutable ref of the WalletDB instance
-    /// * `txs` - Outpoints and Assets which correspond to addresses in the transaction store
-    async fn fetch_tx_ins_and_tx_outs_from_supplied_txs(
-        wallet_db: &mut WalletDb,
-        txs: Vec<(OutPoint, Asset)>,
-    ) -> Result<(Vec<TxIn>, Asset), Self::Error> {
-        let (tx_cons, total_amount, tx_used) = wallet_db
-            .fetch_inputs_for_payment_from_supplied_txs(txs)
-            .await
-            .unwrap();
-
-        tracing::trace!("Total amount collected by store {total_amount:?}");
-
-        let tx_ins = wallet_db.consume_inputs_for_payment(tx_cons, tx_used).await;
-
-        Ok((tx_ins, total_amount))
-    }
 
     /// Sends the next internal payment transaction to be processed by the connected Compute
     /// node
@@ -78,44 +24,16 @@ pub trait Transactor {
         transactions: Vec<Transaction>,
     ) -> Result<(), Self::Error>;
 
-    /// Store payment transaction
-    ///
-    /// ### Arguments
-    ///
-    /// * `transaction` - Transaction to be received and saved to wallet
-    async fn store_payment_transaction(wallet_db: &mut WalletDb, transaction: Transaction) {
-        let hash = construct_tx_hash(&transaction);
-
-        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
-
-        let our_payments = wallet_db
-            .save_usable_payments_to_wallet(payments)
-            .await
-            .unwrap();
-        debug!("store_payment_transactions: {:?}", our_payments);
-    }
-
     /// Send a request to the compute nodes to receive latest UTXO set
     ///
     /// ### Arguments
     /// * `address_list` - List of addresses for which UTXOs are requested
     async fn send_request_utxo_set(
-        node: &mut Node,
+        &mut self,
         address_list: UtxoFetchType,
         compute_addr: SocketAddr,
         requester_node_type: NodeType,
-    ) -> Result<(), Self::Error> {
-        node.send(
-            compute_addr,
-            ComputeRequest::SendUtxoRequest {
-                address_list,
-                requester_node_type,
-            },
-        )
-        .await
-        .unwrap();
-        Ok(())
-    }
+    ) -> Result<(), Self::Error>;
 
     /// Receive the requested UTXO set/subset from Compute
     ///

@@ -604,7 +604,7 @@ impl UserNode {
         self.send_transactions_to_compute(compute_peer, vec![tx.clone()])
             .await?;
 
-        UserNode::store_payment_transaction(&mut self.wallet_db, tx.clone()).await;
+        self.wallet_db.store_payment_transaction(tx.clone()).await;
         if let Some(peer) = peer {
             self.send_payment_to_receiver(peer, tx).await?;
         }
@@ -623,7 +623,9 @@ impl UserNode {
         compute_peer: SocketAddr,
     ) -> Result<()> {
         let (peer, transaction) = self.next_rb_payment.take().unwrap();
-        UserNode::store_payment_transaction(&mut self.wallet_db, transaction.clone()).await;
+        self.wallet_db
+            .store_payment_transaction(transaction.clone())
+            .await;
         let _peer_span =
             info_span!("sending receipt-based transaction to compute node for processing");
         let transactions = vec![transaction.clone()];
@@ -651,7 +653,7 @@ impl UserNode {
         address_list: UtxoFetchType,
     ) -> Option<Response> {
         let compute_addr = self.compute_address();
-        UserNode::send_request_utxo_set(&mut self.node, address_list, compute_addr, NodeType::User)
+        self.send_request_utxo_set(address_list, compute_addr, NodeType::User)
             .await
             .ok()?;
 
@@ -704,7 +706,7 @@ impl UserNode {
     ///
     /// * `transaction` - Transaction to receive and save to wallet
     pub async fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
-        UserNode::store_payment_transaction(&mut self.wallet_db, transaction).await;
+        self.wallet_db.store_payment_transaction(transaction).await;
 
         Response {
             success: true,
@@ -758,8 +760,10 @@ impl UserNode {
     ) -> Response {
         let tx_out = vec![TxOut::new_token_amount(address, amount)];
         let asset_required = Asset::Token(amount);
-        let (tx_ins, tx_outs) = if let Ok(value) =
-            UserNode::fetch_tx_ins_and_tx_outs(&mut self.wallet_db, asset_required, tx_out).await
+        let (tx_ins, tx_outs) = if let Ok(value) = self
+            .wallet_db
+            .fetch_tx_ins_and_tx_outs(asset_required, tx_out)
+            .await
         {
             value
         } else {
@@ -993,12 +997,10 @@ impl UserNode {
         let (sender_address, _) = self.wallet_db.generate_payment_address().await;
         let sender_half_druid = generate_half_druid();
 
-        let (tx_ins, tx_outs) = UserNode::fetch_tx_ins_and_tx_outs(
-            &mut self.wallet_db,
-            sender_asset.clone(),
-            Vec::new(),
-        )
-        .await?;
+        let (tx_ins, tx_outs) = self
+            .wallet_db
+            .fetch_tx_ins_and_tx_outs(sender_asset.clone(), Vec::new())
+            .await?;
 
         let (rb_payment_data, rb_payment_request_data) = make_rb_payment_send_tx_and_request(
             sender_asset,
@@ -1057,9 +1059,10 @@ impl UserNode {
             rb_payment_request_data.sender_drs_tx_expectation.clone(),
             None,
         );
-        let tx_ins_and_outs =
-            UserNode::fetch_tx_ins_and_tx_outs(&mut self.wallet_db, asset_required, Vec::new())
-                .await;
+        let tx_ins_and_outs = self
+            .wallet_db
+            .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
+            .await;
 
         let (tx_ins, tx_outs) = if let Ok(value) = tx_ins_and_outs {
             value
@@ -1166,11 +1169,31 @@ impl Transactor for UserNode {
         compute_peer: SocketAddr,
         transactions: Vec<Transaction>,
     ) -> Result<()> {
-        let _peer_span = info_span!("sending transactions to compute node for processing");
+        let _peer_span = info_span!("Sending transactions to compute node for processing");
         self.node
             .send(
                 compute_peer,
                 ComputeRequest::SendTransactions { transactions },
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn send_request_utxo_set(
+        &mut self,
+        address_list: UtxoFetchType,
+        compute_addr: SocketAddr,
+        requester_node_type: NodeType,
+    ) -> Result<()> {
+        let _peer_span = info_span!("Sending UXTO request to compute node");
+        self.node
+            .send(
+                compute_addr,
+                ComputeRequest::SendUtxoRequest {
+                    address_list,
+                    requester_node_type,
+                },
             )
             .await?;
 

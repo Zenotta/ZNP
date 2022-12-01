@@ -45,10 +45,6 @@ pub const MINING_ADDRESS_KEY: &str = "MiningAddressKey";
 /// Maximum number of keys that can be held in the Wallet before aggregation
 pub const NO_OF_ADDRESSES_FOR_AGGREGATION_TX: usize = 1000;
 
-/// Number of winnings after which Miner requests for UTXO set to
-/// confirm the previous aggregation transaction
-pub const COUNT_FOR_UTXO_REQ: usize = 5;
-
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
 
@@ -627,16 +623,18 @@ impl MinerNode {
             if let Some(ref addr) = self.last_aggregation_address {
                 let compute_addr = self.compute_address();
 
-                MinerNode::send_request_utxo_set(
-                    &mut self.node,
-                    UtxoFetchType::AnyOf(vec![addr.clone()]),
-                    compute_addr,
-                    NodeType::Miner,
-                )
-                .await
-                .unwrap();
-
-                trace!("Sending UTXO request from Miner node to confirm our previous aggregation of winnings");
+                if let Err(e) = self
+                    .send_request_utxo_set(
+                        UtxoFetchType::AnyOf(vec![addr.clone()]),
+                        compute_addr,
+                        NodeType::Miner,
+                    )
+                    .await
+                {
+                    error!("Error sending UTXO request to compute nodes: {e:?}");
+                } else {
+                    trace!("Sending UTXO request from Miner node to confirm our previous aggregation of winnings");
+                }
             }
 
             self.commit_found_coinbase().await;
@@ -918,12 +916,11 @@ impl MinerNode {
             }
 
             // Build the aggregating transaction
-            let (tx_in, total) = MinerNode::fetch_tx_ins_and_tx_outs_from_supplied_txs(
-                &mut self.wallet_db,
-                valid_addresses,
-            )
-            .await
-            .unwrap();
+            let (tx_in, total) = self
+                .wallet_db
+                .fetch_tx_ins_and_tx_outs_from_supplied_txs(valid_addresses)
+                .await
+                .unwrap();
 
             let tx_out = vec![TxOut::new_token_amount(
                 aggregating_addr.clone(),
@@ -934,15 +931,21 @@ impl MinerNode {
 
             trace!("Sending aggregation tx to compute node");
             // Send aggregating Transaction to compute node
-            self.send_transactions_to_compute(self.compute_addr, vec![aggregating_tx.clone()])
+            if let Err(e) = self
+                .send_transactions_to_compute(self.compute_addr, vec![aggregating_tx.clone()])
                 .await
-                .unwrap();
+            {
+                error!("Error sending aggregation tx to compute nodes: {e:?}");
+                return;
+            }
 
             self.last_aggregation_address = Some(aggregating_addr);
 
             // After aggregation, our wallets will hold only 2 addresses: one for the holding all the winnings
             // and the other for the excess amount(which will be `0` theoretically).
-            MinerNode::store_payment_transaction(&mut self.wallet_db, aggregating_tx).await;
+            self.wallet_db
+                .store_payment_transaction(aggregating_tx)
+                .await;
 
             trace!("Pruning the wallet of old keys after aggregation");
             self.wallet_db.destroy_spent_transactions_and_keys().await;
@@ -1087,8 +1090,31 @@ impl Transactor for MinerNode {
         Ok(())
     }
 
+    async fn send_request_utxo_set(
+        &mut self,
+        address_list: UtxoFetchType,
+        compute_addr: SocketAddr,
+        requester_node_type: NodeType,
+    ) -> Result<()> {
+        let _peer_span = info_span!("Sending UXTO request to compute node");
+        self.node
+            .send(
+                compute_addr,
+                ComputeRequest::SendUtxoRequest {
+                    address_list,
+                    requester_node_type,
+                },
+            )
+            .await?;
+
+        Ok(())
+    }
+
     fn receive_utxo_set(&mut self, utxo_set: UtxoSet) -> Response {
         self.received_utxo_set = Some(utxo_set);
+
+        // Reset the last known aggregation address since we've received the UTXO set for it.
+        self.last_aggregation_address = None;
 
         Response {
             success: true,
