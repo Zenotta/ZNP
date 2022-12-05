@@ -90,6 +90,9 @@ pub const BLOCK_SIZE_IN_TX: usize = BLOCK_SIZE / 500;
 /// Number of rounds for Miller Rabin primality testing
 pub const MR_PRIME_ITERS: u32 = 15;
 
+/// Number of old backups to keep before purging
+pub const OLD_BACKUP_COUNT: usize = 5;
+
 /*------- TESTS -------*/
 
 #[cfg(test)]

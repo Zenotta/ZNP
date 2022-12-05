@@ -1,5 +1,7 @@
 use crate::configurations::DbMode;
-use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED};
+use crate::constants::{
+    DB_PATH_LIVE, DB_PATH_TEST, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, OLD_BACKUP_COUNT,
+};
 use rocksdb::backup::{BackupEngine, BackupEngineOptions};
 use rocksdb::{DBCompressionType, IteratorMode, Options, WriteBatch, DB};
 pub use rocksdb::{Error as DBError, DEFAULT_COLUMN_FAMILY_NAME as DB_COL_DEFAULT};
@@ -207,6 +209,9 @@ impl SimpleDb {
 
             warn!("Backup db {} to {}", path, backup_path);
             backup_engine.create_new_backup_flush(db, flush_before_backup)?;
+
+            warn!("Purging old backups leaving {OLD_BACKUP_COUNT:?} latest backups intact");
+            backup_engine.purge_old_backups(OLD_BACKUP_COUNT)?;
         }
 
         Ok(())
