@@ -210,7 +210,7 @@ impl SimpleDb {
             warn!("Backup db {} to {}", path, backup_path);
             backup_engine.create_new_backup_flush(db, flush_before_backup)?;
 
-            warn!("Purging old backups leaving {OLD_BACKUP_COUNT:?} latest backups intact");
+            warn!("Purging old backups at {backup_path:?} leaving {OLD_BACKUP_COUNT:?} latest backups intact");
             backup_engine.purge_old_backups(OLD_BACKUP_COUNT)?;
         }
 

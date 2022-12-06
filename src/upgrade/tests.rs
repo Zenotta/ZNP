@@ -469,7 +469,8 @@ async fn upgrade_restart_network_common(
         }
 
         let raft_len = upgrade_cfg.raft_len;
-        let expected_count = STORAGE_DB_V0_4_0_INDEXES.len() + extra_blocks * (1 + 1);
+        let expected_count =
+            STORAGE_DB_V0_4_0_INDEXES.len() + extra_blocks * (1 + 1) /* aggregation tx */ + 1;
         assert_eq!(actual_count, vec![expected_count; raft_len]);
         assert_eq!(actual_last_bnum, vec![Some(expected_block_num); raft_len]);
     }

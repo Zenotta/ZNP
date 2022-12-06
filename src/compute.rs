@@ -22,6 +22,7 @@ use crate::utils::{
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{DrsTxHashSpec, Transaction};
 use naom::utils::druid_utils::druid_expectations_are_met;
@@ -1100,6 +1101,10 @@ impl ComputeNode {
             .unwrap();
 
         Ok(())
+    }
+
+    pub fn get_current_mining_reward(&self) -> TokenAmount {
+        *self.node_raft.get_current_reward()
     }
 
     /// Floods the current block to participants for mining

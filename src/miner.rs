@@ -43,7 +43,7 @@ pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
 pub const MINING_ADDRESS_KEY: &str = "MiningAddressKey";
 
 /// Maximum number of keys that can be held in the Wallet before aggregation
-pub const NO_OF_ADDRESSES_FOR_AGGREGATION_TX: usize = 1000;
+pub const NO_OF_ADDRESSES_FOR_AGGREGATION_TX: usize = if cfg!(test) { 5 } else { 1000 };
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -927,6 +927,8 @@ impl MinerNode {
                 total.token_amount(),
             )];
 
+            trace!("Aggregating {total:?} to {aggregating_addr:?}");
+
             let aggregating_tx = construct_tx_core(tx_in, tx_out);
 
             trace!("Sending aggregation tx to compute node");
@@ -1051,6 +1053,11 @@ impl MinerNode {
     /// Get `Node` member
     pub fn get_node(&self) -> &Node {
         &self.node
+    }
+
+    /// Returns `true` if the miner has sent an aggregation tx and has not received the UTXO set yet.
+    pub fn has_aggregation_tx_active(&self) -> Option<String> {
+        self.last_aggregation_address.clone()
     }
 }
 
