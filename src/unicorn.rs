@@ -227,10 +227,10 @@ impl Unicorn {
 mod unicorn_tests {
     use super::*;
 
-    use std::convert::TryInto;
-    use std::collections::HashSet;
     use keccak_prime::fortuna::Fortuna;
     use rand::{distributions::Alphanumeric, Rng};
+    use std::collections::HashSet;
+    use std::convert::TryInto;
     const TEST_HASH: &str = "1eeb30c7163271850b6d018e8282093ac6755a771da6267edf6c9b4fce9242ba";
     const WITNESS: &str = "3519722601447054908751517254890810869415446534615259770378249754169022895693105944708707316137352415946228979178396400856098248558222287197711860247275230167";
 
@@ -243,7 +243,7 @@ mod unicorn_tests {
             modulus,
             iterations: 1_000,
             security_level: 1,
-            seed
+            seed,
         }
     }
 
