@@ -20,7 +20,7 @@ use crate::constants::MR_PRIME_ITERS;
 use crate::utils::rug_integer;
 use bincode::serialize;
 use naom::crypto::sha3_256;
-use rug::integer::IsPrime;
+use rug::integer::{IsPrime, Order};
 use rug::Integer;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -161,7 +161,9 @@ impl Unicorn {
             w.pow_mod_mut(&exponent, &self.modulus).unwrap();
         }
 
-        let g = hex::encode(sha3_256::digest(&serialize(&w.to_u64()).unwrap()));
+        let digits = w.to_digits::<u8>(Order::MsfBe);
+        let g = hex::encode(digits);
+
         Some((w, g))
     }
 
@@ -224,19 +226,57 @@ impl Unicorn {
 #[cfg(test)]
 mod unicorn_tests {
     use super::*;
+
+    use keccak_prime::fortuna::Fortuna;
+    use rand::{distributions::Alphanumeric, Rng};
+    use std::collections::HashSet;
+    use std::convert::TryInto;
     const TEST_HASH: &str = "1eeb30c7163271850b6d018e8282093ac6755a771da6267edf6c9b4fce9242ba";
     const WITNESS: &str = "3519722601447054908751517254890810869415446534615259770378249754169022895693105944708707316137352415946228979178396400856098248558222287197711860247275230167";
 
     fn create_unicorn() -> Unicorn {
         let modulus_str: &str = "6864797660130609714981900799081393217269435300143305409394463459185543183397656052122559640661454554977296311391480858037121987999716643812574028291115057151";
         let modulus = Integer::from_str_radix(modulus_str, 10).unwrap();
+        let seed = Integer::from_str_radix(TEST_HASH, 16).unwrap();
 
         Unicorn {
             modulus,
             iterations: 1_000,
             security_level: 1,
-            seed: Integer::from_str_radix(TEST_HASH, 16).unwrap(),
+            seed,
         }
+    }
+
+    #[test]
+    fn check_unicorn_fairness() {
+        let iterations = 10;
+        let mut uni = create_unicorn();
+        let mut prns: HashSet<u64> = HashSet::new();
+
+        for _ in 0..iterations {
+            let s: String = rand::thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(1024)
+                .map(char::from)
+                .collect();
+            let i = Integer::from_str_radix(&hex::encode(s), 16).unwrap();
+            uni.set_seed(i);
+
+            let (_w, g): (Integer, String) = match uni.eval() {
+                Some((w, g)) => (w, g),
+                None => panic!("UNICORN construction failed"),
+            };
+
+            let prn_seed: [u8; 32] = g.as_bytes()[..32].try_into().unwrap();
+            let mut csprng = Fortuna::new(&prn_seed, 1).unwrap();
+
+            let val = csprng.get_bytes(8).unwrap();
+            let prn = u64::from_be_bytes(val[0..8].try_into().unwrap());
+
+            prns.insert(prn);
+        }
+
+        assert_eq!(iterations, prns.len());
     }
 
     #[test]
@@ -250,7 +290,7 @@ mod unicorn_tests {
             eval,
             (
                 Integer::from_str_radix(WITNESS, 10).unwrap(),
-                "5d53469f20fef4f8eab52b88044ede69c77a6a68a60728609fc4a65ff531e7d0".to_string()
+                "0106834db40e90d1cafaa9e4c1981873186ebf019629852059aaf8e4ca35da01ca37041a4b475387dde0667c192ec18d1733d147ea9bfafa35ee4b05f74943e3d3d7".to_string()
             )
         );
     }
