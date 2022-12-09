@@ -290,7 +290,7 @@ mod unicorn_tests {
             eval,
             (
                 Integer::from_str_radix(WITNESS, 10).unwrap(),
-                "5d53469f20fef4f8eab52b88044ede69c77a6a68a60728609fc4a65ff531e7d0".to_string()
+                "0106834db40e90d1cafaa9e4c1981873186ebf019629852059aaf8e4ca35da01ca37041a4b475387dde0667c192ec18d1733d147ea9bfafa35ee4b05f74943e3d3d7".to_string()
             )
         );
     }
