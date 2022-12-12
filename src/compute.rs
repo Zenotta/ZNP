@@ -22,6 +22,7 @@ use crate::utils::{
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{DrsTxHashSpec, Transaction};
 use naom::utils::druid_utils::druid_expectations_are_met;
@@ -147,7 +148,7 @@ pub struct ComputeNode {
     user_notification_list: BTreeSet<SocketAddr>,
     coordinated_shutdown: u64,
     shutdown_group: BTreeSet<SocketAddr>,
-    fetched_utxo_set: Option<(SocketAddr, UtxoSet)>,
+    fetched_utxo_set: Option<(SocketAddr, NodeType, UtxoSet)>,
     api_info: (
         SocketAddr,
         Option<TlsPrivateInfo>,
@@ -486,12 +487,26 @@ impl ComputeNode {
         error!("Flooding commit to peers not implemented");
     }
 
-    ///Sends the requested UTXO set to the user that requested it.
+    /// Sends the requested UTXO set to the peer that requested it.
     pub async fn send_fetched_utxo_set(&mut self) -> Result<()> {
-        if let Some((peer, utxo_set)) = self.fetched_utxo_set.take() {
-            self.node
-                .send(peer, UserRequest::SendUtxoSet { utxo_set })
-                .await?;
+        if let Some((peer, node_type, utxo_set)) = self.fetched_utxo_set.take() {
+            match node_type {
+                NodeType::Miner => {
+                    self.node
+                        .send(peer, MineRequest::SendUtxoSet { utxo_set })
+                        .await?
+                }
+                NodeType::User => {
+                    self.node
+                        .send(peer, UserRequest::SendUtxoSet { utxo_set })
+                        .await?
+                }
+                _ => {
+                    return Err(ComputeError::GenericError(StringError(
+                        "Invalid UTXO requester".to_string(),
+                    )))
+                }
+            }
         }
         Ok(())
     }
@@ -858,7 +873,10 @@ impl ComputeNode {
 
         match req {
             ComputeApi(req) => self.handle_api_request(peer, req).await,
-            SendUtxoRequest { address_list } => Some(self.fetch_utxo_set(peer, address_list)),
+            SendUtxoRequest {
+                address_list,
+                requester_node_type,
+            } => Some(self.fetch_utxo_set(peer, address_list, requester_node_type)),
             SendBlockStored(info) => self.receive_block_stored(peer, info).await,
             SendPoW {
                 block_num,
@@ -1083,6 +1101,10 @@ impl ComputeNode {
             .unwrap();
 
         Ok(())
+    }
+
+    pub fn get_current_mining_reward(&self) -> TokenAmount {
+        *self.node_raft.get_current_reward()
     }
 
     /// Floods the current block to participants for mining
@@ -1551,9 +1573,14 @@ impl ComputeNode {
 }
 
 impl ComputeInterface for ComputeNode {
-    fn fetch_utxo_set(&mut self, peer: SocketAddr, address_list: UtxoFetchType) -> Response {
+    fn fetch_utxo_set(
+        &mut self,
+        peer: SocketAddr,
+        address_list: UtxoFetchType,
+        node_type: NodeType,
+    ) -> Response {
         self.fetched_utxo_set = match address_list {
-            UtxoFetchType::All => Some((peer, self.get_committed_utxo_set_to_send())),
+            UtxoFetchType::All => Some((peer, node_type, self.get_committed_utxo_set_to_send())),
             UtxoFetchType::AnyOf(addresses) => {
                 let utxo_set = self.get_committed_utxo_set();
                 let utxo_tracked_set = self.get_committed_utxo_tracked_set_to_send();
@@ -1567,7 +1594,7 @@ impl ComputeInterface for ComputeNode {
                             .map(|(k, v)| (k.clone(), v.clone()))
                     })
                     .collect();
-                Some((peer, utxo_subset))
+                Some((peer, node_type, utxo_subset))
             }
         };
         Response {

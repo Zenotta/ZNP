@@ -1870,7 +1870,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.5.0"
-source = "git+https://github.com/jeanphilippeD/raft-rs?branch=0.5.1#8396b5581c1378a368a97a58edcf2ad9d8b37af1"
+source = "git+https://github.com/Zenotta/raft-rs?branch=0.5.1#8396b5581c1378a368a97a58edcf2ad9d8b37af1"
 dependencies = [
  "getset",
  "hashbrown 0.1.8",
@@ -2601,6 +2601,7 @@ version = "0.1.0"
 dependencies = [
  "async-std",
  "async-stream",
+ "async-trait",
  "bincode",
  "bytes",
  "chrono",

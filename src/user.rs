@@ -6,12 +6,13 @@ use crate::interfaces::{
     UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::transaction_gen::{PendingMap, TransactionGen};
+use crate::transactor::Transactor;
 use crate::utils::{
-    generate_half_druid, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, to_api_keys,
-    to_route_pow_infos, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
-    RoutesPoWInfo,
+    generate_half_druid, get_paiments_for_wallet_from_utxo, to_api_keys, to_route_pow_infos,
+    ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
 };
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
+use async_trait::async_trait;
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
@@ -20,7 +21,7 @@ use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::{DrsTxHashSpec, Transaction, TxIn, TxOut};
 use naom::utils::transaction_utils::{
     construct_rb_payments_send_tx, construct_rb_receive_payment_tx, construct_receipt_create_tx,
-    construct_tx_core, construct_tx_hash, construct_tx_ins_address,
+    construct_tx_core, construct_tx_ins_address,
 };
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::task;
@@ -267,19 +268,8 @@ impl UserNode {
     /// Backup persistent storage
     pub async fn backup_persistent_store(&mut self) {
         if let Err(e) = self.wallet_db.backup_persistent_store().await {
-            error!("Error bakup up main db: {:?}", e);
+            error!("Error backup up main db: {:?}", e);
         }
-    }
-
-    /// Update the running total from a retrieved UTXO set/subset
-    pub async fn update_running_total(&mut self) {
-        let utxo_set = self.received_utxo_set.take();
-        let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
-
-        self.wallet_db
-            .save_usable_payments_to_wallet(payments)
-            .await
-            .unwrap();
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
@@ -590,17 +580,6 @@ impl UserNode {
             reason: "Shutdown",
         })
     }
-
-    pub async fn send_request_utxo_set(&mut self, address_list: UtxoFetchType) -> Result<()> {
-        self.node
-            .send(
-                self.compute_address(),
-                ComputeRequest::SendUtxoRequest { address_list },
-            )
-            .await?;
-        Ok(())
-    }
-
     pub fn get_next_payment_transaction(&self) -> Option<(Option<SocketAddr>, Transaction)> {
         self.next_payment.clone()
     }
@@ -625,7 +604,7 @@ impl UserNode {
         self.send_transactions_to_compute(compute_peer, vec![tx.clone()])
             .await?;
 
-        self.store_payment_transaction(tx.clone()).await;
+        self.wallet_db.store_payment_transaction(tx.clone()).await;
         if let Some(peer) = peer {
             self.send_payment_to_receiver(peer, tx).await?;
         }
@@ -644,7 +623,9 @@ impl UserNode {
         compute_peer: SocketAddr,
     ) -> Result<()> {
         let (peer, transaction) = self.next_rb_payment.take().unwrap();
-        self.store_payment_transaction(transaction.clone()).await;
+        self.wallet_db
+            .store_payment_transaction(transaction.clone())
+            .await;
         let _peer_span =
             info_span!("sending receipt-based transaction to compute node for processing");
         let transactions = vec![transaction.clone()];
@@ -662,29 +643,6 @@ impl UserNode {
         Ok(())
     }
 
-    /// Sends the next internal payment transaction to be processed by the connected Compute
-    /// node
-    ///
-    /// ### Arguments
-    ///
-    /// * `compute_peer` - Compute peer to send the payment tx to
-    /// * `transactions` - Transactions to send
-    pub async fn send_transactions_to_compute(
-        &mut self,
-        compute_peer: SocketAddr,
-        transactions: Vec<Transaction>,
-    ) -> Result<()> {
-        let _peer_span = info_span!("sending transactions to compute node for processing");
-        self.node
-            .send(
-                compute_peer,
-                ComputeRequest::SendTransactions { transactions },
-            )
-            .await?;
-
-        Ok(())
-    }
-
     /// Request a UTXO set/subset from Compute for updating the running total
     ///
     /// ### Arguments
@@ -694,7 +652,11 @@ impl UserNode {
         &mut self,
         address_list: UtxoFetchType,
     ) -> Option<Response> {
-        self.send_request_utxo_set(address_list).await.ok()?;
+        let compute_addr = self.compute_address();
+        self.send_request_utxo_set(address_list, compute_addr, NodeType::User)
+            .await
+            .ok()?;
+
         Some(Response {
             success: true,
             reason: "Request UTXO set",
@@ -744,30 +706,12 @@ impl UserNode {
     ///
     /// * `transaction` - Transaction to receive and save to wallet
     pub async fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
-        self.store_payment_transaction(transaction).await;
+        self.wallet_db.store_payment_transaction(transaction).await;
 
         Response {
             success: true,
             reason: "Payment transaction received",
         }
-    }
-
-    /// Store payment transaction
-    ///
-    /// ### Arguments
-    ///
-    /// * `transaction` - Transaction to be received and saved to wallet
-    pub async fn store_payment_transaction(&mut self, transaction: Transaction) {
-        let hash = construct_tx_hash(&transaction);
-
-        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
-
-        let our_payments = self
-            .wallet_db
-            .save_usable_payments_to_wallet(payments)
-            .await
-            .unwrap();
-        debug!("store_payment_transactions: {:?}", our_payments);
     }
 
     /// Process pending paiment transaction with received address
@@ -801,7 +745,7 @@ impl UserNode {
         )
     }
 
-    /// Process specified paiment, updating wallet and next_payment
+    /// Process specified payment, updating wallet and next_payment
     ///
     /// ### Arguments
     ///
@@ -816,15 +760,18 @@ impl UserNode {
     ) -> Response {
         let tx_out = vec![TxOut::new_token_amount(address, amount)];
         let asset_required = Asset::Token(amount);
-        let (tx_ins, tx_outs) =
-            if let Ok(value) = self.fetch_tx_ins_and_tx_outs(asset_required, tx_out).await {
-                value
-            } else {
-                return Response {
-                    success: false,
-                    reason: "Insufficient funds for payment",
-                };
+        let (tx_ins, tx_outs) = if let Ok(value) = self
+            .wallet_db
+            .fetch_tx_ins_and_tx_outs(asset_required, tx_out)
+            .await
+        {
+            value
+        } else {
+            return Response {
+                success: false,
+                reason: "Insufficient funds for payment",
             };
+        };
         let payment_tx = construct_tx_core(tx_ins, tx_outs);
         self.next_payment = Some((peer, payment_tx));
 
@@ -832,35 +779,6 @@ impl UserNode {
             success: true,
             reason: "Next payment transaction ready",
         }
-    }
-
-    /// Get `Vec<TxIn>` and `Vec<TxOut>` values for a transaction
-    ///
-    /// ### Arguments
-    ///
-    /// * `asset_required`              - The required `Asset`
-    /// * `tx_outs`                     - Initial `Vec<TxOut>` value
-    pub async fn fetch_tx_ins_and_tx_outs(
-        &mut self,
-        asset_required: Asset,
-        mut tx_outs: Vec<TxOut>,
-    ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
-        let (tx_cons, total_amount, tx_used) = self
-            .wallet_db
-            .fetch_inputs_for_payment(asset_required.clone())
-            .await?;
-
-        if let Some(excess) = total_amount.get_excess(&asset_required) {
-            let (excess_address, _) = self.wallet_db.generate_payment_address().await;
-            tx_outs.push(TxOut::new_asset(excess_address, excess));
-        }
-
-        let tx_ins = self
-            .wallet_db
-            .consume_inputs_for_payment(tx_cons, tx_used)
-            .await;
-
-        Ok((tx_ins, tx_outs))
     }
 
     /// Sends a payment transaction to the receiving party
@@ -1043,20 +961,6 @@ impl UserNode {
         &self.last_block_notified
     }
 
-    /// Receive the requested UTXO set/subset from Compute
-    ///
-    /// ### Arguments
-    ///
-    /// * `utxo_set` - The requested UTXO set
-    fn receive_utxo_set(&mut self, utxo_set: UtxoSet) -> Response {
-        self.received_utxo_set = Some(utxo_set);
-
-        Response {
-            success: true,
-            reason: "Received UTXO set",
-        }
-    }
-
     /// Receives a request for a new payment address to be produced
     ///
     /// ### Arguments
@@ -1094,6 +998,7 @@ impl UserNode {
         let sender_half_druid = generate_half_druid();
 
         let (tx_ins, tx_outs) = self
+            .wallet_db
             .fetch_tx_ins_and_tx_outs(sender_asset.clone(), Vec::new())
             .await?;
 
@@ -1155,6 +1060,7 @@ impl UserNode {
             None,
         );
         let tx_ins_and_outs = self
+            .wallet_db
             .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
             .await;
 
@@ -1246,6 +1152,70 @@ impl UserNode {
     /// Get `Node` member
     pub fn get_node(&self) -> &Node {
         &self.node
+    }
+
+    /// Get `Node` member as mutable (useful to reach comms)
+    pub fn get_node_mut(&mut self) -> &mut Node {
+        &mut self.node
+    }
+}
+
+#[async_trait]
+impl Transactor for UserNode {
+    type Error = UserError;
+
+    async fn send_transactions_to_compute(
+        &mut self,
+        compute_peer: SocketAddr,
+        transactions: Vec<Transaction>,
+    ) -> Result<()> {
+        let _peer_span = info_span!("Sending transactions to compute node for processing");
+        self.node
+            .send(
+                compute_peer,
+                ComputeRequest::SendTransactions { transactions },
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn send_request_utxo_set(
+        &mut self,
+        address_list: UtxoFetchType,
+        compute_addr: SocketAddr,
+        requester_node_type: NodeType,
+    ) -> Result<()> {
+        let _peer_span = info_span!("Sending UXTO request to compute node");
+        self.node
+            .send(
+                compute_addr,
+                ComputeRequest::SendUtxoRequest {
+                    address_list,
+                    requester_node_type,
+                },
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    fn receive_utxo_set(&mut self, utxo_set: UtxoSet) -> Response {
+        self.received_utxo_set = Some(utxo_set);
+
+        Response {
+            success: true,
+            reason: "Received UTXO set",
+        }
+    }
+    async fn update_running_total(&mut self) {
+        let utxo_set = self.received_utxo_set.take();
+        let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
+
+        self.wallet_db
+            .save_usable_payments_to_wallet(payments)
+            .await
+            .unwrap();
     }
 }
 

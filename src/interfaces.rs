@@ -436,6 +436,10 @@ pub enum MineRequest {
     SendTransactions {
         tx_merkle_verification: Vec<String>,
     },
+    /// Process received utxo set
+    SendUtxoSet {
+        utxo_set: UtxoSet,
+    },
     Closing,
 }
 
@@ -447,6 +451,7 @@ impl fmt::Debug for MineRequest {
             SendBlockchainItem { .. } => write!(f, "SendBlockchainItem"),
             SendBlock { .. } => write!(f, "SendBlock"),
             SendTransactions { .. } => write!(f, "SendTransactions"),
+            SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             Closing => write!(f, "Closing"),
         }
     }
@@ -496,6 +501,7 @@ pub enum ComputeRequest {
 
     SendUtxoRequest {
         address_list: UtxoFetchType,
+        requester_node_type: NodeType,
     },
     SendBlockStored(BlockStoredInfo),
     SendPoW {
@@ -543,7 +549,12 @@ impl fmt::Debug for ComputeRequest {
 
 pub trait ComputeInterface {
     /// Fetch UTXO set for given addresses
-    fn fetch_utxo_set(&mut self, peer: SocketAddr, address_list: UtxoFetchType) -> Response;
+    fn fetch_utxo_set(
+        &mut self,
+        peer: SocketAddr,
+        address_list: UtxoFetchType,
+        node_type: NodeType,
+    ) -> Response;
 
     /// Partitions a set of provided UUIDs for key creation/agreement
     /// TODO: Figure out the correct return type

@@ -373,7 +373,7 @@ pub fn format_parition_pow_address(addr: SocketAddr) -> String {
 
 /// Calculates the reward for the next block, to be placed within the coinbase tx
 ///
-/// ### Argeumtsn
+/// ### Arguments
 ///
 /// * `current_circulation` - Current circulation of all tokens
 pub fn calculate_reward(current_circulation: TokenAmount) -> TokenAmount {

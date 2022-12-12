@@ -119,7 +119,7 @@ pub struct ComputeConsensused {
     tx_current_block_previous_hash: Option<String>,
     /// The very first block to consensus.
     initial_utxo_txs: Option<BTreeMap<String, Transaction>>,
-    /// UTXO set containain the valid transaction to use as previous input hashes.
+    /// UTXO set containing the valid transaction to use as previous input hashes.
     utxo_set: TrackedUtxoSet,
     /// Accumulating block:
     /// Require majority of compute node votes for normal blocks.

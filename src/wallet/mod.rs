@@ -3,16 +3,17 @@ use crate::constants::{FUND_KEY, KNOWN_ADDRESS_KEY, WALLET_PATH};
 use crate::db_utils::{
     self, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch, DB_COL_DEFAULT,
 };
-use crate::utils::make_wallet_tx_info;
+use crate::utils::{get_paiments_for_wallet, make_wallet_tx_info};
 use bincode::{deserialize, serialize};
 use naom::crypto::pbkdf2 as pwhash;
 use naom::crypto::secretbox_chacha20_poly1305 as secretbox;
 use naom::crypto::sign_ed25519 as sign;
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
-use naom::primitives::asset::Asset;
-use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
+use naom::primitives::asset::{Asset, TokenAmount};
+use naom::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
 use naom::utils::transaction_utils::{
-    construct_address_for, construct_payment_tx_ins, construct_tx_in_signable_hash,
+    construct_address_for, construct_payment_tx_ins, construct_tx_hash,
+    construct_tx_in_signable_hash,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -409,6 +410,66 @@ impl WalletDb {
         .await?)
     }
 
+    /// Get `Vec<TxIn>` and `Vec<TxOut>` values for a transaction
+    ///
+    /// ### Arguments
+    ///
+    /// * `asset_required`              - The required `Asset`
+    /// * `tx_outs`                     - Initial `Vec<TxOut>` value
+    pub async fn fetch_tx_ins_and_tx_outs(
+        &mut self,
+        asset_required: Asset,
+        mut tx_outs: Vec<TxOut>,
+    ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
+        let (tx_cons, total_amount, tx_used) = self
+            .fetch_inputs_for_payment(asset_required.clone())
+            .await
+            .unwrap();
+
+        if let Some(excess) = total_amount.get_excess(&asset_required) {
+            let (excess_address, _) = self.generate_payment_address().await;
+            tx_outs.push(TxOut::new_asset(excess_address, excess));
+        }
+
+        let tx_ins = self.consume_inputs_for_payment(tx_cons, tx_used).await;
+
+        Ok((tx_ins, tx_outs))
+    }
+
+    /// Get `Vec<TxIn>` and `Vec<TxOut>` values for a transaction
+    ///
+    /// ### Arguments
+    ///
+    /// * `wallet_db`: Mutable ref of the WalletDB instance
+    /// * `txs` - Outpoints and Assets which correspond to addresses in the transaction store
+    pub async fn fetch_tx_ins_and_tx_outs_from_supplied_txs(
+        &mut self,
+        txs: Vec<(OutPoint, Asset)>,
+    ) -> Result<(Vec<TxIn>, Asset)> {
+        let (tx_cons, total_amount, tx_used) = self
+            .fetch_inputs_for_payment_from_supplied_txs(txs)
+            .await
+            .unwrap();
+
+        tracing::trace!("Total amount collected by store {total_amount:?}");
+
+        let tx_ins = self.consume_inputs_for_payment(tx_cons, tx_used).await;
+
+        Ok((tx_ins, total_amount))
+    }
+
+    /// Store payment transaction
+    ///
+    /// ### Arguments
+    ///
+    /// * `transaction` - Transaction to be received and saved to wallet
+    pub async fn store_payment_transaction(&mut self, transaction: Transaction) {
+        let hash = construct_tx_hash(&transaction);
+        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
+        let our_payments = self.save_usable_payments_to_wallet(payments).await.unwrap();
+        tracing::debug!("store_payment_transactions: {:?}", our_payments);
+    }
+
     /// Fetches valid TxIns based on the wallet's running total and available unspent
     /// transactions, and total value
     ///
@@ -427,6 +488,26 @@ impl WalletDb {
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
             fetch_inputs_for_payment_from_db(&db, asset_required, &encryption_key)
+        })
+        .await?
+    }
+
+    /// Fetches valid TxIns based on the supplied addresses
+    ///
+    /// TODO: Replace errors here with Error enum types that the Result can return
+    ///
+    /// ### Arguments
+    ///
+    /// * `txs` - Outpoints and Assets which correspond to addresses in the transaction store
+    pub async fn fetch_inputs_for_payment_from_supplied_txs(
+        &self,
+        txs: Vec<(OutPoint, Asset)>,
+    ) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
+        let db = self.db.clone();
+        let encryption_key = self.encryption_key.clone();
+        task::spawn_blocking(move || {
+            let db = db.lock().unwrap();
+            fetch_inputs_from_supplied_txs_for_payment_from_db(&db, txs, &encryption_key)
         })
         .await?
     }
@@ -764,6 +845,29 @@ pub fn fetch_inputs_for_payment_from_db(
         }
         if let Some(true) = amount_made.is_greater_or_equal_to(&asset_required) {
             break;
+        }
+    }
+
+    Ok((tx_cons, amount_made, tx_used))
+}
+
+/// Make TxConstructors from stored TxOut
+/// Also return the used info for db cleanup
+#[allow(clippy::type_complexity)]
+pub fn fetch_inputs_from_supplied_txs_for_payment_from_db(
+    db: &SimpleDb,
+    addresses: Vec<(OutPoint, Asset)>,
+    encryption_key: &secretbox::Key,
+) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
+    let mut tx_cons = Vec::new();
+    let mut tx_used = Vec::new();
+    let mut amount_made = Asset::Token(TokenAmount(0));
+
+    for (out_p, amount) in addresses {
+        if amount_made.add_assign(&amount) {
+            let (cons, used) = tx_constructor_from_prev_out(db, out_p, encryption_key);
+            tx_cons.push(cons);
+            tx_used.push(used);
         }
     }
 
