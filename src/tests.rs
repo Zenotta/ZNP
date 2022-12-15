@@ -1575,9 +1575,9 @@ async fn main_loops_raft_1_node_common(
     network_config.compute_seed_utxo =
         make_compute_seed_utxo(&[(seed_count, "000000")], initial_amount);
     network_config.user_test_auto_gen_setup = UserAutoGenTxSetup {
-        user_initial_transactions: vec![(0..seed_wallet_count)
+        user_initial_transactions: (0..seed_wallet_count)
             .map(|i| wallet_seed((i, "000000"), &initial_amount))
-            .collect()],
+            .collect::<Vec<WalletTxSpec>>(),
         user_setup_tx_chunk_size: Some(5),
         user_setup_tx_in_per_tx: Some(3),
         user_setup_tx_max_count: tx_max_count,
@@ -1837,7 +1837,7 @@ async fn gen_transactions_common(
     // Arrange
     //
     network_config.user_test_auto_gen_setup = UserAutoGenTxSetup {
-        user_initial_transactions: vec![vec![wallet_seed(VALID_TXS_IN[0], &DEFAULT_SEED_AMOUNT)]],
+        user_initial_transactions: vec![wallet_seed(VALID_TXS_IN[0], &DEFAULT_SEED_AMOUNT)],
         user_setup_tx_chunk_size: None,
         user_setup_tx_in_per_tx: Some(2),
         user_setup_tx_max_count: 4,
@@ -2262,10 +2262,29 @@ async fn request_blockchain_item_act(
     storage_to: &str,
     block_key: &str,
 ) {
-    miner_request_blockchain_item(network, miner_from, block_key).await;
+    let storage_node_addr = network
+        .storage(storage_to)
+        .unwrap()
+        .clone()
+        .lock()
+        .await
+        .address();
+    miner_request_blockchain_item(network, miner_from, block_key, storage_node_addr).await;
     storage_handle_event(network, storage_to, "Blockchain item fetched from storage").await;
     storage_send_blockchain_item(network, storage_to).await;
     miner_handle_event(network, miner_from, "Blockchain item received").await;
+}
+
+async fn miner_request_blockchain_item(
+    network: &mut Network,
+    miner_from: &str,
+    block_key: &str,
+    storage_node_addr: SocketAddr,
+) {
+    let mut m = network.miner(miner_from).unwrap().lock().await;
+    m.request_blockchain_item(block_key.to_owned(), storage_node_addr)
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -4467,13 +4486,6 @@ async fn user_send_receipt_asset(
 //
 // MinerNode helpers
 //
-
-async fn miner_request_blockchain_item(network: &mut Network, miner_from: &str, block_key: &str) {
-    let mut m = network.miner(miner_from).unwrap().lock().await;
-    m.request_blockchain_item(block_key.to_owned())
-        .await
-        .unwrap();
-}
 
 async fn miner_get_blockchain_item_received_b_num(
     network: &mut Network,
