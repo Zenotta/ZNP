@@ -84,6 +84,7 @@ use super::tcp_tls::{
     verify_is_valid_for_dns_names, TcpTlsConnector, TcpTlsListner, TcpTlsStream, TlsCertificate,
 };
 use super::{CommsError, Event, Result, TcpTlsConfig};
+use crate::comms_handler::error::PeerInfo;
 use crate::constants::NETWORK_VERSION;
 use crate::interfaces::{node_type_as_str, CommMessage, NodeType, Token};
 use crate::utils::MpscTracingSender;
@@ -107,6 +108,7 @@ use tokio_stream::{Stream, StreamExt};
 use tokio_util::codec::{length_delimited, FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info_span, trace, warn, Span};
 use tracing_futures::Instrument;
+
 extern crate serde_json;
 
 pub type ResultBytesSender = MpscTracingSender<io::Result<Bytes>>;
@@ -367,7 +369,10 @@ impl Node {
     async fn connect_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
         if !self.peers.read().await.contains_key(&peer) {
             if *self.listener_and_connect_paused.read().await {
-                return Err(CommsError::PeerNotFound);
+                return Err(CommsError::PeerNotFound(PeerInfo {
+                    node_type: None,
+                    address: Some(peer),
+                }));
             }
 
             let stream = self.tcp_tls_connector.read().await.connect(peer).await?;
@@ -402,23 +407,37 @@ impl Node {
         // Wait for a handshake response
         let handshake_response = {
             let mut peers = self.peers.write().await;
-            let peer = peers.get_mut(&peer).ok_or(CommsError::PeerNotFound)?;
+            let peer = peers
+                .get_mut(&peer)
+                .ok_or(CommsError::PeerNotFound(PeerInfo {
+                    node_type: None,
+                    address: Some(peer),
+                }))?;
             peer.notify_handshake_response
                 .1
                 .take()
-                .ok_or(CommsError::PeerInvalidState)?
+                .ok_or(CommsError::PeerInvalidState(PeerInfo {
+                    node_type: None,
+                    address: Some(peer.addr),
+                }))?
         };
 
         match timeout(RESPONSE_TIMEOUT, handshake_response)
             .await
             .map_err(|e| {
                 trace!("Timeout after {e}. Failed connection to {:?}", peer);
-                CommsError::PeerNotFound
+                CommsError::PeerNotFound(PeerInfo {
+                    node_type: None,
+                    address: Some(peer),
+                })
             })? {
             Ok(()) => trace!("Complete connection to {:?}", peer),
             Err(_) => {
                 trace!("Complete failed connection to {:?}", peer);
-                return Err(CommsError::PeerNotFound);
+                return Err(CommsError::PeerNotFound(PeerInfo {
+                    node_type: None,
+                    address: Some(peer),
+                }));
             }
         }
 
@@ -557,8 +576,16 @@ impl Node {
     /// Get peer type.
     pub async fn get_peer_node_type(&self, peer_addr: SocketAddr) -> Result<NodeType> {
         let peers = self.peers.read().await;
-        let peer = peers.get(&peer_addr).ok_or(CommsError::PeerNotFound)?;
-        peer.peer_type.ok_or(CommsError::PeerInvalidState)
+        let peer = peers
+            .get(&peer_addr)
+            .ok_or(CommsError::PeerNotFound(PeerInfo {
+                node_type: None,
+                address: Some(peer_addr),
+            }))?;
+        peer.peer_type.ok_or(CommsError::PeerInvalidState(PeerInfo {
+            node_type: None,
+            address: Some(peer_addr),
+        }))
     }
 
     /// Sends data to a peer.
@@ -566,7 +593,12 @@ impl Node {
         let data = Bytes::from(serialize(&message)?);
 
         let peers = self.peers.read().await;
-        let peer = peers.get(&peer_addr).ok_or(CommsError::PeerNotFound)?;
+        let peer = peers
+            .get(&peer_addr)
+            .ok_or(CommsError::PeerNotFound(PeerInfo {
+                node_type: None,
+                address: Some(peer_addr),
+            }))?;
         let mut tx = peer.send_tx.clone();
         self.send_bytes(peer_addr, &mut tx, data).await
     }
@@ -801,17 +833,26 @@ impl Node {
         peer_type: NodeType,
     ) -> Result<()> {
         if !self.is_compatible(peer_type, network_version) {
-            return Err(CommsError::PeerIncompatible);
+            return Err(CommsError::PeerIncompatible(PeerInfo {
+                node_type: Some(peer_type),
+                address: Some(peer_in_addr),
+            }));
         }
 
         let mut all_peers = self.peers.write().await;
         if all_peers.contains_key(&peer_in_addr) {
-            return Err(CommsError::PeerDuplicate);
+            return Err(CommsError::PeerDuplicate(PeerInfo {
+                node_type: Some(peer_type),
+                address: Some(peer_in_addr),
+            }));
         }
 
         let peer = all_peers
             .get_mut(&peer_out_addr)
-            .ok_or(CommsError::PeerNotFound)?;
+            .ok_or(CommsError::PeerNotFound(PeerInfo {
+                node_type: None,
+                address: Some(peer_out_addr),
+            }))?;
 
         if let Some(peer_cert) = peer_cert {
             let connector = self.tcp_tls_connector.read().await;
@@ -847,7 +888,10 @@ impl Node {
         contacts: Vec<SocketAddr>,
     ) -> Result<()> {
         if !self.is_compatible(peer_type, network_version) {
-            return Err(CommsError::PeerIncompatible);
+            return Err(CommsError::PeerIncompatible(PeerInfo {
+                node_type: Some(peer_type),
+                address: Some(peer_addr),
+            }));
         }
 
         let mut all_peers = self.peers.write().await;
@@ -856,7 +900,10 @@ impl Node {
         {
             let peer = all_peers
                 .get_mut(&peer_addr)
-                .ok_or(CommsError::PeerNotFound)?;
+                .ok_or(CommsError::PeerNotFound(PeerInfo {
+                    node_type: Some(peer_type),
+                    address: Some(peer_addr),
+                }))?;
             peer.network_version = Some(network_version);
             peer.peer_type = Some(peer_type);
 
@@ -979,7 +1026,7 @@ impl Node {
                         }
                         Err(err) => {
                             // Drop error connection
-                            warn!("Remove peer: {}, err: {:?}", peer_addr, err);
+                            warn!("Remove peer: {err:?}");
                             let mut peers_list = peers.write().await;
                             let _ = peers_list.remove(&peer_addr);
                             trace!("sock_in dropped for {:?}", peer_addr);

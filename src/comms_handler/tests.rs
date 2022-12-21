@@ -179,12 +179,18 @@ async fn disconnect_connection(subset: bool) {
     } else {
         matches!(
             actual2,
-            (Err(CommsError::PeerNotFound), Err(CommsError::PeerNotFound))
+            (
+                Err(CommsError::PeerNotFound(_)),
+                Err(CommsError::PeerNotFound(_))
+            )
         )
     };
     let success3 = matches!(
         actual3,
-        (Err(CommsError::PeerNotFound), Err(CommsError::PeerNotFound)),
+        (
+            Err(CommsError::PeerNotFound(_)),
+            Err(CommsError::PeerNotFound(_))
+        ),
     );
     assert!(success2 && success3, "{:?}", (actual2, actual3));
 
@@ -229,8 +235,8 @@ async fn listen_paused_resumed_stopped() {
         matches!(
             actual,
             (
-                Err(CommsError::PeerNotFound),
-                Err(CommsError::PeerNotFound),
+                Err(CommsError::PeerNotFound(_)),
+                Err(CommsError::PeerNotFound(_)),
                 Ok(_),
                 Err(CommsError::Io(_))
             )
@@ -275,7 +281,7 @@ async fn connect_full(from_full: bool) {
     } else {
         n2.connect_to(n1.address()).await.unwrap();
         let err = n3.connect_to(n1.address()).await;
-        let is_expected = matches!(err, Err(CommsError::PeerNotFound));
+        let is_expected = matches!(err, Err(CommsError::PeerNotFound(_)));
         (err, is_expected)
     };
 
@@ -294,8 +300,8 @@ async fn connect_full(from_full: bool) {
             actual,
             (
                 (Err(_), true),
-                Err(CommsError::PeerNotFound),
-                Err(CommsError::PeerNotFound),
+                Err(CommsError::PeerNotFound(_)),
+                Err(CommsError::PeerNotFound(_)),
                 Ok(()),
                 Ok(()),
             ),
@@ -346,16 +352,16 @@ async fn nodes_incompatible() {
             actual,
             (
                 (
-                    Err(CommsError::PeerNotFound),
-                    Err(CommsError::PeerNotFound),
-                    Err(CommsError::PeerNotFound),
-                    Err(CommsError::PeerNotFound)
+                    Err(CommsError::PeerNotFound(_)),
+                    Err(CommsError::PeerNotFound(_)),
+                    Err(CommsError::PeerNotFound(_)),
+                    Err(CommsError::PeerNotFound(_))
                 ),
                 (
-                    Err(CommsError::PeerNotFound),
-                    Err(CommsError::PeerNotFound),
-                    Err(CommsError::PeerNotFound),
-                    Err(CommsError::PeerNotFound)
+                    Err(CommsError::PeerNotFound(_)),
+                    Err(CommsError::PeerNotFound(_)),
+                    Err(CommsError::PeerNotFound(_)),
+                    Err(CommsError::PeerNotFound(_))
                 )
             )
         ),
@@ -413,9 +419,9 @@ async fn nodes_tls_mismatch() {
             (
                 (
                     Err(CommsError::Io(_)),
-                    Err(CommsError::PeerNotFound),
-                    Err(CommsError::PeerNotFound),
-                    Err(CommsError::PeerNotFound)
+                    Err(CommsError::PeerNotFound(_)),
+                    Err(CommsError::PeerNotFound(_)),
+                    Err(CommsError::PeerNotFound(_))
                 ),
                 (Ok(_), Ok(_))
             )
@@ -483,11 +489,11 @@ async fn nodes_tls_ca_mismatch() {
             (
                 (
                     Err(CommsError::Io(_)),
-                    Err(CommsError::PeerNotFound),
-                    Err(CommsError::PeerNotFound),
-                    Err(CommsError::PeerNotFound)
+                    Err(CommsError::PeerNotFound(_)),
+                    Err(CommsError::PeerNotFound(_)),
+                    Err(CommsError::PeerNotFound(_))
                 ),
-                (Ok(_), Err(CommsError::PeerInvalidState), Ok(_), Ok(_))
+                (Ok(_), Err(CommsError::PeerInvalidState(_)), Ok(_), Ok(_))
             )
         ),
         "{:?}",
@@ -554,12 +560,12 @@ async fn nodes_tls_ca_unmapped_mismatch() {
             actual,
             (
                 (
-                    Err(CommsError::PeerNotFound),
+                    Err(CommsError::PeerNotFound(_)),
                     Err(CommsError::Io(_)),
-                    Err(CommsError::PeerNotFound),
-                    Err(CommsError::PeerNotFound)
+                    Err(CommsError::PeerNotFound(_)),
+                    Err(CommsError::PeerNotFound(_))
                 ),
-                (Ok(_), Err(CommsError::PeerInvalidState), Ok(_), Ok(_))
+                (Ok(_), Err(CommsError::PeerInvalidState(_)), Ok(_), Ok(_))
             )
         ),
         "{:?}",
