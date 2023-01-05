@@ -294,7 +294,7 @@ impl MiningPipelineInfo {
         self.proposed_keys = Default::default();
     }
 
-    pub fn cleanup_participant_intake(&mut self, inactive_miners: &Vec<SocketAddr>) {
+    pub fn cleanup_participant_intake(&mut self, inactive_miners: &[SocketAddr]) {
         for (_, participants) in self.participants_intake.iter_mut() {
             participants
                 .unsorted
@@ -305,7 +305,7 @@ impl MiningPipelineInfo {
         }
     }
 
-    pub fn cleanup_participants_mining(&mut self, inactive_miners: &Vec<SocketAddr>) {
+    pub fn cleanup_participants_mining(&mut self, inactive_miners: &[SocketAddr]) {
         for (_, participants) in self.participants_mining.iter_mut() {
             participants
                 .unsorted

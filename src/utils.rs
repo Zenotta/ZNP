@@ -718,7 +718,7 @@ pub fn make_wallet_tx_info(
     seed: &WalletTxSpec,
 ) -> (OutPoint, PublicKey, SecretKey, TokenAmount, Option<u64>) {
     let tx_out_p = decode_wallet_out_point(&seed.out_point);
-    let amount = TokenAmount(seed.amount as u64);
+    let amount = TokenAmount(seed.amount);
     let sk = decode_secret_key(&seed.secret_key).unwrap();
     let pk = decode_pub_key(&seed.public_key).unwrap();
     let version = seed.address_version;

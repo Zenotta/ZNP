@@ -892,12 +892,7 @@ pub async fn close_raft_loops(
         close_raft_loop(node).await
     }
 
-    join_all(
-        std::mem::take(raft_loop_handles)
-            .into_iter()
-            .map(|(_, v)| v),
-    )
-    .await;
+    join_all(std::mem::take(raft_loop_handles).into_values()).await;
 }
 
 /// Stop node listening on port

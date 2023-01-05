@@ -2639,7 +2639,7 @@ pub async fn create_receipt_asset_raft_1_node() {
     let committed_utxo_set = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
     let actual_utxo_receipt: Vec<Vec<_>> = committed_utxo_set
         .into_iter()
-        .map(|v| v.into_iter().map(|(_, v)| v.value).collect())
+        .map(|v| v.into_values().map(|v| v.value).collect())
         .collect();
 
     let actual_running_total_after = node_get_wallet_info(&mut network, "user1").await.0;
@@ -2707,7 +2707,7 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     let committed_utxo_set = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
     let actual_utxo_receipt: Vec<Vec<_>> = committed_utxo_set
         .into_iter()
-        .map(|v| v.into_iter().map(|(_, v)| v.value).collect())
+        .map(|v| v.into_values().map(|v| v.value).collect())
         .collect();
 
     //

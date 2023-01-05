@@ -347,7 +347,7 @@ impl RaftNode {
     ///
     /// * `ready` - Ready object that contains the messages to be sent.
     async fn send_messages_to_peers(&mut self, ready: &mut Ready) {
-        self.outgoing_msgs_and_groups_count.1 += if ready.messages.is_empty() { 0 } else { 1 };
+        self.outgoing_msgs_and_groups_count.1 += usize::from(!ready.messages.is_empty());
         for msg in ready.messages.drain(..) {
             trace!("send_messages_to_peers({}, {:?})", self.node.raft.id, msg);
             self.outgoing_msgs_and_groups_count.0 += 1;

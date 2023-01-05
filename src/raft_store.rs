@@ -265,7 +265,7 @@ fn batch_write(presistent: &mut SimpleDb, batch: SimpleDbWriteBatchDone) -> Raft
 fn get_persistent_entry(presistent: &SimpleDb, index: u64) -> RaftResult<Option<Entry>> {
     let key = format_entry_key(index);
     if let Some(bytes) = presistent
-        .get_cf(DB_COL_DEFAULT, &key)
+        .get_cf(DB_COL_DEFAULT, key)
         .map_err(from_db_err)?
     {
         Ok(Some(protobuf::parse_from_bytes::<Entry>(&bytes)?))

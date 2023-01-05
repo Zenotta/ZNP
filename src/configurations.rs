@@ -313,5 +313,5 @@ fn deserialize_token_amount<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<TokenAmount, D::Error> {
     let value: u64 = serde::Deserialize::deserialize(deserializer)?;
-    Ok(TokenAmount(value as u64))
+    Ok(TokenAmount(value))
 }
