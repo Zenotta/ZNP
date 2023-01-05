@@ -1074,12 +1074,14 @@ impl ComputeNode {
 
     /// Floods the closing event to everyone
     pub async fn flood_closing_events(&mut self) -> Result<()> {
-        self.node
+        let _ = self
+            .node
             .send_to_all(Some(self.storage_addr).into_iter(), StorageRequest::Closing)
             .await
             .unwrap();
 
-        self.node
+        let _ = self
+            .node
             .send_to_all(
                 self.node_raft.raft_peer_addrs().copied(),
                 ComputeRequest::Closing,
@@ -1087,12 +1089,14 @@ impl ComputeNode {
             .await
             .unwrap();
 
-        self.node
+        let _ = self
+            .node
             .send_to_all(self.request_list.iter().copied(), MineRequest::Closing)
             .await
             .unwrap();
 
-        self.node
+        let _ = self
+            .node
             .send_to_all(
                 self.user_notification_list.iter().copied(),
                 UserRequest::Closing,
@@ -1136,7 +1140,10 @@ impl ComputeNode {
         let participants = self.node_raft.get_mining_participants();
         let non_participants = self.request_list.difference(participants.lookup());
 
-        self.node
+        let mut unsent_miners = vec![];
+
+        if let Ok(unsent_nodes) = self
+            .node
             .send_to_all(
                 participants.iter().copied(),
                 MineRequest::SendBlock {
@@ -1148,9 +1155,12 @@ impl ComputeNode {
                 },
             )
             .await
-            .unwrap();
+        {
+            unsent_miners.extend(unsent_nodes);
+        }
 
-        self.node
+        if let Ok(unsent_nodes) = self
+            .node
             .send_to_all(
                 non_participants.copied(),
                 MineRequest::SendBlock {
@@ -1162,9 +1172,35 @@ impl ComputeNode {
                 },
             )
             .await
-            .unwrap();
+        {
+            unsent_miners.extend(unsent_nodes);
+        }
+
+        if !unsent_miners.is_empty() {
+            self.flush_stale_miners(unsent_miners);
+        }
 
         Ok(())
+    }
+
+    pub fn flush_stale_miners(&mut self, stale_miners: Vec<SocketAddr>) {
+        trace!("Flushing stale miners from mining pipeline and request list {stale_miners:?}");
+
+        // Flush stale miners
+        self.request_list
+            .retain(|addr| !stale_miners.contains(addr));
+
+        // Update DB
+        if let Err(e) = self.db.put_cf(
+            DB_COL_INTERNAL,
+            REQUEST_LIST_KEY,
+            &serialize(&self.request_list).unwrap(),
+        ) {
+            error!("Error writing updated miner request list to disk: {e:?}");
+        }
+
+        // Cleanup miners from block pipeline
+        self.node_raft.flush_stale_miners(&stale_miners);
     }
 
     /// Floods the current block to participants for mining

@@ -499,36 +499,55 @@ impl Node {
         let message_id = rand::thread_rng().gen();
         let payload = Bytes::from(serialize(&data)?);
 
-        self.send_multicast(
-            peers.into_iter(),
-            CommMessage::Gossip {
-                payload: payload.clone(),
-                id: message_id,
-                ttl: 0,
-            },
-        )
-        .await;
+        let _ = self
+            .send_multicast(
+                peers.into_iter(),
+                CommMessage::Gossip {
+                    payload: payload.clone(),
+                    id: message_id,
+                    ttl: 0,
+                },
+            )
+            .await;
 
         Ok(())
     }
 
-    async fn send_multicast(&self, peers: impl Iterator<Item = SocketAddr>, msg: CommMessage) {
+    // Returns a list of the peers to which the payload could not be sent.
+    async fn send_multicast(
+        &self,
+        peers: impl Iterator<Item = SocketAddr>,
+        msg: CommMessage,
+    ) -> Vec<SocketAddr> {
         trace!("send_multicast");
+        let unsent_nodes = Arc::new(Mutex::new(vec![]));
 
         let join_handles: Vec<_> = peers
             .map(|peer| {
                 let mut node = self.clone();
                 let msg = msg.clone();
+                let unsent_list = unsent_nodes.clone();
 
                 tokio::spawn(async move {
                     if let Err(error) = node.send_message(peer, msg).await {
                         warn!(?error, "send_multicast");
+                        if let CommsError::PeerNotFound(_) = error {
+                            unsent_list.lock().await.push(peer);
+                        }
                     }
                 })
             })
             .collect();
 
         join_all(join_handles).await;
+
+        match Arc::try_unwrap(unsent_nodes) {
+            Ok(result) => result.into_inner(),
+            Err(e) => {
+                error!("Error removing std::Arc from unsent_nodes list: {e:?}");
+                vec![]
+            }
+        }
     }
 
     /// Returns a list of known peers who are members of the same ring as ours.
@@ -616,12 +635,13 @@ impl Node {
         &mut self,
         peers: impl Iterator<Item = SocketAddr>,
         data: impl Serialize,
-    ) -> Result<()> {
+    ) -> Result<Vec<SocketAddr>> {
         let payload = Bytes::from(serialize(&data)?);
         let id = rand::thread_rng().gen();
-        self.send_multicast(peers, CommMessage::Direct { payload, id })
+        let unsent_nodes = self
+            .send_multicast(peers, CommMessage::Direct { payload, id })
             .await;
-        Ok(())
+        Ok(unsent_nodes)
     }
 
     /// Prepares and sends a handshake message to a given peer.
@@ -807,15 +827,16 @@ impl Node {
         let payload = payload.clone();
 
         tokio::spawn(async move {
-            node.send_multicast(
-                peers.into_iter(),
-                CommMessage::Gossip {
-                    payload,
-                    id: message_id,
-                    ttl: ttl + 1,
-                },
-            )
-            .await;
+            let _ = node
+                .send_multicast(
+                    peers.into_iter(),
+                    CommMessage::Gossip {
+                        payload,
+                        id: message_id,
+                        ttl: ttl + 1,
+                    },
+                )
+                .await;
         });
 
         Ok(())

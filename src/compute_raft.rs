@@ -599,6 +599,15 @@ impl ComputeRaft {
         self.consensused.block_pipeline.clear_proposed_keys();
     }
 
+    pub fn flush_stale_miners(&mut self, unsent_miners: &Vec<SocketAddr>) {
+        self.consensused
+            .block_pipeline
+            .cleanup_participant_intake(unsent_miners);
+        self.consensused
+            .block_pipeline
+            .cleanup_participants_mining(unsent_miners);
+    }
+
     /// Process as a result of timeout_propose_transactions.
     /// Reset timeout, and propose local transactions if available.
     pub async fn propose_local_transactions_at_timeout(&mut self) {

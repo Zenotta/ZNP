@@ -1288,7 +1288,6 @@ dependencies = [
  "aes-gcm-siv",
  "crunchy",
  "hex",
- "rand 0.8.5",
  "vdf",
 ]
 
