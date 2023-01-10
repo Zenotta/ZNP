@@ -996,6 +996,7 @@ impl ComputeNode {
     ///
     /// * `peer` - Sending peer's socket address
     async fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
+        trace!("Received partition request from {peer:?}");
         self.request_list.insert(peer);
         self.db
             .put_cf(
@@ -1605,6 +1606,11 @@ impl ComputeNode {
             success: true,
             reason: "Transactions added to tx pool",
         }
+    }
+
+    #[cfg(test)]
+    pub async fn simulate_partition_request_from_peer(&mut self, peer: SocketAddr) {
+        let _ = self.receive_partition_request(peer).await;
     }
 }
 
