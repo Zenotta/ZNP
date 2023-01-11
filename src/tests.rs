@@ -466,18 +466,6 @@ async fn full_flow_common(
     create_block_act(&mut network, Cfg::All, cfg_num).await;
     modify_network(&mut network, "After create block 1", &modify_cfg).await;
 
-    // Since startup requests are not sent during reconnections in tests,
-    // simulate receiving them at compute nodes
-    let compute_nodes = network.all_active_nodes()[&NodeType::Compute].clone();
-    for c in compute_nodes {
-        let mut c = network.compute(&c).unwrap().lock().await;
-        c.simulate_partition_request_from_peer(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            11191,
-        ))
-        .await;
-    }
-
     proof_of_work_act(&mut network, CfgPow::Parallel, cfg_num, false, None).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
     let stored1 = storage_get_last_block_stored(&mut network, "storage1").await;
@@ -554,7 +542,21 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
                 }
             }
             CfgModif::Disconnect(v) => network.disconnect_nodes_named(&[v.to_string()]).await,
-            CfgModif::Reconnect(v) => network.re_connect_nodes_named(&[v.to_string()]).await,
+            CfgModif::Reconnect(v) => {
+                network.re_connect_nodes_named(&[v.to_string()]).await;
+
+                // Since startup requests are not sent during reconnections in tests,
+                // simulate receiving them at compute nodes
+                if let Some(miner) = network.miner(v) {
+                    let addr = miner.lock().await.address();
+
+                    let compute_nodes = network.all_active_nodes()[&NodeType::Compute].clone();
+                    for c in compute_nodes {
+                        let mut c = network.compute(&c).unwrap().lock().await;
+                        c.simulate_partition_request_from_peer(addr).await;
+                    }
+                }
+            }
         }
     }
 }

@@ -2,9 +2,11 @@ use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{BLOCK_PREPEND, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
 use crate::interfaces::{
-    BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
+    BlockchainItem, BlockchainItemMeta, DruidDroplet, NodeType, PowInfo, ProofOfWork,
+    StoredSerializingBlock,
 };
 use crate::wallet::WalletDb;
+use crate::ComputeRequest;
 use bincode::serialize;
 use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
@@ -267,6 +269,8 @@ pub async fn loop_connnect_to_peers_async(
     peers: Vec<SocketAddr>,
     mut close_rx: Option<oneshot::Receiver<()>>,
 ) {
+    let mut is_initial_conn = true;
+
     loop {
         for peer in node.unconnected_peers(&peers).await {
             trace!(?peer, "Try to connect to");
@@ -274,7 +278,22 @@ pub async fn loop_connnect_to_peers_async(
                 trace!(?peer, ?e, "Try to connect to failed");
             } else {
                 trace!(?peer, "Try to connect to succeeded");
+                if NodeType::Miner == node.get_node_type() && !is_initial_conn {
+                    trace!("Sending PartitionRequest to Compute node: {peer:?} after reconnection");
+                    // Send a Partition request to the Compute Node
+                    // This is done because Compute Nodes flush miners after a disconnection event
+                    node.send(peer, ComputeRequest::SendPartitionRequest)
+                        .await
+                        .unwrap()
+                }
             }
+        }
+
+        if node.unconnected_peers(&peers).await.is_empty() {
+            // We finished our initial connections, now set the flag to false
+            // to indicate that connections after this are actual reconnections
+            // and therefore requires Miners to send PartitionRequest
+            is_initial_conn = false;
         }
 
         let delay_retry = tokio::time::sleep(Duration::from_millis(500));
