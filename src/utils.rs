@@ -2,11 +2,9 @@ use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{BLOCK_PREPEND, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
 use crate::interfaces::{
-    BlockchainItem, BlockchainItemMeta, DruidDroplet, NodeType, PowInfo, ProofOfWork,
-    StoredSerializingBlock,
+    BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
 };
 use crate::wallet::WalletDb;
-use crate::ComputeRequest;
 use bincode::serialize;
 use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
@@ -48,6 +46,7 @@ pub type LocalEventReceiver = mpsc::Receiver<LocalEvent>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalEvent {
     CoordinatedShutdown(u64),
+    ReconnectionComplete,
     Exit(&'static str),
     Ignore,
 }
@@ -268,6 +267,7 @@ pub async fn loop_connnect_to_peers_async(
     mut node: Node,
     peers: Vec<SocketAddr>,
     mut close_rx: Option<oneshot::Receiver<()>>,
+    mut local_events_tx: LocalEventSender,
 ) {
     let mut is_initial_conn = true;
 
@@ -278,13 +278,12 @@ pub async fn loop_connnect_to_peers_async(
                 trace!(?peer, ?e, "Try to connect to failed");
             } else {
                 trace!(?peer, "Try to connect to succeeded");
-                if NodeType::Miner == node.get_node_type() && !is_initial_conn {
+                if !is_initial_conn {
                     trace!("Sending PartitionRequest to Compute node: {peer:?} after reconnection");
-                    // Send a Partition request to the Compute Node
-                    // This is done because Compute Nodes flush miners after a disconnection event
-                    node.send(peer, ComputeRequest::SendPartitionRequest)
+                    local_events_tx
+                        .send(LocalEvent::ReconnectionComplete, "Reconnect Complete")
                         .await
-                        .unwrap()
+                        .unwrap();
                 }
             }
         }
@@ -829,11 +828,12 @@ pub async fn shutdown_connections(node_conn: &mut Node) {
 pub fn loops_re_connect_disconnect(
     node_conn: Node,
     addrs_to_connect: Vec<SocketAddr>,
-    mut local_events_tx: LocalEventSender,
+    local_events_tx: LocalEventSender,
 ) -> (
     (impl Future<Output = ()>, oneshot::Sender<()>),
     (impl Future<Output = ()>, oneshot::Sender<()>),
 ) {
+    let mut local_events_tx_for_disconnect = local_events_tx.clone();
     // PERMANENT CONNEXION HANDLING
     let re_connect = {
         let (stop_re_connect_tx, stop_re_connect_rx) = tokio::sync::oneshot::channel::<()>();
@@ -841,8 +841,13 @@ pub fn loops_re_connect_disconnect(
         (
             async move {
                 println!("Start connect to requested peers");
-                loop_connnect_to_peers_async(node_conn, addrs_to_connect, Some(stop_re_connect_rx))
-                    .await;
+                loop_connnect_to_peers_async(
+                    node_conn,
+                    addrs_to_connect,
+                    Some(stop_re_connect_rx),
+                    local_events_tx,
+                )
+                .await;
                 println!("Reconnect complete");
             },
             stop_re_connect_tx,
@@ -865,8 +870,12 @@ pub fn loops_re_connect_disconnect(
                     };
 
                     paused = pause_and_disconnect_on_path(&mut node_conn, paused).await;
-                    shutdown_num =
-                        shutdown_on_path(&mut node_conn, &mut local_events_tx, shutdown_num).await;
+                    shutdown_num = shutdown_on_path(
+                        &mut node_conn,
+                        &mut local_events_tx_for_disconnect,
+                        shutdown_num,
+                    )
+                    .await;
                 }
                 println!("Complete mode input check");
             },

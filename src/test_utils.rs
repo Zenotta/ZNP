@@ -594,6 +594,16 @@ impl ArcNode {
             None
         }
     }
+
+    pub async fn get_local_event_tx(&self) -> LocalEventSender {
+        match self {
+            ArcNode::Compute(c) => c.lock().await.local_event_tx().clone(),
+            ArcNode::Miner(m) => m.lock().await.local_event_tx().clone(),
+            ArcNode::Storage(s) => s.lock().await.local_event_tx().clone(),
+            ArcNode::User(u) => u.lock().await.local_event_tx().clone(),
+            ArcNode::PreLaunch(p) => p.lock().await.local_event_tx().clone(),
+        }
+    }
 }
 
 ///Dispatch to address
@@ -932,10 +942,11 @@ pub async fn connect_all_nodes(arc_nodes: &BTreeMap<String, ArcNode>, dead: &BTr
     // Need to connect first so Raft messages can be sent.
     info!("Start connect to peers");
     for (name, node) in arc_nodes {
+        let local_event_tx = node.get_local_event_tx().await;
         let (node_conn, mut addrs, _) = connect_info_peers(node).await;
         addrs.retain(|a| !dead.contains(a));
 
-        loop_connnect_to_peers_async(node_conn, addrs, None).await;
+        loop_connnect_to_peers_async(node_conn, addrs, None, local_event_tx).await;
         info!(?name, "Peer connect complete");
     }
 

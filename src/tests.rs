@@ -544,16 +544,38 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
             CfgModif::Disconnect(v) => network.disconnect_nodes_named(&[v.to_string()]).await,
             CfgModif::Reconnect(v) => {
                 network.re_connect_nodes_named(&[v.to_string()]).await;
+                let mut event_tx = network.get_local_event_tx(v).await.unwrap();
+                event_tx
+                    .send(
+                        LocalEvent::ReconnectionComplete,
+                        "reconnection complete test",
+                    )
+                    .await
+                    .unwrap();
 
-                // Since startup requests are not sent during reconnections in tests,
-                // simulate receiving them at compute nodes
+                let event = Some((
+                    v.to_string(),
+                    vec!["Sent startup requests on reconnection".to_string()],
+                ))
+                .into_iter()
+                .collect();
+                node_all_handle_different_event(network, &[v.to_string()], &event).await;
+
+                // Process miner's request at compute node
                 if let Some(miner) = network.miner(v) {
-                    let addr = miner.lock().await.address();
+                    let compute_addr = miner.lock().await.compute_address();
 
                     let compute_nodes = network.all_active_nodes()[&NodeType::Compute].clone();
                     for c in compute_nodes {
-                        let mut c = network.compute(&c).unwrap().lock().await;
-                        c.simulate_partition_request_from_peer(addr).await;
+                        if network.compute(&c).unwrap().lock().await.address() == compute_addr {
+                            compute_handle_event(
+                                network,
+                                &c,
+                                &["Received partition request successfully"],
+                            )
+                            .await;
+                            break;
+                        }
                     }
                 }
             }

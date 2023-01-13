@@ -641,6 +641,14 @@ impl ComputeNode {
                 reason: "Partition PoW received successfully",
             }) => {}
             Ok(Response {
+                success: true,
+                reason: "Sent startup requests on reconnection",
+            }) => debug!("Sent startup requests on reconnection"),
+            Ok(Response {
+                success: false,
+                reason: "Failed to send startup requests on reconnection",
+            }) => error!("Failed to send startup requests on reconnection"),
+            Ok(Response {
                 success: false,
                 reason: "Partition list complete",
             }) => {}
@@ -723,7 +731,7 @@ impl ComputeNode {
                     }
                 }
                 Some(event) = self.local_events.rx.recv(), if ready => {
-                    if let Some(res) = self.handle_local_event(event) {
+                    if let Some(res) = self.handle_local_event(event).await {
                         return Some(Ok(res));
                     }
                 }
@@ -807,12 +815,25 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `event` - Event to process.
-    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+    async fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
         match event {
             LocalEvent::Exit(reason) => Some(Response {
                 success: true,
                 reason,
             }),
+            LocalEvent::ReconnectionComplete => {
+                if let Err(err) = self.send_startup_requests().await {
+                    error!("Failed to send startup requests on reconnect: {}", err);
+                    return Some(Response {
+                        success: false,
+                        reason: "Failed to send startup requests on reconnection",
+                    });
+                }
+                Some(Response {
+                    success: true,
+                    reason: "Sent startup requests on reconnection",
+                })
+            }
             LocalEvent::CoordinatedShutdown(shutdown) => {
                 self.coordinated_shutdown = shutdown;
                 Some(Response {
@@ -1606,11 +1627,6 @@ impl ComputeNode {
             success: true,
             reason: "Transactions added to tx pool",
         }
-    }
-
-    #[cfg(test)]
-    pub async fn simulate_partition_request_from_peer(&mut self, peer: SocketAddr) {
-        let _ = self.receive_partition_request(peer).await;
     }
 }
 

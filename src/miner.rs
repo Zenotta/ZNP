@@ -301,6 +301,14 @@ impl MinerNode {
         match response {
             Ok(Response {
                 success: true,
+                reason: "Sent startup requests on reconnection",
+            }) => debug!("Sent startup requests on reconnection"),
+            Ok(Response {
+                success: false,
+                reason: "Failed to send startup requests on reconnection",
+            }) => error!("Failed to send startup requests on reconnection"),
+            Ok(Response {
+                success: true,
                 reason: "Shutdown",
             }) => {
                 warn!("Shutdown now");
@@ -413,7 +421,7 @@ impl MinerNode {
                     }));
                 }
                 Some(event) = self.local_events.rx.recv() => {
-                    if let Some(res) = self.handle_local_event(event) {
+                    if let Some(res) = self.handle_local_event(event).await {
                         return Some(Ok(res));
                     }
                 }
@@ -430,12 +438,25 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `event` - Event to process.
-    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+    async fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
         match event {
             LocalEvent::Exit(reason) => Some(Response {
                 success: true,
                 reason,
             }),
+            LocalEvent::ReconnectionComplete => {
+                if let Err(err) = self.send_startup_requests().await {
+                    error!("Failed to send startup requests on reconnect: {}", err);
+                    return Some(Response {
+                        success: false,
+                        reason: "Failed to send startup requests on reconnection",
+                    });
+                }
+                Some(Response {
+                    success: true,
+                    reason: "Sent startup requests on reconnection",
+                })
+            }
             LocalEvent::CoordinatedShutdown(_) => None,
             LocalEvent::Ignore => None,
         }
