@@ -84,6 +84,7 @@ use super::tcp_tls::{
     verify_is_valid_for_dns_names, TcpTlsConnector, TcpTlsListner, TcpTlsStream, TlsCertificate,
 };
 use super::{CommsError, Event, Result, TcpTlsConfig};
+use crate::comms_handler::error::PeerInfo;
 use crate::constants::NETWORK_VERSION;
 use crate::interfaces::{node_type_as_str, CommMessage, NodeType, Token};
 use crate::utils::MpscTracingSender;
@@ -107,6 +108,7 @@ use tokio_stream::{Stream, StreamExt};
 use tokio_util::codec::{length_delimited, FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info_span, trace, warn, Span};
 use tracing_futures::Instrument;
+
 extern crate serde_json;
 
 pub type ResultBytesSender = MpscTracingSender<io::Result<Bytes>>;
@@ -367,7 +369,10 @@ impl Node {
     async fn connect_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
         if !self.peers.read().await.contains_key(&peer) {
             if *self.listener_and_connect_paused.read().await {
-                return Err(CommsError::PeerNotFound);
+                return Err(CommsError::PeerNotFound(PeerInfo {
+                    node_type: None,
+                    address: Some(peer),
+                }));
             }
 
             let stream = self.tcp_tls_connector.read().await.connect(peer).await?;
@@ -402,23 +407,37 @@ impl Node {
         // Wait for a handshake response
         let handshake_response = {
             let mut peers = self.peers.write().await;
-            let peer = peers.get_mut(&peer).ok_or(CommsError::PeerNotFound)?;
+            let peer = peers
+                .get_mut(&peer)
+                .ok_or(CommsError::PeerNotFound(PeerInfo {
+                    node_type: None,
+                    address: Some(peer),
+                }))?;
             peer.notify_handshake_response
                 .1
                 .take()
-                .ok_or(CommsError::PeerInvalidState)?
+                .ok_or(CommsError::PeerInvalidState(PeerInfo {
+                    node_type: None,
+                    address: Some(peer.addr),
+                }))?
         };
 
         match timeout(RESPONSE_TIMEOUT, handshake_response)
             .await
             .map_err(|e| {
                 trace!("Timeout after {e}. Failed connection to {:?}", peer);
-                CommsError::PeerNotFound
+                CommsError::PeerNotFound(PeerInfo {
+                    node_type: None,
+                    address: Some(peer),
+                })
             })? {
             Ok(()) => trace!("Complete connection to {:?}", peer),
             Err(_) => {
                 trace!("Complete failed connection to {:?}", peer);
-                return Err(CommsError::PeerNotFound);
+                return Err(CommsError::PeerNotFound(PeerInfo {
+                    node_type: None,
+                    address: Some(peer),
+                }));
             }
         }
 
@@ -480,36 +499,55 @@ impl Node {
         let message_id = rand::thread_rng().gen();
         let payload = Bytes::from(serialize(&data)?);
 
-        self.send_multicast(
-            peers.into_iter(),
-            CommMessage::Gossip {
-                payload: payload.clone(),
-                id: message_id,
-                ttl: 0,
-            },
-        )
-        .await;
+        let _ = self
+            .send_multicast(
+                peers.into_iter(),
+                CommMessage::Gossip {
+                    payload: payload.clone(),
+                    id: message_id,
+                    ttl: 0,
+                },
+            )
+            .await;
 
         Ok(())
     }
 
-    async fn send_multicast(&self, peers: impl Iterator<Item = SocketAddr>, msg: CommMessage) {
+    // Returns a list of the peers to which the payload could not be sent.
+    async fn send_multicast(
+        &self,
+        peers: impl Iterator<Item = SocketAddr>,
+        msg: CommMessage,
+    ) -> Vec<SocketAddr> {
         trace!("send_multicast");
+        let unsent_nodes = Arc::new(Mutex::new(vec![]));
 
         let join_handles: Vec<_> = peers
             .map(|peer| {
                 let mut node = self.clone();
                 let msg = msg.clone();
+                let unsent_list = unsent_nodes.clone();
 
                 tokio::spawn(async move {
                     if let Err(error) = node.send_message(peer, msg).await {
                         warn!(?error, "send_multicast");
+                        if let CommsError::PeerNotFound(_) = error {
+                            unsent_list.lock().await.push(peer);
+                        }
                     }
                 })
             })
             .collect();
 
         join_all(join_handles).await;
+
+        match Arc::try_unwrap(unsent_nodes) {
+            Ok(result) => result.into_inner(),
+            Err(e) => {
+                error!("Error removing std::Arc from unsent_nodes list: {e:?}");
+                vec![]
+            }
+        }
     }
 
     /// Returns a list of known peers who are members of the same ring as ours.
@@ -557,8 +595,16 @@ impl Node {
     /// Get peer type.
     pub async fn get_peer_node_type(&self, peer_addr: SocketAddr) -> Result<NodeType> {
         let peers = self.peers.read().await;
-        let peer = peers.get(&peer_addr).ok_or(CommsError::PeerNotFound)?;
-        peer.peer_type.ok_or(CommsError::PeerInvalidState)
+        let peer = peers
+            .get(&peer_addr)
+            .ok_or(CommsError::PeerNotFound(PeerInfo {
+                node_type: None,
+                address: Some(peer_addr),
+            }))?;
+        peer.peer_type.ok_or(CommsError::PeerInvalidState(PeerInfo {
+            node_type: None,
+            address: Some(peer_addr),
+        }))
     }
 
     /// Sends data to a peer.
@@ -566,7 +612,12 @@ impl Node {
         let data = Bytes::from(serialize(&message)?);
 
         let peers = self.peers.read().await;
-        let peer = peers.get(&peer_addr).ok_or(CommsError::PeerNotFound)?;
+        let peer = peers
+            .get(&peer_addr)
+            .ok_or(CommsError::PeerNotFound(PeerInfo {
+                node_type: None,
+                address: Some(peer_addr),
+            }))?;
         let mut tx = peer.send_tx.clone();
         self.send_bytes(peer_addr, &mut tx, data).await
     }
@@ -584,12 +635,13 @@ impl Node {
         &mut self,
         peers: impl Iterator<Item = SocketAddr>,
         data: impl Serialize,
-    ) -> Result<()> {
+    ) -> Result<Vec<SocketAddr>> {
         let payload = Bytes::from(serialize(&data)?);
         let id = rand::thread_rng().gen();
-        self.send_multicast(peers, CommMessage::Direct { payload, id })
+        let unsent_nodes = self
+            .send_multicast(peers, CommMessage::Direct { payload, id })
             .await;
-        Ok(())
+        Ok(unsent_nodes)
     }
 
     /// Prepares and sends a handshake message to a given peer.
@@ -775,15 +827,16 @@ impl Node {
         let payload = payload.clone();
 
         tokio::spawn(async move {
-            node.send_multicast(
-                peers.into_iter(),
-                CommMessage::Gossip {
-                    payload,
-                    id: message_id,
-                    ttl: ttl + 1,
-                },
-            )
-            .await;
+            let _ = node
+                .send_multicast(
+                    peers.into_iter(),
+                    CommMessage::Gossip {
+                        payload,
+                        id: message_id,
+                        ttl: ttl + 1,
+                    },
+                )
+                .await;
         });
 
         Ok(())
@@ -801,17 +854,26 @@ impl Node {
         peer_type: NodeType,
     ) -> Result<()> {
         if !self.is_compatible(peer_type, network_version) {
-            return Err(CommsError::PeerIncompatible);
+            return Err(CommsError::PeerIncompatible(PeerInfo {
+                node_type: Some(peer_type),
+                address: Some(peer_in_addr),
+            }));
         }
 
         let mut all_peers = self.peers.write().await;
         if all_peers.contains_key(&peer_in_addr) {
-            return Err(CommsError::PeerDuplicate);
+            return Err(CommsError::PeerDuplicate(PeerInfo {
+                node_type: Some(peer_type),
+                address: Some(peer_in_addr),
+            }));
         }
 
         let peer = all_peers
             .get_mut(&peer_out_addr)
-            .ok_or(CommsError::PeerNotFound)?;
+            .ok_or(CommsError::PeerNotFound(PeerInfo {
+                node_type: None,
+                address: Some(peer_out_addr),
+            }))?;
 
         if let Some(peer_cert) = peer_cert {
             let connector = self.tcp_tls_connector.read().await;
@@ -847,7 +909,10 @@ impl Node {
         contacts: Vec<SocketAddr>,
     ) -> Result<()> {
         if !self.is_compatible(peer_type, network_version) {
-            return Err(CommsError::PeerIncompatible);
+            return Err(CommsError::PeerIncompatible(PeerInfo {
+                node_type: Some(peer_type),
+                address: Some(peer_addr),
+            }));
         }
 
         let mut all_peers = self.peers.write().await;
@@ -856,7 +921,10 @@ impl Node {
         {
             let peer = all_peers
                 .get_mut(&peer_addr)
-                .ok_or(CommsError::PeerNotFound)?;
+                .ok_or(CommsError::PeerNotFound(PeerInfo {
+                    node_type: Some(peer_type),
+                    address: Some(peer_addr),
+                }))?;
             peer.network_version = Some(network_version);
             peer.peer_type = Some(peer_type);
 
@@ -979,7 +1047,7 @@ impl Node {
                         }
                         Err(err) => {
                             // Drop error connection
-                            warn!("Remove peer: {}, err: {:?}", peer_addr, err);
+                            warn!("Remove peer: {err:?}");
                             let mut peers_list = peers.write().await;
                             let _ = peers_list.remove(&peer_addr);
                             trace!("sock_in dropped for {:?}", peer_addr);

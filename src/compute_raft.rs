@@ -599,6 +599,15 @@ impl ComputeRaft {
         self.consensused.block_pipeline.clear_proposed_keys();
     }
 
+    pub fn flush_stale_miners(&mut self, unsent_miners: &[SocketAddr]) {
+        self.consensused
+            .block_pipeline
+            .cleanup_participant_intake(unsent_miners);
+        self.consensused
+            .block_pipeline
+            .cleanup_participants_mining(unsent_miners);
+    }
+
     /// Process as a result of timeout_propose_transactions.
     /// Reset timeout, and propose local transactions if available.
     pub async fn propose_local_transactions_at_timeout(&mut self) {
@@ -1251,8 +1260,7 @@ impl ComputeConsensused {
     fn take_ready_block_stored_info(&mut self) -> AccumulatingBlockStoredInfo {
         let infos = std::mem::take(&mut self.current_block_stored_info);
         infos
-            .into_iter()
-            .map(|(_digest, value)| value)
+            .into_values()
             .max_by_key(|(_, vote_ids)| vote_ids.len())
             .map(|(block_info, _)| block_info)
             .unwrap()

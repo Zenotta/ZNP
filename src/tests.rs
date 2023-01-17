@@ -465,6 +465,7 @@ async fn full_flow_common(
     add_transactions_act(&mut network, &transactions).await;
     create_block_act(&mut network, Cfg::All, cfg_num).await;
     modify_network(&mut network, "After create block 1", &modify_cfg).await;
+
     proof_of_work_act(&mut network, CfgPow::Parallel, cfg_num, false, None).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
     let stored1 = storage_get_last_block_stored(&mut network, "storage1").await;
@@ -541,7 +542,43 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
                 }
             }
             CfgModif::Disconnect(v) => network.disconnect_nodes_named(&[v.to_string()]).await,
-            CfgModif::Reconnect(v) => network.re_connect_nodes_named(&[v.to_string()]).await,
+            CfgModif::Reconnect(v) => {
+                network.re_connect_nodes_named(&[v.to_string()]).await;
+                let mut event_tx = network.get_local_event_tx(v).await.unwrap();
+                event_tx
+                    .send(
+                        LocalEvent::ReconnectionComplete,
+                        "reconnection complete test",
+                    )
+                    .await
+                    .unwrap();
+
+                let event = Some((
+                    v.to_string(),
+                    vec!["Sent startup requests on reconnection".to_string()],
+                ))
+                .into_iter()
+                .collect();
+                node_all_handle_different_event(network, &[v.to_string()], &event).await;
+
+                // Process miner's request at compute node
+                if let Some(miner) = network.miner(v) {
+                    let compute_addr = miner.lock().await.compute_address();
+
+                    let compute_nodes = network.all_active_nodes()[&NodeType::Compute].clone();
+                    for c in compute_nodes {
+                        if network.compute(&c).unwrap().lock().await.address() == compute_addr {
+                            compute_handle_event(
+                                network,
+                                &c,
+                                &["Received partition request successfully"],
+                            )
+                            .await;
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -2639,7 +2676,7 @@ pub async fn create_receipt_asset_raft_1_node() {
     let committed_utxo_set = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
     let actual_utxo_receipt: Vec<Vec<_>> = committed_utxo_set
         .into_iter()
-        .map(|v| v.into_iter().map(|(_, v)| v.value).collect())
+        .map(|v| v.into_values().map(|v| v.value).collect())
         .collect();
 
     let actual_running_total_after = node_get_wallet_info(&mut network, "user1").await.0;
@@ -2707,7 +2744,7 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     let committed_utxo_set = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
     let actual_utxo_receipt: Vec<Vec<_>> = committed_utxo_set
         .into_iter()
-        .map(|v| v.into_iter().map(|(_, v)| v.value).collect())
+        .map(|v| v.into_values().map(|v| v.value).collect())
         .collect();
 
     //

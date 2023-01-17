@@ -46,6 +46,7 @@ pub type LocalEventReceiver = mpsc::Receiver<LocalEvent>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalEvent {
     CoordinatedShutdown(u64),
+    ReconnectionComplete,
     Exit(&'static str),
     Ignore,
 }
@@ -266,7 +267,10 @@ pub async fn loop_connnect_to_peers_async(
     mut node: Node,
     peers: Vec<SocketAddr>,
     mut close_rx: Option<oneshot::Receiver<()>>,
+    mut local_events_tx: LocalEventSender,
 ) {
+    let mut is_initial_conn = true;
+
     loop {
         for peer in node.unconnected_peers(&peers).await {
             trace!(?peer, "Try to connect to");
@@ -274,7 +278,21 @@ pub async fn loop_connnect_to_peers_async(
                 trace!(?peer, ?e, "Try to connect to failed");
             } else {
                 trace!(?peer, "Try to connect to succeeded");
+                if !is_initial_conn {
+                    trace!("Sending PartitionRequest to Compute node: {peer:?} after reconnection");
+                    local_events_tx
+                        .send(LocalEvent::ReconnectionComplete, "Reconnect Complete")
+                        .await
+                        .unwrap();
+                }
             }
+        }
+
+        if node.unconnected_peers(&peers).await.is_empty() {
+            // We finished our initial connections, now set the flag to false
+            // to indicate that connections after this are actual reconnections
+            // and therefore requires Miners to send PartitionRequest
+            is_initial_conn = false;
         }
 
         let delay_retry = tokio::time::sleep(Duration::from_millis(500));
@@ -718,7 +736,7 @@ pub fn make_wallet_tx_info(
     seed: &WalletTxSpec,
 ) -> (OutPoint, PublicKey, SecretKey, TokenAmount, Option<u64>) {
     let tx_out_p = decode_wallet_out_point(&seed.out_point);
-    let amount = TokenAmount(seed.amount as u64);
+    let amount = TokenAmount(seed.amount);
     let sk = decode_secret_key(&seed.secret_key).unwrap();
     let pk = decode_pub_key(&seed.public_key).unwrap();
     let version = seed.address_version;
@@ -810,11 +828,12 @@ pub async fn shutdown_connections(node_conn: &mut Node) {
 pub fn loops_re_connect_disconnect(
     node_conn: Node,
     addrs_to_connect: Vec<SocketAddr>,
-    mut local_events_tx: LocalEventSender,
+    local_events_tx: LocalEventSender,
 ) -> (
     (impl Future<Output = ()>, oneshot::Sender<()>),
     (impl Future<Output = ()>, oneshot::Sender<()>),
 ) {
+    let mut local_events_tx_for_disconnect = local_events_tx.clone();
     // PERMANENT CONNEXION HANDLING
     let re_connect = {
         let (stop_re_connect_tx, stop_re_connect_rx) = tokio::sync::oneshot::channel::<()>();
@@ -822,8 +841,13 @@ pub fn loops_re_connect_disconnect(
         (
             async move {
                 println!("Start connect to requested peers");
-                loop_connnect_to_peers_async(node_conn, addrs_to_connect, Some(stop_re_connect_rx))
-                    .await;
+                loop_connnect_to_peers_async(
+                    node_conn,
+                    addrs_to_connect,
+                    Some(stop_re_connect_rx),
+                    local_events_tx,
+                )
+                .await;
                 println!("Reconnect complete");
             },
             stop_re_connect_tx,
@@ -846,8 +870,12 @@ pub fn loops_re_connect_disconnect(
                     };
 
                     paused = pause_and_disconnect_on_path(&mut node_conn, paused).await;
-                    shutdown_num =
-                        shutdown_on_path(&mut node_conn, &mut local_events_tx, shutdown_num).await;
+                    shutdown_num = shutdown_on_path(
+                        &mut node_conn,
+                        &mut local_events_tx_for_disconnect,
+                        shutdown_num,
+                    )
+                    .await;
                 }
                 println!("Complete mode input check");
             },

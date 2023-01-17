@@ -716,7 +716,7 @@ pub fn save_address_store_to_wallet(
 
 /// Get the wallet transaction store
 pub fn get_transaction_store(db: &SimpleDb, out_p: &OutPoint) -> TransactionStore {
-    match db.get_cf(DB_COL_DEFAULT, &serialize(&out_p).unwrap()) {
+    match db.get_cf(DB_COL_DEFAULT, serialize(&out_p).unwrap()) {
         Ok(Some(store)) => deserialize(&store).unwrap(),
         Ok(None) => panic!("Transaction not present in wallet: {:?}", out_p),
         Err(e) => panic!("Error accessing wallet: {:?}", e),

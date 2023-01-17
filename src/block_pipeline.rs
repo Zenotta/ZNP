@@ -294,6 +294,28 @@ impl MiningPipelineInfo {
         self.proposed_keys = Default::default();
     }
 
+    pub fn cleanup_participant_intake(&mut self, inactive_miners: &[SocketAddr]) {
+        for (_, participants) in self.participants_intake.iter_mut() {
+            participants
+                .unsorted
+                .retain(|addr| !inactive_miners.contains(addr));
+            participants
+                .lookup
+                .retain(|addr| !inactive_miners.contains(addr));
+        }
+    }
+
+    pub fn cleanup_participants_mining(&mut self, inactive_miners: &[SocketAddr]) {
+        for (_, participants) in self.participants_mining.iter_mut() {
+            participants
+                .unsorted
+                .retain(|addr| !inactive_miners.contains(addr));
+            participants
+                .lookup
+                .retain(|addr| !inactive_miners.contains(addr));
+        }
+    }
+
     /// Get proposed RaftContextKey set
     pub fn get_proposed_keys(&self) -> &BTreeSet<RaftContextKey> {
         &self.proposed_keys

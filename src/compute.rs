@@ -641,6 +641,14 @@ impl ComputeNode {
                 reason: "Partition PoW received successfully",
             }) => {}
             Ok(Response {
+                success: true,
+                reason: "Sent startup requests on reconnection",
+            }) => debug!("Sent startup requests on reconnection"),
+            Ok(Response {
+                success: false,
+                reason: "Failed to send startup requests on reconnection",
+            }) => error!("Failed to send startup requests on reconnection"),
+            Ok(Response {
                 success: false,
                 reason: "Partition list complete",
             }) => {}
@@ -723,7 +731,7 @@ impl ComputeNode {
                     }
                 }
                 Some(event) = self.local_events.rx.recv(), if ready => {
-                    if let Some(res) = self.handle_local_event(event) {
+                    if let Some(res) = self.handle_local_event(event).await {
                         return Some(Ok(res));
                     }
                 }
@@ -807,12 +815,25 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `event` - Event to process.
-    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+    async fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
         match event {
             LocalEvent::Exit(reason) => Some(Response {
                 success: true,
                 reason,
             }),
+            LocalEvent::ReconnectionComplete => {
+                if let Err(err) = self.send_startup_requests().await {
+                    error!("Failed to send startup requests on reconnect: {}", err);
+                    return Some(Response {
+                        success: false,
+                        reason: "Failed to send startup requests on reconnection",
+                    });
+                }
+                Some(Response {
+                    success: true,
+                    reason: "Sent startup requests on reconnection",
+                })
+            }
             LocalEvent::CoordinatedShutdown(shutdown) => {
                 self.coordinated_shutdown = shutdown;
                 Some(Response {
@@ -996,6 +1017,7 @@ impl ComputeNode {
     ///
     /// * `peer` - Sending peer's socket address
     async fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
+        trace!("Received partition request from {peer:?}");
         self.request_list.insert(peer);
         self.db
             .put_cf(
@@ -1074,12 +1096,14 @@ impl ComputeNode {
 
     /// Floods the closing event to everyone
     pub async fn flood_closing_events(&mut self) -> Result<()> {
-        self.node
+        let _ = self
+            .node
             .send_to_all(Some(self.storage_addr).into_iter(), StorageRequest::Closing)
             .await
             .unwrap();
 
-        self.node
+        let _ = self
+            .node
             .send_to_all(
                 self.node_raft.raft_peer_addrs().copied(),
                 ComputeRequest::Closing,
@@ -1087,12 +1111,14 @@ impl ComputeNode {
             .await
             .unwrap();
 
-        self.node
+        let _ = self
+            .node
             .send_to_all(self.request_list.iter().copied(), MineRequest::Closing)
             .await
             .unwrap();
 
-        self.node
+        let _ = self
+            .node
             .send_to_all(
                 self.user_notification_list.iter().copied(),
                 UserRequest::Closing,
@@ -1136,7 +1162,10 @@ impl ComputeNode {
         let participants = self.node_raft.get_mining_participants();
         let non_participants = self.request_list.difference(participants.lookup());
 
-        self.node
+        let mut unsent_miners = vec![];
+
+        if let Ok(unsent_nodes) = self
+            .node
             .send_to_all(
                 participants.iter().copied(),
                 MineRequest::SendBlock {
@@ -1148,9 +1177,12 @@ impl ComputeNode {
                 },
             )
             .await
-            .unwrap();
+        {
+            unsent_miners.extend(unsent_nodes);
+        }
 
-        self.node
+        if let Ok(unsent_nodes) = self
+            .node
             .send_to_all(
                 non_participants.copied(),
                 MineRequest::SendBlock {
@@ -1162,9 +1194,35 @@ impl ComputeNode {
                 },
             )
             .await
-            .unwrap();
+        {
+            unsent_miners.extend(unsent_nodes);
+        }
+
+        if !unsent_miners.is_empty() {
+            self.flush_stale_miners(unsent_miners);
+        }
 
         Ok(())
+    }
+
+    pub fn flush_stale_miners(&mut self, stale_miners: Vec<SocketAddr>) {
+        trace!("Flushing stale miners from mining pipeline and request list {stale_miners:?}");
+
+        // Flush stale miners
+        self.request_list
+            .retain(|addr| !stale_miners.contains(addr));
+
+        // Update DB
+        if let Err(e) = self.db.put_cf(
+            DB_COL_INTERNAL,
+            REQUEST_LIST_KEY,
+            &serialize(&self.request_list).unwrap(),
+        ) {
+            error!("Error writing updated miner request list to disk: {e:?}");
+        }
+
+        // Cleanup miners from block pipeline
+        self.node_raft.flush_stale_miners(&stale_miners);
     }
 
     /// Floods the current block to participants for mining

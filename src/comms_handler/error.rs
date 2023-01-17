@@ -1,4 +1,6 @@
 use super::Event;
+use crate::interfaces::NodeType;
+use std::net::SocketAddr;
 use std::{error::Error, fmt, io};
 use tokio::sync::mpsc;
 use tokio_rustls::rustls::TLSError;
@@ -17,36 +19,42 @@ pub enum CommsError {
     /// The peers list is at the limit.
     PeerListFull,
     /// No such peer found.
-    PeerNotFound,
+    PeerNotFound(PeerInfo),
     /// No such peer found.in TLS mapping.
-    PeerNameNotFound,
+    PeerNameNotFound(PeerInfo),
     /// Peer is in invalid state.
-    PeerInvalidState,
+    PeerInvalidState(PeerInfo),
     /// This peer is already connected.
-    PeerDuplicate,
+    PeerDuplicate(PeerInfo),
     /// This peer is not compatible.
-    PeerIncompatible,
+    PeerIncompatible(PeerInfo),
     /// Serialization-related error.
     Serialization(bincode::Error),
     /// MPSC channel error.
     ChannelSendError(mpsc::error::SendError<Event>),
 }
 
+#[derive(Debug)]
+pub struct PeerInfo {
+    pub node_type: Option<NodeType>,
+    pub address: Option<SocketAddr>,
+}
+
 impl fmt::Display for CommsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfigError(err) => write!(f, "Config error: {}", err),
-            Self::Io(err) => write!(f, "I/O error: {}", err),
-            Self::TlsError(err) => write!(f, "TLS error: {}", err),
+            Self::ConfigError(err) => write!(f, "Config error: {err}"),
+            Self::Io(err) => write!(f, "I/O error: {err}"),
+            Self::TlsError(err) => write!(f, "TLS error: {err}"),
             Self::PeerListFull => write!(f, "Peer list is full"),
             Self::PeerListEmpty => write!(f, "Peer list is empty"),
-            Self::PeerNotFound => write!(f, "Peer not found"),
-            Self::PeerNameNotFound => write!(f, "Peer name not found"),
-            Self::PeerDuplicate => write!(f, "Peer has invalid state"),
-            Self::PeerInvalidState => write!(f, "Duplicate peer"),
-            Self::PeerIncompatible => write!(f, "Peer incompatible"),
-            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
-            Self::ChannelSendError(err) => write!(f, "MPSC channel send error: {}", err),
+            Self::PeerNotFound(info) => write!(f, "Peer not found: {info:?}"),
+            Self::PeerNameNotFound(info) => write!(f, "Peer name not found: {info:?}"),
+            Self::PeerDuplicate(info) => write!(f, "Peer has invalid state: {info:?}"),
+            Self::PeerInvalidState(info) => write!(f, "Duplicate peer: {info:?}"),
+            Self::PeerIncompatible(info) => write!(f, "Peer incompatible: {info:?}"),
+            Self::Serialization(err) => write!(f, "Serialization error: {err}"),
+            Self::ChannelSendError(err) => write!(f, "MPSC channel send error: {err}"),
         }
     }
 }
@@ -59,11 +67,11 @@ impl Error for CommsError {
             Self::TlsError(err) => Some(err),
             Self::PeerListFull => None,
             Self::PeerListEmpty => None,
-            Self::PeerNotFound => None,
-            Self::PeerNameNotFound => None,
-            Self::PeerInvalidState => None,
-            Self::PeerDuplicate => None,
-            Self::PeerIncompatible => None,
+            Self::PeerNotFound(_) => None,
+            Self::PeerNameNotFound(_) => None,
+            Self::PeerInvalidState(_) => None,
+            Self::PeerDuplicate(_) => None,
+            Self::PeerIncompatible(_) => None,
             Self::Serialization(err) => Some(err),
             Self::ChannelSendError(err) => Some(err),
         }
