@@ -23,7 +23,7 @@ use naom::utils::transaction_utils::{
     get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
@@ -38,7 +38,7 @@ use tokio::time::Instant;
 use tracing::{trace, warn};
 
 pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
-pub type ApiKeys = Arc<Mutex<HashSet<String>>>;
+pub type ApiKeys = Arc<Mutex<BTreeMap<String, Vec<String>>>>;
 pub type LocalEventSender = MpscTracingSender<LocalEvent>;
 pub type LocalEventReceiver = mpsc::Receiver<LocalEvent>;
 
@@ -1078,7 +1078,7 @@ pub fn create_receipt_asset_tx_from_sig(
 }
 
 /// Confert to ApiKeys data structure
-pub fn to_api_keys(api_keys: Vec<String>) -> ApiKeys {
+pub fn to_api_keys(api_keys: BTreeMap<String, Vec<String>>) -> ApiKeys {
     Arc::new(Mutex::new(api_keys.into_iter().collect()))
 }
 

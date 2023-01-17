@@ -4,12 +4,10 @@ use crate::api::handlers::{
     EncapsulatedPayment, FetchPendingData, PublicKeyAddresses,
 };
 use crate::api::routes;
-use crate::api::utils::{
-    auth_request, create_new_cache, handle_rejection, ANY_API_KEY, CACHE_LIVE_TIME,
-};
+use crate::api::utils::{auth_request, create_new_cache, handle_rejection, CACHE_LIVE_TIME};
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
 use crate::compute::ComputeError;
-use crate::configurations::DbMode;
+use crate::configurations::{ComputeNodeSharedConfig, DbMode};
 use crate::constants::FUND_KEY;
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
@@ -23,7 +21,7 @@ use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
     apply_mining_tx, construct_valid_block_pow_hash, create_receipt_asset_tx_from_sig,
     decode_secret_key, generate_pow_for_block, to_api_keys, to_route_pow_infos,
-    tracing_log_try_init, validate_pow_block,
+    tracing_log_try_init, validate_pow_block, ApiKeys,
 };
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
@@ -47,7 +45,9 @@ use warp::Filter;
 
 const COMMON_ROUTE_POW_DIFFICULTY: usize = 2;
 const COMMON_REQ_ID: &str = "2ae7bc9cba924e3cb73c0249893078d7";
-const COMMON_VALID_API_KEY: &str = "valid_api_key";
+const COMMON_VALID_API_KEY: &str = "some_key";
+const COMMON_VALID_API_KEYS: [&str; 2] = ["debug_data", COMMON_VALID_API_KEY];
+
 const COMMON_VALID_POW_NONCE: &str = "81234";
 const COMMON_PUB_KEY: &str = "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
 const COMMON_SEC_KEY: &str = "3053020101300506032b6570042204200186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca4a1230321005371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
@@ -130,9 +130,41 @@ impl ComputeTest {
 }
 
 impl ComputeApi for ComputeTest {
+    fn get_shared_config(&self) -> ComputeNodeSharedConfig {
+        Default::default()
+    }
+
+    fn pause_nodes(&mut self) -> Response {
+        let reason: &'static str = "";
+
+        Response {
+            success: true,
+            reason,
+        }
+    }
+
+    fn resume_nodes(&mut self) -> Response {
+        let reason: &'static str = "";
+
+        Response {
+            success: true,
+            reason,
+        }
+    }
+
+    fn send_shared_config(&mut self, _shared_config: ComputeNodeSharedConfig) -> Response {
+        let reason: &'static str = "";
+
+        Response {
+            success: true,
+            reason,
+        }
+    }
+
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
         &self.utxo_set
     }
+
     fn get_pending_druid_pool(&self) -> &DruidPool {
         &self.druid_pool
     }
@@ -359,7 +391,7 @@ async fn test_get_latest_block() {
         .method("GET")
         .header("x-request-id", COMMON_REQ_ID)
         .path("/latest_block");
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::latest_block(&mut dp(), db, Default::default(), ks, cache)
@@ -395,7 +427,7 @@ async fn test_get_export_keypairs() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::export_keypairs(&mut dp(), db, Default::default(), ks, cache)
@@ -418,7 +450,11 @@ async fn test_get_user_debug_data() {
     // Arrange
     //
     let db = get_wallet_db("").await;
-    let ks = to_api_keys(vec!["key".to_owned()]);
+    let ks: ApiKeys = Arc::new(Mutex::new(BTreeMap::new()));
+    ks.lock().unwrap().insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13000).await;
     self_node.connect_to(c_socket).await.unwrap();
@@ -429,7 +465,7 @@ async fn test_get_user_debug_data() {
             .header("x-request-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
-    let request_x_api = || request().header("x-api-key", "key");
+    let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
 
     //
     // Act
@@ -462,7 +498,11 @@ async fn test_get_storage_debug_data() {
     // Arrange
     //
     let db = get_db_with_block().await;
-    let ks = to_api_keys(vec!["key".to_owned()]);
+    let ks: ApiKeys = Arc::new(Mutex::new(BTreeMap::new()));
+    ks.lock().unwrap().insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     let (mut self_node, _self_socket) = new_self_node(NodeType::Storage).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13010).await;
     self_node.connect_to(c_socket).await.unwrap();
@@ -473,7 +513,7 @@ async fn test_get_storage_debug_data() {
             .header("x-request-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
-    let request_x_api = || request().header("x-api-key", "key");
+    let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
 
     //
     // Act
@@ -506,7 +546,11 @@ async fn test_get_compute_debug_data() {
     // Arrange
     //
     let compute = ComputeTest::new(vec![]);
-    let ks = to_api_keys(vec!["key".to_owned()]);
+    let ks: ApiKeys = Arc::new(Mutex::new(BTreeMap::new()));
+    ks.lock().unwrap().insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     let (mut self_node, _self_socket) = new_self_node(NodeType::Compute).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13020).await;
     self_node.connect_to(c_socket).await.unwrap();
@@ -517,7 +561,7 @@ async fn test_get_compute_debug_data() {
             .header("x-request-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
-    let request_x_api = || request().header("x-api-key", "key");
+    let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
 
     //
     // Act
@@ -539,7 +583,7 @@ async fn test_get_compute_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"create_receipt_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]],\"routes_pow\":{\"create_transactions\":2}}}";
+    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"create_receipt_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"pause_nodes\",\"resume_nodes\",\"update_shared_config\",\"get_shared_config\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]],\"routes_pow\":{\"create_transactions\":2}}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -560,7 +604,11 @@ async fn test_get_miner_debug_data() {
     //
     let db = get_wallet_db("").await;
     let current_block = Default::default();
-    let ks = to_api_keys(vec!["key".to_owned()]);
+    let ks: ApiKeys = Arc::new(Mutex::new(BTreeMap::new()));
+    ks.lock().unwrap().insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13030).await;
     self_node.connect_to(c_socket).await.unwrap();
@@ -571,7 +619,7 @@ async fn test_get_miner_debug_data() {
             .header("x-request-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
-    let request_x_api = || request().header("x-api-key", "key");
+    let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
 
     //
     // Act
@@ -606,7 +654,11 @@ async fn test_get_miner_with_user_debug_data() {
     //
     let db = get_wallet_db("").await;
     let current_block = Default::default();
-    let ks = to_api_keys(vec!["key".to_owned()]);
+    let ks: ApiKeys = Arc::new(Mutex::new(BTreeMap::new()));
+    ks.lock().unwrap().insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
     let (mut self_node_u, _self_socket_u) = new_self_node(NodeType::User).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13040).await;
@@ -620,7 +672,7 @@ async fn test_get_miner_with_user_debug_data() {
             .header("x-request-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
-    let request_x_api = || request().header("x-api-key", "key");
+    let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
 
     //
     // Act
@@ -654,14 +706,14 @@ async fn test_get_miner_with_user_debug_data() {
 // Authorize a request where no proof-of-work or API key is required
 #[tokio::test(flavor = "current_thread")]
 async fn auth_request_no_pow_with_no_api_key() {
-    auth_request_common((ANY_API_KEY, ""), None, true).await;
+    auth_request_common((Default::default(), COMMON_VALID_API_KEY), None, true).await;
 }
 
 // Authorize a request where proof-of-work IS required BUT no API key is required
 #[tokio::test(flavor = "current_thread")]
 async fn auth_request_pow_with_no_api_key() {
     auth_request_common(
-        (ANY_API_KEY, ""),
+        (Default::default(), COMMON_VALID_API_KEY),
         Some((COMMON_ROUTE_POW_DIFFICULTY, COMMON_VALID_POW_NONCE)),
         true,
     )
@@ -671,14 +723,24 @@ async fn auth_request_pow_with_no_api_key() {
 // Authorize a request where NO proof-of-work is required BUT a valid API key is required
 #[tokio::test(flavor = "current_thread")]
 async fn auth_request_no_pow_with_api_key() {
-    auth_request_common((COMMON_VALID_API_KEY, COMMON_VALID_API_KEY), None, true).await;
+    let mut api_keys = BTreeMap::new();
+    api_keys.insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
+    auth_request_common((api_keys, COMMON_VALID_API_KEY), None, true).await;
 }
 
 // Authorize a request where valid proof of work is required AND a valid API key
 #[tokio::test(flavor = "current_thread")]
 async fn auth_request_pow_with_api_key() {
+    let mut api_keys = BTreeMap::new();
+    api_keys.insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     auth_request_common(
-        (COMMON_VALID_API_KEY, COMMON_VALID_API_KEY),
+        (api_keys, COMMON_VALID_API_KEY),
         Some((COMMON_ROUTE_POW_DIFFICULTY, COMMON_VALID_POW_NONCE)),
         true,
     )
@@ -689,8 +751,13 @@ async fn auth_request_pow_with_api_key() {
 // , but the provided nonce for PoW is invalid
 #[tokio::test(flavor = "current_thread")]
 async fn auth_request_invalid_pow_with_api_key_failure() {
+    let mut api_keys = BTreeMap::new();
+    api_keys.insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     auth_request_common(
-        (COMMON_VALID_API_KEY, COMMON_VALID_API_KEY),
+        (api_keys, COMMON_VALID_API_KEY),
         /* Invalid nonce value */
         Some((COMMON_ROUTE_POW_DIFFICULTY, "99999")),
         false,
@@ -702,9 +769,14 @@ async fn auth_request_invalid_pow_with_api_key_failure() {
 // , but the provided API key is invalid
 #[tokio::test(flavor = "current_thread")]
 async fn auth_request_pow_with_invalid_api_key_failure() {
+    let mut api_keys = BTreeMap::new();
+    api_keys.insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     auth_request_common(
         /* Invalid API key */
-        (COMMON_VALID_API_KEY, "invalid_api_key"),
+        (api_keys, "invalid_api_key"),
         Some((COMMON_ROUTE_POW_DIFFICULTY, COMMON_VALID_POW_NONCE)),
         false,
     )
@@ -712,7 +784,7 @@ async fn auth_request_pow_with_invalid_api_key_failure() {
 }
 
 async fn auth_request_common(
-    api_keys_and_key: (&str, &str),
+    api_key_and_keys: (BTreeMap<String, Vec<String>>, &str),
     difficulty_and_nonce: Option<(usize, &str)>,
     authorization_success: bool,
 ) {
@@ -729,10 +801,7 @@ async fn auth_request_common(
             .collect(),
     );
     let nonce = difficulty_and_nonce.map(|(_, n)| n).unwrap_or_default();
-    let (api_keys, api_key) = (
-        to_api_keys(vec![api_keys_and_key.0.to_owned()]),
-        api_keys_and_key.1,
-    );
+    let (api_keys, api_key) = (to_api_keys(api_key_and_keys.0), api_key_and_keys.1);
 
     let request = || {
         warp::test::request()
@@ -809,7 +878,7 @@ async fn test_get_wallet_info() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let filter =
         routes::wallet_info(&mut dp(), db, Default::default(), ks, cache).recover(handle_rejection);
     let res = request.reply(&filter).await;
@@ -823,6 +892,42 @@ async fn test_get_wallet_info() {
 
     assert_eq!((r_s.status(), r_s.headers().clone()), success_json());
     assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+}
+
+/// Test GET shared config for compute node
+#[tokio::test(flavor = "current_thread")]
+async fn test_get_shared_config() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let compute = ComputeTest::new(Default::default());
+    let request = warp::test::request()
+        .method("GET")
+        .path("/get_shared_config")
+        .header("Content-Type", "application/json")
+        .header("x-request-id", COMMON_REQ_ID);
+
+    //
+    // Act
+    //
+    let filter = routes::get_shared_config(
+        &mut dp(),
+        compute.threaded_calls.tx.clone(),
+        Default::default(),
+        Default::default(),
+        create_new_cache(CACHE_LIVE_TIME),
+    )
+    .recover(handle_rejection);
+    let handle = compute.spawn();
+    let res = request.reply(&filter).await;
+    let _ = handle.await;
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Successfully fetched shared config\",\"route\":\"get_shared_config\",\"content\":{\"compute_mining_event_timeout\":0,\"compute_partition_full_size\":0}}");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -858,7 +963,7 @@ async fn test_pagination() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let filter =
         routes::wallet_info(&mut dp(), db, Default::default(), ks, cache).recover(handle_rejection);
     let res = request.reply(&filter).await;
@@ -908,7 +1013,7 @@ async fn test_pagination_zero_or_terminal() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let filter =
         routes::wallet_info(&mut dp(), db, Default::default(), ks, cache).recover(handle_rejection);
     let res = request.reply(&filter).await;
@@ -970,7 +1075,7 @@ async fn test_cache() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
 
     let filter =
         routes::wallet_info(&mut dp(), db, Default::default(), ks, cache).recover(handle_rejection);
@@ -1023,7 +1128,7 @@ async fn test_get_payment_address() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::payment_address(&mut dp(), db.clone(), Default::default(), ks, cache)
@@ -1063,7 +1168,7 @@ async fn test_get_utxo_set_addresses() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::utxo_addresses(
@@ -1166,7 +1271,7 @@ async fn test_post_blockchain_entry_by_key(
     let _ = tracing_log_try_init();
 
     let db = get_db_with_block().await;
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::blockchain_entry_by_key(&mut dp(), db, Default::default(), ks, cache)
@@ -1190,7 +1295,7 @@ async fn test_post_block_info_by_nums() {
     let _ = tracing_log_try_init();
 
     let db = get_db_with_block().await;
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::block_by_num(&mut dp(), db, Default::default(), ks, cache)
         .recover(handle_rejection);
@@ -1219,7 +1324,7 @@ async fn test_post_transactions_by_key() {
     let _ = tracing_log_try_init();
 
     let db = get_db_with_block().await;
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::transactions_by_key(&mut dp(), db, Default::default(), ks, cache)
         .recover(handle_rejection);
@@ -1270,7 +1375,7 @@ async fn test_post_make_payment() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::make_payment(
         &mut dp(),
@@ -1322,7 +1427,7 @@ async fn test_post_make_ip_payment() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::make_ip_payment(
@@ -1414,7 +1519,7 @@ async fn test_address_construction() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::address_construction(&mut dp(), Default::default(), ks, cache)
         .recover(handle_rejection);
@@ -1461,7 +1566,7 @@ async fn test_post_request_donation() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter =
@@ -1493,7 +1598,7 @@ async fn test_post_import_keypairs_success() {
         COMMON_ADDR_STORE.1.to_vec(),
     );
     let imported_addresses = Addresses { addresses };
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::import_keypairs(&mut dp(), db.clone(), Default::default(), ks, cache)
@@ -1542,7 +1647,7 @@ async fn test_post_fetch_balance() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::fetch_balance(
@@ -1589,7 +1694,7 @@ async fn test_post_fetch_pending() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::fetch_pending(
@@ -1637,7 +1742,7 @@ async fn test_post_update_running_total() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter =
@@ -1720,7 +1825,7 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::create_transactions(
@@ -1782,7 +1887,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::create_receipt_asset(
@@ -1830,7 +1935,7 @@ async fn test_post_create_receipt_asset_tx_user() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::create_receipt_asset_user(
         &mut dp(),
@@ -1884,7 +1989,7 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::create_receipt_asset(
         &mut dp(),
@@ -1931,7 +2036,7 @@ async fn test_post_change_passphrase() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::change_passphrase(&mut dp(), db.clone(), Default::default(), ks, cache)
@@ -1976,7 +2081,7 @@ async fn test_post_change_passphrase_failure() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::change_passphrase(&mut dp(), db.clone(), Default::default(), ks, cache)
         .recover(handle_rejection);
@@ -2021,7 +2126,7 @@ async fn test_post_change_blank_passphrase_failure() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::change_passphrase(&mut dp(), db.clone(), Default::default(), ks, cache)
         .recover(handle_rejection);
@@ -2062,7 +2167,7 @@ async fn test_post_block_nums_by_tx_hashes() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::blocks_by_tx_hashes(&mut dp(), db, Default::default(), ks, cache)
         .recover(handle_rejection);
@@ -2073,4 +2178,120 @@ async fn test_post_block_nums_by_tx_hashes() {
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Database item(s) successfully retrieved\",\"route\":\"check_transaction_presence\",\"content\":[]}");
+}
+
+/// Test POST pause nodes
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_pause_nodes() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let compute = ComputeTest::new(Default::default());
+    let request = warp::test::request()
+        .method("POST")
+        .path("/pause_nodes")
+        .header("Content-Type", "application/json")
+        .header("x-request-id", COMMON_REQ_ID);
+
+    //
+    // Act
+    //
+    let filter = routes::pause_nodes(
+        &mut dp(),
+        compute.threaded_calls.tx.clone(),
+        Default::default(),
+        Default::default(),
+        create_new_cache(CACHE_LIVE_TIME),
+    )
+    .recover(handle_rejection);
+    let handle = compute.spawn();
+    let res = request.reply(&filter).await;
+    let _ = handle.await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"\",\"route\":\"pause_nodes\",\"content\":\"null\"}");
+}
+
+/// Test POST resume nodes
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_resume_nodes() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let compute = ComputeTest::new(Default::default());
+    let request = warp::test::request()
+        .method("POST")
+        .path("/resume_nodes")
+        .header("Content-Type", "application/json")
+        .header("x-request-id", COMMON_REQ_ID);
+
+    //
+    // Act
+    //
+    let filter = routes::resume_nodes(
+        &mut dp(),
+        compute.threaded_calls.tx.clone(),
+        Default::default(),
+        Default::default(),
+        create_new_cache(CACHE_LIVE_TIME),
+    )
+    .recover(handle_rejection);
+    let handle = compute.spawn();
+    let res = request.reply(&filter).await;
+    let _ = handle.await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"\",\"route\":\"resume_nodes\",\"content\":\"null\"}");
+}
+
+/// Test POST update shared config
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_update_shared_config() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let shared_config_body = ComputeNodeSharedConfig {
+        compute_mining_event_timeout: 10000,
+        compute_partition_full_size: 5,
+    };
+    let compute = ComputeTest::new(Default::default());
+    let request = warp::test::request()
+        .method("POST")
+        .path("/update_shared_config")
+        .header("Content-Type", "application/json")
+        .header("x-request-id", COMMON_REQ_ID)
+        .json(&shared_config_body);
+
+    //
+    // Act
+    //
+    let filter = routes::update_shared_config(
+        &mut dp(),
+        compute.threaded_calls.tx.clone(),
+        Default::default(),
+        Default::default(),
+        create_new_cache(CACHE_LIVE_TIME),
+    )
+    .recover(handle_rejection);
+    let handle = compute.spawn();
+    let res = request.reply(&filter).await;
+    let _ = handle.await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"\",\"route\":\"update_shared_config\",\"content\":\"null\"}");
 }

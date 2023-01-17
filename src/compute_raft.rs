@@ -35,6 +35,20 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     columns: &[],
 };
 
+// A coordinated command sent through the RAFT to all peers
+#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
+pub enum CoordinatedCommand {
+    PauseNodes,
+    ResumeNodes,
+    ApplySharedConfig,
+}
+
+impl Default for CoordinatedCommand {
+    fn default() -> Self {
+        CoordinatedCommand::ResumeNodes
+    }
+}
+
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
@@ -44,6 +58,7 @@ pub enum ComputeRaftItem {
     Transactions(BTreeMap<String, Transaction>),
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
     PipelineItem(MiningPipelineItem, u64),
+    CoordinatedCmd(CoordinatedCommand),
 }
 
 /// Commited item to process.
@@ -57,6 +72,7 @@ pub enum CommittedItem {
     ResetPipeline,
     Transactions,
     Snapshot,
+    CoordinatedCmd(CoordinatedCommand),
 }
 
 impl From<MiningPipelinePhaseChange> for CommittedItem {
@@ -122,9 +138,12 @@ pub struct ComputeConsensused {
     /// UTXO set containing the valid transaction to use as previous input hashes.
     utxo_set: TrackedUtxoSet,
     /// Accumulating block:
-    /// Require majority of compute node votes for normal blocks.
-    /// Require unanimit for first block.
+    /// Requires majority of compute node votes for normal blocks.
+    /// Requires unanimous vote for first block.
     current_block_stored_info: BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
+    /// Coordinated commands sent through RAFT
+    /// Requires unanimous vote
+    current_raft_coordinated_cmd_stored_info: BTreeMap<CoordinatedCommand, BTreeSet<u64>>,
     /// The last commited raft index.
     last_committed_raft_idx_and_term: (u64, u64),
     /// The current circulation of tokens
@@ -265,6 +284,27 @@ impl ComputeRaft {
         }
     }
 
+    /// Get the full mining partition size
+    pub fn get_compute_partition_full_size(&self) -> usize {
+        self.consensused.partition_full_size
+    }
+
+    /// Get the compute mining event timeout in MS
+    pub fn get_compute_mining_event_timeout(&self) -> usize {
+        self.propose_mining_event_timeout_duration.as_millis() as usize
+    }
+
+    /// Update the mining event timeout duration
+    pub fn update_mining_event_timeout_duration(&mut self, ms: usize) {
+        self.propose_mining_event_timeout_duration = Duration::from_millis(ms as u64);
+    }
+
+    /// Update the partition full size
+    pub fn update_partition_full_size(&mut self, partition_full_size: usize) {
+        self.consensused
+            .update_partition_full_size(partition_full_size);
+    }
+
     /// Set the key run for all proposals (load from db before first proposal).
     pub fn set_key_run(&mut self, key_run: u64) {
         self.proposed_in_flight.set_key_run(key_run)
@@ -333,25 +373,6 @@ impl ComputeRaft {
                 None
             }
         }
-    }
-
-    #[cfg(feature = "config_override")]
-    pub fn override_with_config(&mut self, config: &ComputeNodeConfig) {
-        debug!("Overriding network metrics with values from initial ComputeNodeConfig");
-        self.consensused.block_pipeline = self
-            .consensused
-            .block_pipeline
-            .clone()
-            .with_unicorn_fixed_param(config.compute_unicorn_fixed_param.clone());
-        debug!(
-            "Current partition size {:?} | Partition size in config {:?}",
-            self.consensused.partition_full_size, config.compute_partition_full_size
-        );
-        self.consensused.partition_full_size = config.compute_partition_full_size;
-        self.propose_mining_event_timeout_duration =
-            Duration::from_millis(config.compute_mining_event_timeout as u64);
-        self.propose_transactions_timeout_duration =
-            Duration::from_millis(config.compute_transaction_timeout as u64);
     }
 
     /// Apply snapshot
@@ -490,6 +511,21 @@ impl ComputeRaft {
                     None => return None,
                 }
             }
+            ComputeRaftItem::CoordinatedCmd(cmd) => {
+                self.consensused
+                    .append_current_coordinated_raft_cmd_stored_info(key, cmd);
+                if self
+                    .consensused
+                    .has_different_coordinated_raft_cmd_stored_info()
+                {
+                    warn!("Proposed coordinated commands are different {:?}", key);
+                }
+
+                if self.consensused.has_coordinated_raft_cmd_info_ready() {
+                    let coordinated_command = self.consensused.take_ready_coordinated_raft_cmd();
+                    return Some(CommittedItem::CoordinatedCmd(coordinated_command));
+                }
+            }
         }
         None
     }
@@ -618,6 +654,7 @@ impl ComputeRaft {
         self.consensused.block_pipeline.clear_proposed_keys();
     }
 
+    /// Flush disconnected miners from compute node
     pub fn flush_stale_miners(&mut self, unsent_miners: &[SocketAddr]) {
         self.consensused
             .block_pipeline
@@ -625,6 +662,36 @@ impl ComputeRaft {
         self.consensused
             .block_pipeline
             .cleanup_participants_mining(unsent_miners);
+    }
+
+    /// Propose to pause nodes
+    ///
+    /// NOTE: Requires a unanimous majority vote
+    pub async fn propose_pause_nodes(&mut self) {
+        self.propose_item(&ComputeRaftItem::CoordinatedCmd(
+            CoordinatedCommand::PauseNodes,
+        ))
+        .await;
+    }
+
+    /// Propose to resume nodes
+    ///
+    /// NOTE: Requires a unanimous majority vote
+    pub async fn propose_resume_nodes(&mut self) {
+        self.propose_item(&ComputeRaftItem::CoordinatedCmd(
+            CoordinatedCommand::ResumeNodes,
+        ))
+        .await;
+    }
+
+    /// Propose to apply a shared config
+    ///
+    /// NOTE: Requires a unanimous majority vote
+    pub async fn propose_apply_shared_config(&mut self) {
+        self.propose_item(&ComputeRaftItem::CoordinatedCmd(
+            CoordinatedCommand::ApplySharedConfig,
+        ))
+        .await;
     }
 
     /// Process as a result of timeout_propose_transactions.
@@ -866,6 +933,11 @@ impl ComputeRaft {
 }
 
 impl ComputeConsensused {
+    /// Update the mining partition size
+    pub fn update_partition_full_size(&mut self, partition_full_size: usize) {
+        self.partition_full_size = partition_full_size;
+    }
+
     /// Specify the raft group size
     pub fn with_peers_len(mut self, peers_len: usize) -> Self {
         self.unanimous_majority = peers_len;
@@ -930,6 +1002,7 @@ impl ComputeConsensused {
             initial_utxo_txs: Default::default(),
             utxo_set: TrackedUtxoSet::new(utxo_set),
             current_block_stored_info: Default::default(),
+            current_raft_coordinated_cmd_stored_info: Default::default(),
             last_committed_raft_idx_and_term,
             current_circulation,
             block_pipeline: MiningPipelineInfo::from_import(block_pipeline),
@@ -1169,9 +1242,19 @@ impl ComputeConsensused {
         }
     }
 
+    /// Check if we have inconsistent votes for a coordinated RAFT command
+    pub fn has_different_coordinated_raft_cmd_stored_info(&self) -> bool {
+        self.current_raft_coordinated_cmd_stored_info.len() > 1
+    }
+
     /// Check if we have inconsistent votes for the current block stored info.
     pub fn has_different_block_stored_info(&self) -> bool {
         self.current_block_stored_info.len() > 1
+    }
+
+    /// Check if we have enough votes to apply a coordinated RAFT command
+    pub fn has_coordinated_raft_cmd_info_ready(&self) -> bool {
+        self.max_agreeing_coordinated_raft_cmd_stored_info() >= self.unanimous_majority
     }
 
     /// Check if we have enough votes to apply the block stored info.
@@ -1183,6 +1266,15 @@ impl ComputeConsensused {
         };
 
         self.max_agreeing_block_stored_info() >= threshold
+    }
+
+    // Current maximum vote count for coordinated RAFT command
+    fn max_agreeing_coordinated_raft_cmd_stored_info(&self) -> usize {
+        self.current_raft_coordinated_cmd_stored_info
+            .values()
+            .map(|v| v.len())
+            .max()
+            .unwrap_or(0)
     }
 
     /// Current maximum vote count for a block stored info.
@@ -1219,6 +1311,23 @@ impl ComputeConsensused {
     /// * `block` - BlockStoredInfo to be appended.
     pub fn append_block_stored_info(&mut self, key: RaftContextKey, block: BlockStoredInfo) {
         self.append_current_block_stored_info(key, AccumulatingBlockStoredInfo::Block(block))
+    }
+
+    /// Append a vote for a coordinated RAFT command
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - RaftContextKey object
+    /// * `cmd` - The coordinated command
+    pub fn append_current_coordinated_raft_cmd_stored_info(
+        &mut self,
+        key: RaftContextKey,
+        cmd: CoordinatedCommand,
+    ) {
+        self.current_raft_coordinated_cmd_stored_info
+            .entry(cmd)
+            .or_default()
+            .insert(key.proposer_id);
     }
 
     /// Append the given vote.
@@ -1283,6 +1392,19 @@ impl ComputeConsensused {
             .max_by_key(|(_, vote_ids)| vote_ids.len())
             .map(|(block_info, _)| block_info)
             .unwrap()
+    }
+
+    /// Take the coordinated RAFT cmd info with most vote and reset accumulator.
+    fn take_ready_coordinated_raft_cmd(&mut self) -> CoordinatedCommand {
+        let infos = std::mem::take(&mut self.current_raft_coordinated_cmd_stored_info);
+        let mut coordinated_cmd = Default::default();
+        let current_max_vote: usize = Default::default();
+        for (val, votes) in infos.into_iter() {
+            if current_max_vote < votes.len() {
+                coordinated_cmd = val;
+            }
+        }
+        coordinated_cmd
     }
 
     /// Start participants intake phase

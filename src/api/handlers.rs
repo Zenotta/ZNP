@@ -6,6 +6,7 @@ use crate::api::responses::{
 use crate::api::utils::map_string_err;
 use crate::comms_handler::Node;
 use crate::compute::ComputeError;
+use crate::configurations::ComputeNodeSharedConfig;
 use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
@@ -334,6 +335,28 @@ pub async fn get_utxo_addresses(
     r.into_ok(
         "UTXO addresses successfully retrieved",
         json_serialize_embed(addresses),
+    )
+}
+
+//POST update a compute node's config, sharing it to all other peers
+pub async fn get_shared_config_compute(
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+    // Send request to compute node
+    let res = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| c.get_shared_config(),
+        "Cannot access Compute Node",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    r.into_ok(
+        "Successfully fetched shared config",
+        json_serialize_embed(res),
     )
 }
 
@@ -797,6 +820,79 @@ pub async fn post_payment_address_construction(
     )
 }
 
+//POST pause nodes in a coordinated manner
+pub async fn pause_nodes(
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+    // Send request to compute node
+    let res = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| c.pause_nodes(),
+        "Cannot access Compute Node",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    if !res.success {
+        debug!("route:pause_nodes error: {:?}", res.reason);
+        return r.into_err_internal(ApiErrorType::Generic(res.reason.to_owned()));
+    }
+
+    r.into_ok(res.reason, json_serialize_embed("null"))
+}
+
+//POST resume nodes in a coordinated manner
+pub async fn resume_nodes(
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+    // Send request to compute node
+    let res = make_api_threaded_call(
+        &mut threaded_calls,
+        |c| c.resume_nodes(),
+        "Cannot access Compute Node",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    if !res.success {
+        debug!("route:resume_nodes error: {:?}", res.reason);
+        return r.into_err_internal(ApiErrorType::Generic(res.reason.to_owned()));
+    }
+
+    r.into_ok(res.reason, json_serialize_embed("null"))
+}
+
+//POST update a compute node's config, sharing it to all other peers
+pub async fn update_shared_config(
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    shared_config: ComputeNodeSharedConfig,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+    // Send request to compute node
+    let res = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| c.send_shared_config(shared_config),
+        "Cannot access Compute Node",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    if !res.success {
+        debug!("route:update_shared_config error: {:?}", res.reason);
+        return r.into_err_internal(ApiErrorType::Generic(res.reason.to_owned()));
+    }
+
+    r.into_ok(res.reason, json_serialize_embed("null"))
+}
+
 //======= Helpers =======//
 
 /// Filters through wallet errors which are internal vs errors caused by user input
@@ -928,9 +1024,9 @@ pub fn get_json_reply_items_from_db(
 }
 
 /// Threaded call for API
-pub async fn make_api_threaded_call<'a, T: ?Sized, R: Send + Sized + 'static>(
+pub async fn make_api_threaded_call<'a, T: ?Sized, R: Send + Sized + Sync + 'static>(
     tx: &mut ThreadedCallSender<T>,
-    f: impl FnOnce(&mut T) -> R + Send + Sized + 'static,
+    f: impl FnOnce(&mut T) -> R + Send + Sized + Sync + 'static,
     tag: &'a str,
 ) -> Result<R, StringError> {
     threaded_call::make_threaded_call(tx, f, tag).await

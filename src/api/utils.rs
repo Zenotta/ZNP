@@ -15,9 +15,6 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
-// Indicates that any API key may be used
-pub const ANY_API_KEY: &str = "any_key";
-
 // Clone component/struct to use in route
 pub fn with_node_component<T: Clone + Send>(
     comp: T,
@@ -63,8 +60,7 @@ pub fn auth_request(
         .and_then(move |path: FullPath, headers: HeaderMap| {
             let route_path = path.as_str()[1..].to_owned(); /* Slice to remove '/' prefix */
             let route_difficulty = routes_pow.lock().unwrap().get(&route_path).cloned();
-            let keys = api_keys.lock().unwrap().clone();
-            let need_api_key = !keys.contains(ANY_API_KEY);
+            let needed_keys = api_keys.lock().unwrap().get(&route_path).cloned();
 
             async move {
                 // Extract headers
@@ -96,9 +92,11 @@ pub fn auth_request(
                     return err_unauthorized;
                 }
 
-                // API key is needed, but the corresponding API key is not provided/invalid
-                if need_api_key && !keys.contains(api_key) {
-                    return err_unauthorized;
+                // API key is needed
+                if let Some(needed_api_keys) = needed_keys {
+                    if !needed_api_keys.contains(&api_key.to_string()) {
+                        return err_unauthorized;
+                    }
                 }
 
                 let hash_content = format!("{}-{}", nonce, id);

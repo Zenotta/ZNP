@@ -1,7 +1,9 @@
 //! Test suite for the network functions.
 
 use crate::compute::ComputeNode;
-use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
+use crate::configurations::{
+    ComputeNodeSharedConfig, TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec,
+};
 use crate::constants::{NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
@@ -3249,6 +3251,177 @@ async fn reject_receipt_based_payment() {
         ),
         (0, 0)
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn compute_pause_update_and_resume_raft_3_nodes() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let network_config = complete_network_config_with_n_compute_raft(11550, 3);
+
+    // Initial network config as loaded
+    let initial_network_config = ComputeNodeSharedConfig {
+        compute_partition_full_size: network_config.compute_partition_full_size,
+        compute_mining_event_timeout: 500,
+    };
+
+    // This is the configuration we want applied to all compute nodes during runtime
+    let shared_config_to_send = ComputeNodeSharedConfig {
+        compute_partition_full_size: 5,
+        compute_mining_event_timeout: 10000,
+    };
+
+    let compute_ring = &[
+        "compute1".to_string(),
+        "compute2".to_string(),
+        "compute3".to_string(),
+    ];
+
+    let mut network = Network::create_from_config(&network_config).await;
+    // Complete very first mining round
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    //
+    // Act
+    //
+
+    // Create next block and then pause all the nodes
+    create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+    compute_initiate_coordinated_pause_act("compute1", compute_ring, &mut network).await;
+
+    // Confirm that the nodes are actually all paused.
+    let all_nodes_paused_after_block_create =
+        compute_all_nodes_paused(&mut network, compute_ring).await;
+
+    // All nodes should be paused now
+    // ,and ready to update their configs
+    // with the one received from "compute1"
+    compute_initiate_send_shared_config_act(
+        shared_config_to_send,
+        "compute1",
+        compute_ring,
+        &mut network,
+    )
+    .await;
+
+    // All shared config values should now be the same
+    let all_nodes_same_config = all_nodes_same_config(&mut network, compute_ring).await;
+
+    // Resume the nodes again
+    compute_initiate_coordinated_resume_act("compute1", compute_ring, &mut network).await;
+
+    // Confirm all nodes are now resumed
+    let all_nodes_resumed_after_coordinated_resume =
+        compute_all_nodes_resumed(&mut network, compute_ring).await;
+
+    // Normal operation should continue here
+    proof_of_work_act(&mut network, CfgPow::Parallel, CfgNum::All, false, None).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    //
+    // Assert
+    //
+    assert!(all_nodes_paused_after_block_create);
+    assert!(all_nodes_same_config);
+    assert!(all_nodes_resumed_after_coordinated_resume);
+    assert!(initial_network_config != shared_config_to_send);
+}
+
+async fn compute_get_shared_config(
+    network: &mut Network,
+    compute: &str,
+) -> ComputeNodeSharedConfig {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_shared_config()
+}
+
+async fn all_nodes_same_config(network: &mut Network, compute_ring: &[String]) -> bool {
+    let mut all_shared_config_same = true;
+    let first_shared_config = compute_get_shared_config(network, &compute_ring[0]).await;
+    for compute in compute_ring {
+        let shared_config = compute_get_shared_config(network, compute).await;
+        if shared_config != first_shared_config {
+            all_shared_config_same = false;
+            break;
+        }
+    }
+    all_shared_config_same
+}
+
+async fn compute_all_nodes_paused(network: &mut Network, compute_ring: &[String]) -> bool {
+    let mut all_nodes_paused = true;
+    for compute in compute_ring {
+        let c = network.compute(compute).unwrap().lock().await;
+        if !c.is_paused().await {
+            all_nodes_paused = false;
+            break;
+        }
+    }
+    all_nodes_paused
+}
+
+async fn compute_all_nodes_resumed(network: &mut Network, compute_ring: &[String]) -> bool {
+    let mut all_nodes_resumed = true;
+    for compute in compute_ring {
+        let c = network.compute(compute).unwrap().lock().await;
+        if c.is_paused().await {
+            all_nodes_resumed = false;
+            break;
+        }
+    }
+    all_nodes_resumed
+}
+
+async fn compute_initiate_coordinated_pause_act(
+    compute: &str,
+    compute_ring: &[String],
+    network: &mut Network,
+) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    let _ = c.pause_nodes();
+    drop(c); // Drop compute node to avoid borrow checker violation
+    node_all_handle_event(
+        network,
+        compute_ring,
+        &["Received coordinated pause request"],
+    )
+    .await;
+    node_all_handle_event(network, compute_ring, &["Node paused"]).await;
+}
+
+async fn compute_initiate_send_shared_config_act(
+    shared_config: ComputeNodeSharedConfig,
+    compute: &str,
+    compute_peers: &[String],
+    network: &mut Network,
+) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    let _ = c.send_shared_config(shared_config);
+    drop(c); // Drop compute node to avoid borrow checker violation
+    node_all_handle_event(network, compute_peers, &["Received shared config"]).await;
+    node_all_handle_event(network, compute_peers, &["Shared config applied"]).await;
+}
+
+async fn compute_initiate_coordinated_resume_act(
+    compute: &str,
+    compute_ring: &[String],
+    network: &mut Network,
+) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    let _ = c.resume_nodes();
+    drop(c); // Drop compute node to avoid borrow checker violation
+    node_all_handle_event(
+        network,
+        compute_ring,
+        &["Received coordinated resume request"],
+    )
+    .await;
+    node_all_handle_event(network, compute_ring, &["Node resumed"]).await;
 }
 
 //

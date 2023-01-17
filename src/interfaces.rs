@@ -1,4 +1,5 @@
 use crate::compute::ComputeError;
+use crate::configurations::ComputeNodeSharedConfig;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::Unicorn;
@@ -490,6 +491,11 @@ pub enum ComputeApiRequest {
     SendTransactions {
         transactions: Vec<Transaction>,
     },
+    PauseNodes,
+    ResumeNodes,
+    SendSharedConfig {
+        shared_config: ComputeNodeSharedConfig,
+    },
 }
 
 /// Encapsulates compute requests & responses.
@@ -499,6 +505,9 @@ pub enum ComputeRequest {
     /// Process an API internal request
     ComputeApi(ComputeApiRequest),
 
+    SendSharedConfig {
+        shared_config: ComputeNodeSharedConfig,
+    },
     SendUtxoRequest {
         address_list: UtxoFetchType,
         requester_node_type: NodeType,
@@ -518,6 +527,8 @@ pub enum ComputeRequest {
     },
     SendPartitionRequest,
     SendUserBlockNotificationRequest,
+    CoordinatedPause,
+    CoordinatedResume,
     Closing,
     SendRaftCmd(RaftMessageWrapper),
 }
@@ -533,7 +544,11 @@ impl fmt::Debug for ComputeRequest {
             ComputeApi(ComputeApiRequest::SendTransactions { .. }) => {
                 write!(f, "Api::SendTransactions")
             }
-
+            ComputeApi(ComputeApiRequest::PauseNodes) => write!(f, "Api::PauseNodes"),
+            ComputeApi(ComputeApiRequest::ResumeNodes) => write!(f, "Api::ResumeNodes"),
+            ComputeApi(ComputeApiRequest::SendSharedConfig { .. }) => {
+                write!(f, "Api::SendSharedConfig")
+            }
             SendUtxoRequest { .. } => write!(f, "SendUtxoRequest"),
             SendBlockStored(_) => write!(f, "SendBlockStored"),
             SendPoW { ref block_num, .. } => write!(f, "SendPoW({})", block_num),
@@ -541,7 +556,10 @@ impl fmt::Debug for ComputeRequest {
             SendTransactions { .. } => write!(f, "SendTransactions"),
             SendUserBlockNotificationRequest => write!(f, "SendUserBlockNotificationRequest"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
+            SendSharedConfig { .. } => write!(f, "SendSharedConfig"),
             Closing => write!(f, "Closing"),
+            CoordinatedPause => write!(f, "CoordinatedPause"),
+            CoordinatedResume => write!(f, "CoordinatedResume"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
     }
@@ -574,7 +592,20 @@ pub trait ComputeInterface {
     fn get_next_block_reward(&self) -> f64;
 }
 
+/// Compute node API
 pub trait ComputeApi {
+    /// Get compute node configuration that is shareable between peers
+    fn get_shared_config(&self) -> ComputeNodeSharedConfig;
+
+    /// Pause all compute nodes
+    fn pause_nodes(&mut self) -> Response;
+
+    /// Resume all compute nodes
+    fn resume_nodes(&mut self) -> Response;
+
+    /// Share compute node config with other compute nodes
+    fn send_shared_config(&mut self, shared_config: ComputeNodeSharedConfig) -> Response;
+
     /// Get the UTXO tracked set
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet;
 
