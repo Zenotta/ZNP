@@ -156,6 +156,7 @@ pub struct ComputeNode {
         RoutesPoWInfo,
         Node,
     ),
+    #[cfg(feature = "config_override")]
     config: ComputeNodeConfig,
 }
 
@@ -202,6 +203,7 @@ impl ComputeNode {
         let api_info = (api_addr, api_tls_info, api_keys, api_pow_info, node.clone());
 
         ComputeNode {
+            #[cfg(feature = "config_override")]
             config: config.clone(),
             node,
             node_raft,
@@ -805,7 +807,8 @@ impl ComputeNode {
                 }))
             }
             Some(CommittedItem::Snapshot) => {
-                // Read config from disk and override values updated by the snapshot
+                // Override values updated by the snapshot with values from the config
+                #[cfg(feature = "config_override")]
                 self.node_raft.override_with_config(&self.config);
 
                 Some(Ok(Response {

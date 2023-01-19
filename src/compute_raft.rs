@@ -335,6 +335,7 @@ impl ComputeRaft {
         }
     }
 
+    #[cfg(feature = "config_override")]
     pub fn override_with_config(&mut self, config: &ComputeNodeConfig) {
         self.consensused.block_pipeline = self
             .consensused
