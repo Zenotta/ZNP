@@ -316,7 +316,7 @@ impl ComputeRaft {
     }
 
     /// Process result from next_commit.
-    /// Return Some CommitedItem if block to mine is ready to generate. Returns 'not implemented' if not implemented
+    /// Return Some CommittedItem if block to mine is ready to generate. Returns 'not implemented' if not implemented
     /// ### Arguments
     /// * 'raft_commit' - a RaftCommit struct from the raft.rs class to be proposed to commit.
     pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<CommittedItem> {
@@ -337,11 +337,16 @@ impl ComputeRaft {
 
     #[cfg(feature = "config_override")]
     pub fn override_with_config(&mut self, config: &ComputeNodeConfig) {
+        debug!("Overriding network metrics with values from initial ComputeNodeConfig");
         self.consensused.block_pipeline = self
             .consensused
             .block_pipeline
             .clone()
             .with_unicorn_fixed_param(config.compute_unicorn_fixed_param.clone());
+        debug!(
+            "Current partition size {:?} | Partition size in config {:?}",
+            self.consensused.partition_full_size, config.compute_partition_full_size
+        );
         self.consensused.partition_full_size = config.compute_partition_full_size;
         self.propose_mining_event_timeout_duration =
             Duration::from_millis(config.compute_mining_event_timeout as u64);

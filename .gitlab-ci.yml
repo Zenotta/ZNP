@@ -36,7 +36,7 @@ build:
   script:
       # Print version info for debugging
     - rustc --version && cargo --version  
-    - cargo build --bins --release
+    - cargo build --bins --release --features=config_override
     - ls ./target/release/ -l
     - echo "BUILD_CI_JOB_ID=$CI_JOB_ID" >> build.env
   artifacts:
@@ -79,7 +79,7 @@ test:cargo:
   script:
     - rustc --version && cargo --version  
       # Print version info for debugging
-    - cargo test --workspace --verbose
+    - cargo test --workspace --verbose --features=config_override
 
 lint:rustfmt:
   only:
