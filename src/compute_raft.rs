@@ -335,6 +335,19 @@ impl ComputeRaft {
         }
     }
 
+    pub fn override_with_config(&mut self, config: &ComputeNodeConfig) {
+        self.consensused.block_pipeline = self
+            .consensused
+            .block_pipeline
+            .clone()
+            .with_unicorn_fixed_param(config.compute_unicorn_fixed_param.clone());
+        self.consensused.partition_full_size = config.compute_partition_full_size;
+        self.propose_mining_event_timeout_duration =
+            Duration::from_millis(config.compute_mining_event_timeout as u64);
+        self.propose_transactions_timeout_duration =
+            Duration::from_millis(config.compute_transaction_timeout as u64);
+    }
+
     /// Apply snapshot
     fn apply_snapshot(&mut self, consensused_ser: RaftData) -> Option<CommittedItem> {
         self.consensused_snapshot_applied = true;
