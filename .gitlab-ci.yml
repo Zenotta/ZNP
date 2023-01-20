@@ -10,6 +10,8 @@ image: "rust:latest"
     - mkdir -p cargo_cache
     - echo $CARGO_HOME
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential m4 llvm libclang-dev clang
+    - rm -rf ../naom
+    - rm -rf ../keccak-prime
     - git clone --depth=1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/zenotta/naom.git ../naom
     - git clone --depth=1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/zenotta/keccak-prime.git ../keccak-prime
   cache:
