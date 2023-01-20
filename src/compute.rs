@@ -156,6 +156,8 @@ pub struct ComputeNode {
         RoutesPoWInfo,
         Node,
     ),
+    #[cfg(feature = "config_override")]
+    config: ComputeNodeConfig,
 }
 
 impl ComputeNode {
@@ -201,6 +203,8 @@ impl ComputeNode {
         let api_info = (api_addr, api_tls_info, api_keys, api_pow_info, node.clone());
 
         ComputeNode {
+            #[cfg(feature = "config_override")]
+            config: config.clone(),
             node,
             node_raft,
             db,
@@ -802,10 +806,16 @@ impl ComputeNode {
                     reason: "Transactions committed",
                 }))
             }
-            Some(CommittedItem::Snapshot) => Some(Ok(Response {
-                success: true,
-                reason: "Snapshot applied",
-            })),
+            Some(CommittedItem::Snapshot) => {
+                // Override values updated by the snapshot with values from the config
+                #[cfg(feature = "config_override")]
+                self.node_raft.override_with_config(&self.config);
+
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Snapshot applied",
+                }))
+            }
             None => None,
         }
     }

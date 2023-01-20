@@ -44,6 +44,7 @@ warp = { version = "0.3.1", features = ["tls"] }
 
 [features]
 mock = []
+config_override = []
 
 [patch.crates-io]
 raft = { git = "https://github.com/Zenotta/raft-rs", branch = "0.5.1" }
