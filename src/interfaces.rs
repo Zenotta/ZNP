@@ -491,7 +491,9 @@ pub enum ComputeApiRequest {
     SendTransactions {
         transactions: Vec<Transaction>,
     },
-    PauseNodes,
+    PauseNodes {
+        b_num: u64,
+    },
     ResumeNodes,
     SendSharedConfig {
         shared_config: ComputeNodeSharedConfig,
@@ -527,7 +529,9 @@ pub enum ComputeRequest {
     },
     SendPartitionRequest,
     SendUserBlockNotificationRequest,
-    CoordinatedPause,
+    CoordinatedPause {
+        b_num: u64, // Pause the nodes on current b_num + b_num
+    },
     CoordinatedResume,
     Closing,
     SendRaftCmd(RaftMessageWrapper),
@@ -544,7 +548,7 @@ impl fmt::Debug for ComputeRequest {
             ComputeApi(ComputeApiRequest::SendTransactions { .. }) => {
                 write!(f, "Api::SendTransactions")
             }
-            ComputeApi(ComputeApiRequest::PauseNodes) => write!(f, "Api::PauseNodes"),
+            ComputeApi(ComputeApiRequest::PauseNodes { .. }) => write!(f, "Api::PauseNodes"),
             ComputeApi(ComputeApiRequest::ResumeNodes) => write!(f, "Api::ResumeNodes"),
             ComputeApi(ComputeApiRequest::SendSharedConfig { .. }) => {
                 write!(f, "Api::SendSharedConfig")
@@ -558,7 +562,7 @@ impl fmt::Debug for ComputeRequest {
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
             SendSharedConfig { .. } => write!(f, "SendSharedConfig"),
             Closing => write!(f, "Closing"),
-            CoordinatedPause => write!(f, "CoordinatedPause"),
+            CoordinatedPause { .. } => write!(f, "CoordinatedPause"),
             CoordinatedResume => write!(f, "CoordinatedResume"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
@@ -598,7 +602,7 @@ pub trait ComputeApi {
     fn get_shared_config(&self) -> ComputeNodeSharedConfig;
 
     /// Pause all compute nodes
-    fn pause_nodes(&mut self) -> Response;
+    fn pause_nodes(&mut self, b_num: u64) -> Response;
 
     /// Resume all compute nodes
     fn resume_nodes(&mut self) -> Response;

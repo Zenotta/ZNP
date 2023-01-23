@@ -338,7 +338,7 @@ pub async fn get_utxo_addresses(
     )
 }
 
-//POST update a compute node's config, sharing it to all other peers
+//POST get a compute node's config which is shareable amongst its peers
 pub async fn get_shared_config_compute(
     mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     route: &'static str,
@@ -825,12 +825,14 @@ pub async fn pause_nodes(
     mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     route: &'static str,
     call_id: String,
+    b_num: Option<u64>, // NOTE: Nodes will pause at b_num + b_num
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
     // Send request to compute node
     let res = make_api_threaded_call(
         &mut threaded_calls,
-        move |c| c.pause_nodes(),
+        // NOTE: Nodes will pause at current_block + b_num; default is 1 block from current block
+        move |c| c.pause_nodes(b_num.unwrap_or(1)),
         "Cannot access Compute Node",
     )
     .await

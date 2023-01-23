@@ -138,6 +138,7 @@ pub struct ComputeNode {
     node_raft: ComputeRaft,
     db: SimpleDb,
     local_events: LocalEventChannel,
+    b_num_to_pause: Option<u64>,
     pause_node: Arc<RwLock<bool>>,
     disable_trigger_messages: Arc<RwLock<bool>>,
     threaded_calls: ThreadedCallChannel<dyn ComputeApi>,
@@ -214,8 +215,6 @@ impl ComputeNode {
         };
 
         ComputeNode {
-            #[cfg(feature = "config_override")]
-            config: config.clone(),
             node,
             node_raft,
             db,
@@ -223,6 +222,7 @@ impl ComputeNode {
             received_shared_config: Default::default(),
             local_events: Default::default(),
             pause_node: Default::default(),
+            b_num_to_pause: Default::default(),
             disable_trigger_messages: Default::default(),
             threaded_calls: Default::default(),
             current_mined_block: None,
@@ -257,21 +257,18 @@ impl ComputeNode {
     }
 
     /// Propose a coordinated pause of all compute nodes
-    pub async fn propose_pause_nodes(&mut self) -> Result<()> {
-        self.node_raft.propose_pause_nodes().await;
-        Ok(())
+    pub async fn propose_pause_nodes(&mut self, b_num: u64) {
+        self.node_raft.propose_pause_nodes(b_num).await;
     }
 
     /// Propose a coordinated resume of all compute nodes
-    pub async fn propose_resume_nodes(&mut self) -> Result<()> {
+    pub async fn propose_resume_nodes(&mut self) {
         self.node_raft.propose_resume_nodes().await;
-        Ok(())
     }
 
     /// Propose a coordinated pause/resume of all compute nodes
-    pub async fn propose_apply_shared_config(&mut self) -> Result<()> {
+    pub async fn propose_apply_shared_config(&mut self) {
         self.node_raft.propose_apply_shared_config().await;
-        Ok(())
     }
 
     /// Returns the compute node's public endpoint.
@@ -577,31 +574,45 @@ impl ComputeNode {
             Ok(Response {
                 success: true,
                 reason: "Received coordinated pause request",
-            }) => {}
+            }) => {
+                debug!("Received coordinated pause request");
+            }
             Ok(Response {
                 success: true,
-                reason: "Node paused",
-            }) => {}
+                reason: "Node pause configuration set",
+            }) => {
+                debug!("Node pause configuration set");
+            }
             Ok(Response {
                 success: true,
                 reason: "Received coordinated resume request",
-            }) => {}
+            }) => {
+                debug!("Received coordinated resume request");
+            }
             Ok(Response {
                 success: true,
                 reason: "Node resumed",
-            }) => {}
+            }) => {
+                warn!("NODE RESUMED");
+            }
             Ok(Response {
                 success: true,
                 reason: "Received shared config",
-            }) => {}
+            }) => {
+                debug!("Shared config received");
+            }
             Ok(Response {
                 success: true,
                 reason: "Shared config applied",
-            }) => {}
+            }) => {
+                debug!("Shared config applied");
+            }
             Ok(Response {
                 success: false,
                 reason: "No shared config to apply",
-            }) => {}
+            }) => {
+                warn!("No shared config to apply");
+            }
             Ok(Response {
                 success: true,
                 reason: "Shutdown",
@@ -676,6 +687,7 @@ impl ComputeNode {
                     self.flood_block_to_users().await.unwrap();
                     self.flood_rand_and_block_to_partition().await.unwrap()
                 } else {
+                    warn!("NODE PAUSED");
                     // Disable trigger messages to ensure mining cannot take place
                     *self.disable_trigger_messages.write().await = true;
                 }
@@ -690,6 +702,7 @@ impl ComputeNode {
                     self.flood_block_to_users().await.unwrap();
                     self.flood_rand_and_block_to_partition().await.unwrap()
                 } else {
+                    warn!("NODE PAUSED");
                     // Disable trigger messages to ensure mining cannot take place
                     *self.disable_trigger_messages.write().await = true;
                 }
@@ -842,7 +855,7 @@ impl ComputeNode {
     async fn handle_committed_data(&mut self, commit_data: RaftCommit) -> Option<Result<Response>> {
         match self.node_raft.received_commit(commit_data).await {
             Some(CommittedItem::FirstBlock) => {
-                self.reset_mining_block_process();
+                self.reset_mining_block_process().await;
                 self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
@@ -850,7 +863,7 @@ impl ComputeNode {
                 }))
             }
             Some(CommittedItem::Block) => {
-                self.reset_mining_block_process();
+                self.reset_mining_block_process().await;
                 self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
@@ -858,7 +871,7 @@ impl ComputeNode {
                 }))
             }
             Some(CommittedItem::BlockShutdown) => {
-                self.reset_mining_block_process();
+                self.reset_mining_block_process().await;
                 self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
@@ -1015,7 +1028,7 @@ impl ComputeNode {
                 self.handle_shared_config(peer, shared_config).await
             }
             Closing => self.receive_closing(peer),
-            CoordinatedPause => self.handle_coordinated_pause(peer).await,
+            CoordinatedPause { b_num } => self.handle_coordinated_pause(peer, b_num).await,
             CoordinatedResume => self.handle_coordinated_resume(peer).await,
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
@@ -1034,20 +1047,21 @@ impl ComputeNode {
         cmd: CoordinatedCommand,
     ) -> Option<Result<Response>> {
         match cmd {
-            CoordinatedCommand::PauseNodes => {
-                let b_num = self.node_raft.get_current_block_num();
+            CoordinatedCommand::PauseNodes { b_num } => {
+                self.b_num_to_pause = Some(b_num);
                 warn!("Pausing node at b_num: {b_num}");
-                *self.pause_node.write().await = true;
                 Some(Ok(Response {
                     success: true,
-                    reason: "Node paused",
+                    reason: "Node pause configuration set",
                 }))
             }
             CoordinatedCommand::ResumeNodes => {
+                // No longer needed to pause on a specific block
+                self.b_num_to_pause = None;
+                // Set the pause flag to false
                 *self.pause_node.write().await = false;
                 // Let the trigger messages be sent again to continue the mining process
                 *self.disable_trigger_messages.write().await = false;
-                warn!("Resuming node");
                 Some(Ok(Response {
                     success: true,
                     reason: "Node resumed",
@@ -1110,7 +1124,7 @@ impl ComputeNode {
                 }
             },
             SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
-            PauseNodes => Some(self.pause_nodes()),
+            PauseNodes { b_num } => Some(self.pause_nodes(b_num)),
             ResumeNodes => Some(self.resume_nodes()),
             SendSharedConfig { shared_config } => Some(self.send_shared_config(shared_config)),
         }
@@ -1139,6 +1153,14 @@ impl ComputeNode {
         })
     }
 
+    /// Determine if the node should pause
+    pub fn should_pause(&self) -> bool {
+        if let Some(b_num) = self.b_num_to_pause {
+            return self.node_raft.get_current_block_num() >= b_num;
+        }
+        false
+    }
+
     /// Apply a received config to the node
     pub fn apply_shared_config(&mut self, received_shared_config: ComputeNodeSharedConfig) {
         warn!("Applying shared config: {:?}", received_shared_config);
@@ -1162,12 +1184,20 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `peer` - Sending peer's socket address
-    async fn handle_coordinated_pause(&mut self, peer: SocketAddr) -> Option<Response> {
-        self.propose_pause_nodes().await.unwrap();
+    async fn handle_coordinated_pause(&mut self, peer: SocketAddr, b_num: u64) -> Option<Response> {
         // We are initiation the coordinated pause
         if self.address() == peer {
-            info!("Initiating coordinated pause");
-            self.initiate_pause_nodes().await.unwrap();
+            let current_b_num = self.node_raft.get_current_block_num();
+            let b_num_to_pause = current_b_num + b_num;
+            info!("Initiating coordinated pause for b_num {}", b_num_to_pause);
+            self.propose_pause_nodes(b_num_to_pause).await;
+            self.initiate_pause_nodes(b_num_to_pause).await.unwrap();
+        } else {
+            // We are receiving the coordinated pause so we just need b_num here
+            // - the original coordinator of the pause event has already added current b_num
+            //
+            // Note: See conditional statement above
+            self.propose_pause_nodes(b_num).await;
         }
         Some(Response {
             success: true,
@@ -1181,7 +1211,7 @@ impl ComputeNode {
     ///
     /// * `peer` - Sending peer's socket address
     async fn handle_coordinated_resume(&mut self, peer: SocketAddr) -> Option<Response> {
-        self.propose_resume_nodes().await.unwrap();
+        self.propose_resume_nodes().await;
         // We are initiating the coordinated resume
         if self.address() == peer {
             info!("Initiating coordinated resume");
@@ -1204,7 +1234,7 @@ impl ComputeNode {
         peer: SocketAddr,
         shared_config: ComputeNodeSharedConfig,
     ) -> Option<Response> {
-        self.propose_apply_shared_config().await.unwrap();
+        self.propose_apply_shared_config().await;
         // We are initiating the shared config sending process
         if self.address() == peer {
             info!("Initiating shared config");
@@ -1514,7 +1544,7 @@ impl ComputeNode {
     }
 
     /// Reset the mining block processing to allow a new block.
-    fn reset_mining_block_process(&mut self) {
+    async fn reset_mining_block_process(&mut self) {
         self.previous_random_num = Some(std::mem::take(&mut self.current_random_num))
             .filter(|v| !v.is_empty())
             .unwrap_or_else(generate_pow_random_num);
@@ -1537,6 +1567,10 @@ impl ComputeNode {
 
         self.current_mined_block = None;
         self.node_raft.clear_block_pipeline_proposed_keys();
+        // If the node should pause, set the pause node flag to true
+        if self.should_pause() {
+            *self.pause_node.write().await = true;
+        }
     }
 
     /// Load and apply the local database to our state
@@ -1860,11 +1894,13 @@ impl ComputeNode {
     }
 
     /// Execute the initialization of a coordinated pause by invoking peers
-    pub async fn initiate_pause_nodes(&mut self) -> Result<()> {
+    ///
+    /// NOTE: Current block number has already been added to b_num from the coordinator
+    pub async fn initiate_pause_nodes(&mut self, b_num: u64) -> Result<()> {
         self.node
             .send_to_all(
                 self.node_raft.raft_peer_addrs().copied(),
-                ComputeRequest::CoordinatedPause,
+                ComputeRequest::CoordinatedPause { b_num },
             )
             .await?;
         Ok(())
@@ -1993,9 +2029,9 @@ impl ComputeApi for ComputeNode {
         )
     }
 
-    fn pause_nodes(&mut self) -> Response {
+    fn pause_nodes(&mut self, b_num: u64) -> Response {
         if self
-            .inject_next_event(self.address(), ComputeRequest::CoordinatedPause)
+            .inject_next_event(self.address(), ComputeRequest::CoordinatedPause { b_num })
             .is_err()
         {
             return Response {

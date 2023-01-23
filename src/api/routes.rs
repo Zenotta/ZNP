@@ -683,11 +683,12 @@ pub fn pause_nodes(
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(cache))
         .and(with_node_component(threaded_calls))
-        .and_then(move |call_id: String, cache, tc| {
+        .and(warp::body::json())
+        .and_then(move |call_id: String, cache, tc, b_num| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
-                handlers::pause_nodes(tc, route, call_id),
+                handlers::pause_nodes(tc, route, call_id, b_num),
             )
         })
         .with(post_cors())

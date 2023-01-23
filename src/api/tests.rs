@@ -134,7 +134,7 @@ impl ComputeApi for ComputeTest {
         Default::default()
     }
 
-    fn pause_nodes(&mut self) -> Response {
+    fn pause_nodes(&mut self, _b_num: u64) -> Response {
         let reason: &'static str = "";
 
         Response {
@@ -2193,7 +2193,8 @@ async fn test_post_pause_nodes() {
         .method("POST")
         .path("/pause_nodes")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID);
+        .header("x-request-id", COMMON_REQ_ID)
+        .json(&1_u64);
 
     //
     // Act

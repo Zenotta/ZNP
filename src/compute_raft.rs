@@ -38,7 +38,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 // A coordinated command sent through the RAFT to all peers
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum CoordinatedCommand {
-    PauseNodes,
+    PauseNodes { b_num: u64 },
     ResumeNodes,
     ApplySharedConfig,
 }
@@ -667,9 +667,9 @@ impl ComputeRaft {
     /// Propose to pause nodes
     ///
     /// NOTE: Requires a unanimous majority vote
-    pub async fn propose_pause_nodes(&mut self) {
+    pub async fn propose_pause_nodes(&mut self, b_num: u64) {
         self.propose_item(&ComputeRaftItem::CoordinatedCmd(
-            CoordinatedCommand::PauseNodes,
+            CoordinatedCommand::PauseNodes { b_num },
         ))
         .await;
     }

@@ -3290,9 +3290,9 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     // Act
     //
 
-    // Create next block and then pause all the nodes
+    // Create pause all nodes at block 0 + 1 = 1
+    compute_initiate_coordinated_pause_act("compute1", compute_ring, &mut network, 1).await;
     create_block_act(&mut network, Cfg::All, CfgNum::All).await;
-    compute_initiate_coordinated_pause_act("compute1", compute_ring, &mut network).await;
 
     // Confirm that the nodes are actually all paused.
     let all_nodes_paused_after_block_create =
@@ -3381,9 +3381,10 @@ async fn compute_initiate_coordinated_pause_act(
     compute: &str,
     compute_ring: &[String],
     network: &mut Network,
+    b_num_from_current: u64,
 ) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    let _ = c.pause_nodes();
+    let _ = c.pause_nodes(b_num_from_current);
     drop(c); // Drop compute node to avoid borrow checker violation
     node_all_handle_event(
         network,
@@ -3391,7 +3392,7 @@ async fn compute_initiate_coordinated_pause_act(
         &["Received coordinated pause request"],
     )
     .await;
-    node_all_handle_event(network, compute_ring, &["Node paused"]).await;
+    node_all_handle_event(network, compute_ring, &["Node pause configuration set"]).await;
 }
 
 async fn compute_initiate_send_shared_config_act(
