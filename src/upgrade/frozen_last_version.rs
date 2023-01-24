@@ -269,7 +269,7 @@ pub mod compute_raft {
         pub current_reward: TokenAmount,
         pub last_mining_transaction_hashes: Vec<String>,
         pub special_handling: Option<SpecialHandling>,
-        pub block_time: Duration
+        pub block_time: Duration,
     }
 }
 
@@ -714,7 +714,7 @@ pub mod convert {
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
             current_circulation: convert_token_amount(old.current_circulation),
             special_handling,
-            block_time: old.block_time
+            block_time: old.block_time,
         }
     }
 

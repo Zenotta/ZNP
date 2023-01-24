@@ -1244,15 +1244,15 @@ pub fn remove_all_node_dbs_in_info(info: &NetworkInstanceInfo) {
             Compute => {
                 let v1 = format!("{}/{}.compute.{}", DB_PATH, DB_PATH_TEST, port);
                 let v2 = format!("{}/{}.compute_raft.{}", DB_PATH, DB_PATH_TEST, port);
-                let v3 = format!("{}_backup", v1);
-                let v4 = format!("{}_backup", v2);
+                let v3 = format!("{v1}_backup");
+                let v4 = format!("{v2}_backup");
                 vec![v1, v2, v3, v4]
             }
             Storage => {
                 let v1 = format!("{}/{}.storage.{}", DB_PATH, DB_PATH_TEST, port);
                 let v2 = format!("{}/{}.storage_raft.{}", DB_PATH, DB_PATH_TEST, port);
-                let v3 = format!("{}_backup", v1);
-                let v4 = format!("{}_backup", v2);
+                let v3 = format!("{v1}_backup");
+                let v4 = format!("{v2}_backup");
                 vec![v1, v2, v3, v4]
             }
         };
@@ -1334,7 +1334,7 @@ pub fn get_test_tls_spec() -> TestTlsSpec {
 }
 
 pub fn get_test_tls_name(name: &str, spec: &TestTlsSpec) -> String {
-    let tls_name = format!("{}.zenotta.xyz", name);
+    let tls_name = format!("{name}.zenotta.xyz");
     if spec.pem_certificates.contains_key(&tls_name)
         || spec.pem_certificates_with_ca.contains_key(&tls_name)
     {

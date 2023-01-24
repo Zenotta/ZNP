@@ -7,7 +7,7 @@ use crate::interfaces::{
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
-use naom::constants::{TOTAL_TOKENS, D_DISPLAY_PLACES_U64};
+use naom::constants::{D_DISPLAY_PLACES_U64, TOTAL_TOKENS};
 use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
 use naom::primitives::transaction::DrsTxHashSpec;

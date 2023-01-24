@@ -1595,7 +1595,7 @@ async fn main_loops_raft_1_node_common(
     let (mut actual_stored, mut expected_stored) = (Vec::new(), Vec::new());
     let (mut actual_compute, mut expected_compute) = (Vec::new(), Vec::new());
     for (idx, expected_block_num) in expected_block_nums.iter().copied().enumerate() {
-        let tag = format!("Before start {}", idx);
+        let tag = format!("Before start {idx}");
         modify_network(&mut network, &tag, modify_cfg).await;
 
         for node_name in compute_nodes {
@@ -2082,7 +2082,7 @@ async fn handle_messages_lost_reset_pipeline_stage() {
     let actual0 = storage_get_last_stored_info(&mut network, "storage1").await;
     let actual0_values = actual0.1.as_ref();
     let actual0_values = actual0_values.map(|(_, b_num, min_tx)| (*b_num, *min_tx));
-    assert_eq!(actual0_values, Some((0, 1)), "Actual: {:?}", actual0);
+    assert_eq!(actual0_values, Some((0, 1)), "Actual: {actual0:?}");
 }
 
 async fn handle_message_lost_common(
@@ -2163,7 +2163,7 @@ async fn handle_message_lost_common_with_pow(
     let actual1 = storage_get_last_stored_info(&mut network, "storage1").await;
     let actual1_values = actual1.1.as_ref();
     let actual1_values = actual1_values.map(|(_, b_num, min_tx)| (*b_num, *min_tx));
-    assert_eq!(actual1_values, Some((1, 1)), "Actual: {:?}", actual1);
+    assert_eq!(actual1_values, Some((1, 1)), "Actual: {actual1:?}");
 
     let stored0 = stored0.unwrap();
     let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
@@ -2309,7 +2309,7 @@ async fn catchup_fetch_blockchain_item_raft() {
     for (i, block) in blocks.iter().enumerate() {
         info!("Test Step Storage add block {}", i);
 
-        let tag = format!("Before store block {}", i);
+        let tag = format!("Before store block {i}");
         modify_network(&mut network, &tag, &modify_cfg).await;
         let storage_nodes = network.active_nodes(NodeType::Storage).to_owned();
 
@@ -4109,7 +4109,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
             // Check match expected block_hash:
             let mut reader = Cursor::new(stored_value.as_slice());
             let header = match deserialize_from::<_, BlockHeader>(&mut reader) {
-                Err(e) => return Some(format!("error: {:?}", e)),
+                Err(e) => return Some(format!("error: {e:?}")),
                 Ok(v) => v,
             };
 
@@ -4126,7 +4126,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
         }
 
         match deserialize::<StoredSerializingBlock>(&stored_value) {
-            Err(e) => return Some(format!("error: {:?}", e)),
+            Err(e) => return Some(format!("error: {e:?}")),
             Ok(v) => v,
         }
     };
@@ -4142,7 +4142,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
         let stored_value =
             checked_blockchain_item_data(stored_value, BlockchainItemType::Tx).unwrap();
         let stored_tx = match deserialize::<Transaction>(&stored_value) {
-            Err(e) => return Some(format!("error tx hash: {:?} : {:?}", e, tx_hash)),
+            Err(e) => return Some(format!("error tx hash: {e:?} : {tx_hash:?}")),
             Ok(v) => v,
         };
         block_txs.insert(tx_hash.clone(), stored_tx);
@@ -4159,7 +4159,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
         unicorn_witness: Default::default(),
     };
     let complete = CompleteBlock { common, extra_info };
-    Some(format!("{:?}", complete))
+    Some(format!("{complete:?}"))
 }
 
 async fn storage_all_get_last_stored_info(
@@ -4792,7 +4792,7 @@ async fn construct_mining_common_info(
     addr: String,
 ) -> CommonBlockInfo {
     let block_num = block.header.b_num;
-    let amount = calculate_reward(TokenAmount(0));
+    let amount = calculate_reward(TokenAmount(0), Duration::from_secs(1));
     let tx = construct_coinbase_tx(block_num, amount, addr);
     let hash = construct_tx_hash(&tx);
     block.header = apply_mining_tx(block.header, Vec::new(), hash.clone());
@@ -4889,7 +4889,7 @@ async fn complete_block_with_seed(
     };
 
     let hash_key = construct_valid_block_pow_hash(&stored.block).unwrap();
-    let complete_str = format!("{:?}", complete);
+    let complete_str = format!("{complete:?}");
 
     ((hash_key, complete_str), complete)
 }

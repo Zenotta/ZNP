@@ -155,7 +155,7 @@ pub struct ComputeConsensused {
     /// Special handling for processing blocks.
     special_handling: Option<SpecialHandling>,
     /// The block time
-    block_time: Duration
+    block_time: Duration,
 }
 
 /// Consensused info to apply on start up after upgrade.
@@ -170,7 +170,7 @@ pub struct ComputeConsensusedImport {
     pub last_committed_raft_idx_and_term: (u64, u64),
     pub current_circulation: TokenAmount,
     pub special_handling: Option<SpecialHandling>,
-    pub block_time: Duration
+    pub block_time: Duration,
 }
 
 /// Consensused Compute fields and consensus management.
@@ -994,7 +994,7 @@ impl ComputeConsensused {
             last_committed_raft_idx_and_term,
             current_circulation,
             special_handling,
-            block_time
+            block_time,
         } = consensused;
 
         let block_pipeline = MiningPipelineInfoImport {
@@ -1019,7 +1019,7 @@ impl ComputeConsensused {
             block_pipeline: MiningPipelineInfo::from_import(block_pipeline),
             last_mining_transaction_hashes: Default::default(),
             special_handling,
-            block_time
+            block_time,
         }
     }
 
@@ -1041,7 +1041,7 @@ impl ComputeConsensused {
             last_committed_raft_idx_and_term: self.last_committed_raft_idx_and_term,
             current_circulation: self.current_circulation,
             special_handling,
-            block_time: self.block_time
+            block_time: self.block_time,
         }
     }
 
@@ -1391,7 +1391,8 @@ impl ComputeConsensused {
                 info.block_num + 1
             }
         };
-        let reward = calculate_reward(self.current_circulation, self.block_time) / self.unanimous_majority as u64;
+        let reward = calculate_reward(self.current_circulation, self.block_time)
+            / self.unanimous_majority as u64;
 
         self.block_pipeline
             .apply_ready_block_stored_info(block_num, reward);
