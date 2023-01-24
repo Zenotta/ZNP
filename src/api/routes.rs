@@ -218,6 +218,30 @@ pub fn utxo_addresses(
         .with(get_cors())
 }
 
+// GET current config for node
+pub fn get_shared_config(
+    dp: &mut DbgPaths,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "get_shared_config";
+    warp_path(dp, route)
+        .and(warp::get())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(cache))
+        .and(with_node_component(threaded_calls))
+        .and_then(move |call_id: String, cache, tc| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::get_shared_config_compute(tc, route, call_id),
+            )
+        })
+        .with(get_cors())
+}
+
 //======= POST ROUTES =======//
 
 // POST CORS
@@ -645,6 +669,80 @@ pub fn address_construction(
         .with(post_cors())
 }
 
+// POST pause nodes
+pub fn pause_nodes(
+    dp: &mut DbgPaths,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "pause_nodes";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(cache))
+        .and(with_node_component(threaded_calls))
+        .and(warp::body::json())
+        .and_then(move |call_id: String, cache, tc, b_num| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::pause_nodes(tc, route, call_id, b_num),
+            )
+        })
+        .with(post_cors())
+}
+
+// POST resume nodes
+pub fn resume_nodes(
+    dp: &mut DbgPaths,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "resume_nodes";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(cache))
+        .and(with_node_component(threaded_calls))
+        .and_then(move |call_id: String, cache, tc| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::resume_nodes(tc, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
+// POST update config in a coordinated manner, sharing it to peers
+pub fn update_shared_config(
+    dp: &mut DbgPaths,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "update_shared_config";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(warp::body::json())
+        .and(with_node_component(cache))
+        .and(with_node_component(threaded_calls))
+        .and_then(move |call_id: String, shared_config, cache, tc| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::update_shared_config(tc, shared_config, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
 //======= NODE ROUTES =======//
 //TODO: Nodes share similar routes; We need to find a way to reduce ambiguity
 
@@ -849,13 +947,41 @@ pub fn compute_node_routes(
     ))
     .or(utxo_addresses(
         dp,
-        threaded_calls,
+        threaded_calls.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
     ))
     .or(address_construction(
         dp,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(pause_nodes(
+        dp,
+        threaded_calls.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(resume_nodes(
+        dp,
+        threaded_calls.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(update_shared_config(
+        dp,
+        threaded_calls.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(get_shared_config(
+        dp,
+        threaded_calls,
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),

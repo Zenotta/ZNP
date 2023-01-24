@@ -1,7 +1,26 @@
 {
-    "api_keys": [
-        "any_key"
-    ],
+    "api_keys": {
+        "pause_nodes": [
+            "pause_nodes_route_key_1",
+            "pause_nodes_route_key_2",
+            "pause_nodes_route_key_3"
+        ],
+        "resume_nodes": [
+            "resume_nodes_route_key_1",
+            "resume_nodes_route_key_2",
+            "resume_nodes_route_key_3"
+        ],
+        "update_shared_config": [
+            "update_shared_config_route_key_1",
+            "update_shared_config_route_key_2",
+            "update_shared_config_route_key_3"
+        ],
+        "get_shared_config":  [
+            "get_shared_config_route_key_1",
+            "get_shared_config_route_key_2",
+            "get_shared_config_route_key_3"
+        ]
+    },
     "routes_pow": {
         "create_transactions": 2
     }

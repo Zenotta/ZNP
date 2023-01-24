@@ -1,7 +1,9 @@
 use crate::block_pipeline::{MiningPipelineItem, MiningPipelineStatus, Participants};
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
-use crate::compute_raft::{CommittedItem, ComputeRaft};
-use crate::configurations::{ComputeNodeConfig, ExtraNodeParams, TlsPrivateInfo};
+use crate::compute_raft::{CommittedItem, ComputeRaft, CoordinatedCommand};
+use crate::configurations::{
+    ComputeNodeConfig, ComputeNodeSharedConfig, ExtraNodeParams, TlsPrivateInfo,
+};
 use crate::constants::{DB_PATH, PEER_LIMIT, RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{
@@ -30,12 +32,14 @@ use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::{
     error::Error,
     fmt,
     future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
+use tokio::sync::RwLock;
 use tokio::task;
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
@@ -128,10 +132,15 @@ impl From<StringError> for ComputeError {
 
 #[derive(Debug)]
 pub struct ComputeNode {
+    shared_config: ComputeNodeSharedConfig,
+    received_shared_config: Option<ComputeNodeSharedConfig>,
     node: Node,
     node_raft: ComputeRaft,
     db: SimpleDb,
     local_events: LocalEventChannel,
+    b_num_to_pause: Option<u64>,
+    pause_node: Arc<RwLock<bool>>,
+    disable_trigger_messages: Arc<RwLock<bool>>,
     threaded_calls: ThreadedCallChannel<dyn ComputeApi>,
     jurisdiction: String,
     current_mined_block: Option<MinedBlock>,
@@ -156,8 +165,6 @@ pub struct ComputeNode {
         RoutesPoWInfo,
         Node,
     ),
-    #[cfg(feature = "config_override")]
-    config: ComputeNodeConfig,
 }
 
 impl ComputeNode {
@@ -202,13 +209,21 @@ impl ComputeNode {
             .unwrap_or(false);
         let api_info = (api_addr, api_tls_info, api_keys, api_pow_info, node.clone());
 
+        let shared_config = ComputeNodeSharedConfig {
+            compute_mining_event_timeout: config.compute_mining_event_timeout,
+            compute_partition_full_size: config.compute_partition_full_size,
+        };
+
         ComputeNode {
-            #[cfg(feature = "config_override")]
-            config: config.clone(),
             node,
             node_raft,
             db,
+            shared_config,
+            received_shared_config: Default::default(),
             local_events: Default::default(),
+            pause_node: Default::default(),
+            b_num_to_pause: Default::default(),
+            disable_trigger_messages: Default::default(),
             threaded_calls: Default::default(),
             current_mined_block: None,
             druid_pool: Default::default(),
@@ -229,6 +244,31 @@ impl ComputeNode {
             fetched_utxo_set: None,
         }
         .load_local_db()
+    }
+
+    /// Determine whether or not this compute node's trigger messages are disabled
+    pub async fn trigger_messages_disabled(&self) -> bool {
+        *self.disable_trigger_messages.read().await
+    }
+
+    /// Determine whether or not this compute node is paused
+    pub async fn is_paused(&self) -> bool {
+        *self.pause_node.read().await
+    }
+
+    /// Propose a coordinated pause of all compute nodes
+    pub async fn propose_pause_nodes(&mut self, b_num: u64) {
+        self.node_raft.propose_pause_nodes(b_num).await;
+    }
+
+    /// Propose a coordinated resume of all compute nodes
+    pub async fn propose_resume_nodes(&mut self) {
+        self.node_raft.propose_resume_nodes().await;
+    }
+
+    /// Propose a coordinated pause/resume of all compute nodes
+    pub async fn propose_apply_shared_config(&mut self) {
+        self.node_raft.propose_apply_shared_config().await;
     }
 
     /// Returns the compute node's public endpoint.
@@ -533,6 +573,48 @@ impl ComputeNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Received coordinated pause request",
+            }) => {
+                debug!("Received coordinated pause request");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Node pause configuration set",
+            }) => {
+                debug!("Node pause configuration set");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Received coordinated resume request",
+            }) => {
+                debug!("Received coordinated resume request");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Node resumed",
+            }) => {
+                warn!("NODE RESUMED");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Received shared config",
+            }) => {
+                debug!("Shared config received");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Shared config applied",
+            }) => {
+                debug!("Shared config applied");
+            }
+            Ok(Response {
+                success: false,
+                reason: "No shared config to apply",
+            }) => {
+                warn!("No shared config to apply");
+            }
+            Ok(Response {
+                success: true,
                 reason: "Shutdown",
             }) => {
                 warn!("Shutdown now");
@@ -599,17 +681,31 @@ impl ComputeNode {
                 success: true,
                 reason: "First Block committed",
             }) => {
-                debug!("First Block ready to mine: {:?}", self.get_mining_block());
-                self.flood_block_to_users().await.unwrap();
-                self.flood_rand_and_block_to_partition().await.unwrap();
+                // Only continue with the mining process if the node is not paused
+                if !self.is_paused().await {
+                    debug!("First block ready to mine: {:?}", self.get_mining_block());
+                    self.flood_block_to_users().await.unwrap();
+                    self.flood_rand_and_block_to_partition().await.unwrap()
+                } else {
+                    warn!("NODE PAUSED");
+                    // Disable trigger messages to ensure mining cannot take place
+                    *self.disable_trigger_messages.write().await = true;
+                }
             }
             Ok(Response {
                 success: true,
                 reason: "Block committed",
             }) => {
-                debug!("Block ready to mine: {:?}", self.get_mining_block());
-                self.flood_block_to_users().await.unwrap();
-                self.flood_rand_and_block_to_partition().await.unwrap();
+                // Only continue with the mining process if the node is not paused
+                if !self.is_paused().await {
+                    debug!("Block ready to mine: {:?}", self.get_mining_block());
+                    self.flood_block_to_users().await.unwrap();
+                    self.flood_rand_and_block_to_partition().await.unwrap()
+                } else {
+                    warn!("NODE PAUSED");
+                    // Disable trigger messages to ensure mining cannot take place
+                    *self.disable_trigger_messages.write().await = true;
+                }
             }
             Ok(Response {
                 success: true,
@@ -726,7 +822,8 @@ impl ComputeNode {
                 }
                 _ = self.node_raft.timeout_propose_mining_event(), if ready && !shutdown => {
                     trace!("handle_next_event timeout mining pipeline");
-                    if !self.node_raft.propose_mining_event_at_timeout().await {
+                    if !self.node_raft.propose_mining_event_at_timeout().await
+                        && !self.trigger_messages_disabled().await {
                         self.node_raft.re_propose_uncommitted_current_b_num().await;
                         self.resend_trigger_message().await;
                     } else {
@@ -758,7 +855,7 @@ impl ComputeNode {
     async fn handle_committed_data(&mut self, commit_data: RaftCommit) -> Option<Result<Response>> {
         match self.node_raft.received_commit(commit_data).await {
             Some(CommittedItem::FirstBlock) => {
-                self.reset_mining_block_process();
+                self.reset_mining_block_process().await;
                 self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
@@ -766,7 +863,7 @@ impl ComputeNode {
                 }))
             }
             Some(CommittedItem::Block) => {
-                self.reset_mining_block_process();
+                self.reset_mining_block_process().await;
                 self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
@@ -774,7 +871,7 @@ impl ComputeNode {
                 }))
             }
             Some(CommittedItem::BlockShutdown) => {
-                self.reset_mining_block_process();
+                self.reset_mining_block_process().await;
                 self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
@@ -809,13 +906,14 @@ impl ComputeNode {
             Some(CommittedItem::Snapshot) => {
                 // Override values updated by the snapshot with values from the config
                 #[cfg(feature = "config_override")]
-                self.node_raft.override_with_config(&self.config);
+                self.apply_shared_config(self.shared_config);
 
                 Some(Ok(Response {
                     success: true,
                     reason: "Snapshot applied",
                 }))
             }
+            Some(CommittedItem::CoordinatedCmd(cmd)) => self.handle_coordinated_cmd(cmd).await,
             None => None,
         }
     }
@@ -926,10 +1024,61 @@ impl ComputeNode {
                 Some(self.receive_block_user_notification_request(peer))
             }
             SendPartitionRequest => Some(self.receive_partition_request(peer).await),
+            SendSharedConfig { shared_config } => {
+                self.handle_shared_config(peer, shared_config).await
+            }
             Closing => self.receive_closing(peer),
+            CoordinatedPause { b_num } => self.handle_coordinated_pause(peer, b_num).await,
+            CoordinatedResume => self.handle_coordinated_resume(peer).await,
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
                 None
+            }
+        }
+    }
+
+    /// Handles a coordinated command
+    ///
+    /// ### Arguments
+    ///
+    /// *`cmd` - Command to execute
+    async fn handle_coordinated_cmd(
+        &mut self,
+        cmd: CoordinatedCommand,
+    ) -> Option<Result<Response>> {
+        match cmd {
+            CoordinatedCommand::PauseNodes { b_num } => {
+                self.b_num_to_pause = Some(b_num);
+                warn!("Pausing node at b_num: {b_num}");
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Node pause configuration set",
+                }))
+            }
+            CoordinatedCommand::ResumeNodes => {
+                // No longer needed to pause on a specific block
+                self.b_num_to_pause = None;
+                // Set the pause flag to false
+                *self.pause_node.write().await = false;
+                // Let the trigger messages be sent again to continue the mining process
+                *self.disable_trigger_messages.write().await = false;
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Node resumed",
+                }))
+            }
+            CoordinatedCommand::ApplySharedConfig => {
+                if let Some(received_shared_config) = self.received_shared_config {
+                    self.apply_shared_config(received_shared_config);
+                    return Some(Ok(Response {
+                        success: true,
+                        reason: "Shared config applied",
+                    }));
+                }
+                Some(Ok(Response {
+                    success: false,
+                    reason: "No shared config to apply",
+                }))
             }
         }
     }
@@ -975,6 +1124,9 @@ impl ComputeNode {
                 }
             },
             SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
+            PauseNodes { b_num } => Some(self.pause_nodes(b_num)),
+            ResumeNodes => Some(self.resume_nodes()),
+            SendSharedConfig { shared_config } => Some(self.send_shared_config(shared_config)),
         }
     }
 
@@ -998,6 +1150,104 @@ impl ComputeNode {
         Some(Response {
             success: true,
             reason: "Shutdown",
+        })
+    }
+
+    /// Determine if the node should pause
+    pub fn should_pause(&self) -> bool {
+        if let Some(b_num) = self.b_num_to_pause {
+            return self.node_raft.get_current_block_num() >= b_num;
+        }
+        false
+    }
+
+    /// Apply a received config to the node
+    pub fn apply_shared_config(&mut self, received_shared_config: ComputeNodeSharedConfig) {
+        warn!("Applying shared config: {:?}", received_shared_config);
+
+        let ComputeNodeSharedConfig {
+            compute_mining_event_timeout,
+            compute_partition_full_size,
+        } = received_shared_config;
+
+        self.node_raft
+            .update_mining_event_timeout_duration(compute_mining_event_timeout);
+        self.node_raft
+            .update_partition_full_size(compute_partition_full_size);
+
+        self.shared_config = received_shared_config;
+        self.received_shared_config = None;
+    }
+
+    /// Handle a coordinated pause request or initialization
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - Sending peer's socket address
+    async fn handle_coordinated_pause(&mut self, peer: SocketAddr, b_num: u64) -> Option<Response> {
+        // We are initiation the coordinated pause
+        if self.address() == peer {
+            let current_b_num = self.node_raft.get_current_block_num();
+            let b_num_to_pause = current_b_num + b_num;
+            info!("Initiating coordinated pause for b_num {}", b_num_to_pause);
+            self.propose_pause_nodes(b_num_to_pause).await;
+            self.initiate_pause_nodes(b_num_to_pause).await.unwrap();
+        } else {
+            // We are receiving the coordinated pause so we just need b_num here
+            // - the original coordinator of the pause event has already added current b_num
+            //
+            // Note: See conditional statement above
+            self.propose_pause_nodes(b_num).await;
+        }
+        Some(Response {
+            success: true,
+            reason: "Received coordinated pause request",
+        })
+    }
+
+    /// Handle a coordinated resume request or initialization
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - Sending peer's socket address
+    async fn handle_coordinated_resume(&mut self, peer: SocketAddr) -> Option<Response> {
+        self.propose_resume_nodes().await;
+        // We are initiating the coordinated resume
+        if self.address() == peer {
+            info!("Initiating coordinated resume");
+            self.initiate_resume_nodes().await.unwrap();
+        }
+        Some(Response {
+            success: true,
+            reason: "Received coordinated resume request",
+        })
+    }
+
+    /// Handle a shared config request
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - Sending peer's socket address
+    /// * `shared_config` - Shared config that was sent or should get sent
+    async fn handle_shared_config(
+        &mut self,
+        peer: SocketAddr,
+        shared_config: ComputeNodeSharedConfig,
+    ) -> Option<Response> {
+        self.propose_apply_shared_config().await;
+        // We are initiating the shared config sending process
+        if self.address() == peer {
+            info!("Initiating shared config");
+            self.initiate_send_shared_config(shared_config)
+                .await
+                .unwrap();
+        }
+        // The sharing of a shared config was initiated by a peer
+        debug!("Received shared config {:?} from {}", &shared_config, peer);
+        self.received_shared_config = Some(shared_config);
+        Some(Response {
+            success: true,
+            reason: "Received shared config",
         })
     }
 
@@ -1294,7 +1544,7 @@ impl ComputeNode {
     }
 
     /// Reset the mining block processing to allow a new block.
-    fn reset_mining_block_process(&mut self) {
+    async fn reset_mining_block_process(&mut self) {
         self.previous_random_num = Some(std::mem::take(&mut self.current_random_num))
             .filter(|v| !v.is_empty())
             .unwrap_or_else(generate_pow_random_num);
@@ -1317,6 +1567,10 @@ impl ComputeNode {
 
         self.current_mined_block = None;
         self.node_raft.clear_block_pipeline_proposed_keys();
+        // If the node should pause, set the pause node flag to true
+        if self.should_pause() {
+            *self.pause_node.write().await = true;
+        }
     }
 
     /// Load and apply the local database to our state
@@ -1580,7 +1834,7 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `transactions` - Transactions to be processed
-    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
+    pub fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
         let transactions_len = transactions.len();
         if !self.node_raft.tx_pool_can_accept(transactions_len) {
             return Response {
@@ -1637,6 +1891,45 @@ impl ComputeNode {
             success: true,
             reason: "Transactions added to tx pool",
         }
+    }
+
+    /// Execute the initialization of a coordinated pause by invoking peers
+    ///
+    /// NOTE: Current block number has already been added to b_num from the coordinator
+    pub async fn initiate_pause_nodes(&mut self, b_num: u64) -> Result<()> {
+        self.node
+            .send_to_all(
+                self.node_raft.raft_peer_addrs().copied(),
+                ComputeRequest::CoordinatedPause { b_num },
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Execute the initialization of a coordinated resume by invoking peers
+    pub async fn initiate_resume_nodes(&mut self) -> Result<()> {
+        self.node
+            .send_to_all(
+                self.node_raft.raft_peer_addrs().copied(),
+                ComputeRequest::CoordinatedResume,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Execute the initialization of a shared config application
+    /// by sending the shared config to peers
+    pub async fn initiate_send_shared_config(
+        &mut self,
+        shared_config: ComputeNodeSharedConfig,
+    ) -> Result<()> {
+        self.node
+            .send_to_all(
+                self.node_raft.raft_peer_addrs().copied(),
+                ComputeRequest::SendSharedConfig { shared_config },
+            )
+            .await?;
+        Ok(())
     }
 }
 
@@ -1698,6 +1991,13 @@ impl ComputeInterface for ComputeNode {
 }
 
 impl ComputeApi for ComputeNode {
+    fn get_shared_config(&self) -> ComputeNodeSharedConfig {
+        ComputeNodeSharedConfig {
+            compute_mining_event_timeout: self.node_raft.get_compute_mining_event_timeout(),
+            compute_partition_full_size: self.node_raft.get_compute_partition_full_size(),
+        }
+    }
+
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
         self.node_raft.get_committed_utxo_tracked_set()
     }
@@ -1727,6 +2027,60 @@ impl ComputeApi for ComputeNode {
             drs_tx_hash_spec,
             metadata,
         )
+    }
+
+    fn pause_nodes(&mut self, b_num: u64) -> Response {
+        if self
+            .inject_next_event(self.address(), ComputeRequest::CoordinatedPause { b_num })
+            .is_err()
+        {
+            return Response {
+                success: false,
+                reason: "Failed to initiate coordinated pause",
+            };
+        }
+        Response {
+            success: true,
+            reason: "Attempt coordinated node pause",
+        }
+    }
+
+    fn resume_nodes(&mut self) -> Response {
+        if self
+            .inject_next_event(self.address(), ComputeRequest::CoordinatedResume)
+            .is_err()
+        {
+            return Response {
+                success: false,
+                reason: "Failed to initiate coordinated resume",
+            };
+        }
+        Response {
+            success: true,
+            reason: "Attempt coordinated node resume",
+        }
+    }
+
+    fn send_shared_config(
+        &mut self,
+        shared_config: crate::configurations::ComputeNodeSharedConfig,
+    ) -> Response {
+        if self
+            .inject_next_event(
+                self.address(),
+                ComputeRequest::SendSharedConfig { shared_config },
+            )
+            .is_err()
+        {
+            return Response {
+                success: false,
+                reason: "Failed to initiate sharing of config",
+            };
+        }
+        Response {
+            success: true,
+            reason: "Attempt send shared config",
+        }
     }
 }
 
