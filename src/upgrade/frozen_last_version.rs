@@ -1,6 +1,7 @@
 use crate::db_utils::SimpleDbSpec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 pub mod constants {
     pub const NETWORK_VERSION: u32 = 2;
@@ -268,6 +269,7 @@ pub mod compute_raft {
         pub current_reward: TokenAmount,
         pub last_mining_transaction_hashes: Vec<String>,
         pub special_handling: Option<SpecialHandling>,
+        pub block_time: Duration
     }
 }
 
@@ -712,6 +714,7 @@ pub mod convert {
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
             current_circulation: convert_token_amount(old.current_circulation),
             special_handling,
+            block_time: old.block_time
         }
     }
 

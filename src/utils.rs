@@ -1,13 +1,13 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{BLOCK_PREPEND, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
+use crate::constants::{BLOCK_PREPEND, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_EXPONENT};
 use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
 };
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
-use naom::constants::TOTAL_TOKENS;
+use naom::constants::{TOTAL_TOKENS, D_DISPLAY_PLACES_U64};
 use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
 use naom::primitives::transaction::DrsTxHashSpec;
@@ -394,8 +394,21 @@ pub fn format_parition_pow_address(addr: SocketAddr) -> String {
 /// ### Arguments
 ///
 /// * `current_circulation` - Current circulation of all tokens
-pub fn calculate_reward(current_circulation: TokenAmount) -> TokenAmount {
-    TokenAmount((TOTAL_TOKENS - current_circulation.0) >> REWARD_ISSUANCE_VAL)
+pub fn calculate_reward(current_circulation: TokenAmount, block_time: Duration) -> TokenAmount {
+    let remaining_tokens = TOTAL_TOKENS - current_circulation.0;
+    let block_time_in_mins = block_time.as_secs() / 60;
+
+    if remaining_tokens > 0 {
+        let multiplier = (2 as f32).powi(REWARD_EXPONENT);
+        let mut reward = (remaining_tokens as f32 * multiplier) as u64;
+        reward = reward * D_DISPLAY_PLACES_U64 * block_time_in_mins;
+
+        if reward > 0 {
+            return TokenAmount(reward);
+        }
+    }
+
+    TokenAmount(0)
 }
 
 /// Gets the total amount of tokens for all present coinbase transactions,

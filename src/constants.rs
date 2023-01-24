@@ -2,8 +2,8 @@ pub use naom::constants::*;
 
 /*------- BLOCK CONSTANTS --------*/
 
-/// Bit shifting value for reward issuance
-pub const REWARD_ISSUANCE_VAL: u8 = 25;
+/// Exponent for reward issuance calculation
+pub const REWARD_EXPONENT: i32 = -25;
 
 /*------- CSPRNG USAGE NUMS -------*/
 
