@@ -399,7 +399,7 @@ pub fn calculate_reward(current_circulation: TokenAmount, block_time: Duration) 
     let block_time_in_mins = block_time.as_secs() / 60;
 
     if remaining_tokens > 0 {
-        let multiplier = (2 as f32).powi(REWARD_EXPONENT);
+        let multiplier = (2_f32).powi(REWARD_EXPONENT);
         let mut reward = (remaining_tokens as f32 * multiplier) as u64;
         reward = reward * D_DISPLAY_PLACES_U64 * block_time_in_mins;
 

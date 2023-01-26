@@ -258,7 +258,7 @@ impl ComputeRaft {
             .with_peers_len(peers_len)
             .with_partition_full_size(config.compute_partition_full_size)
             .with_unicorn_fixed_param(config.compute_unicorn_fixed_param.clone())
-            .with_block_time(propose_mining_event_timeout_duration.clone())
+            .with_block_time(propose_mining_event_timeout_duration)
             .init_block_pipeline_status();
         let local_initial_proposal = Some(InitialProposal::PendingItem {
             item: ComputeRaftItem::FirstBlock(utxo_set),
