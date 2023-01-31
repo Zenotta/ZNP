@@ -50,7 +50,7 @@ impl warp::reject::Reject for ApiError {}
 impl std::fmt::Display for ApiErrorType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match &self {
-            ApiErrorType::Generic(message) => write!(f, "Generic error: {}", message),
+            ApiErrorType::Generic(message) => write!(f, "Generic error: {message}"),
             ApiErrorType::InvalidPassphrase => write!(f, "Invalid passphrase"),
             ApiErrorType::BlankPassphrase => write!(f, "New passphrase cannot be blank"),
             ApiErrorType::InvalidRequestBody => write!(f, "Invalid request body"),

@@ -492,13 +492,13 @@ impl SimpleDbWriteBatch<'_> {
             Self::File { write, db } => {
                 let cf = db
                     .cf_handle(cf)
-                    .ok_or_else(|| SimpleDbError(format!("Missing column {}", cf)))?;
+                    .ok_or_else(|| SimpleDbError(format!("Missing column {cf}")))?;
                 write.put_cf(cf, key, value);
             }
             Self::InMemory { write, columns } => {
                 let cf = columns
                     .get(cf)
-                    .ok_or_else(|| SimpleDbError(format!("Missing column {}", cf)))?;
+                    .ok_or_else(|| SimpleDbError(format!("Missing column {cf}")))?;
                 write.push((*cf, key.as_ref().to_vec(), Some(value.as_ref().to_vec())));
             }
         }
@@ -629,8 +629,8 @@ pub fn new_db_save_path(db_mode: DbMode, db_spec: &SimpleDbSpec) -> Option<Strin
     let db_path = db_spec.db_path;
     let suffix = db_spec.suffix;
     match db_mode {
-        DbMode::Live => Some(format!("{}/{}{}", db_path, DB_PATH_LIVE, suffix)),
-        DbMode::Test(idx) => Some(format!("{}/{}{}.{}", db_path, DB_PATH_TEST, suffix, idx)),
+        DbMode::Live => Some(format!("{db_path}/{DB_PATH_LIVE}{suffix}")),
+        DbMode::Test(idx) => Some(format!("{db_path}/{DB_PATH_TEST}{suffix}.{idx}")),
         DbMode::InMemory => None,
     }
 }

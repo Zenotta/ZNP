@@ -1135,7 +1135,7 @@ async fn test_get_payment_address() {
         .recover(handle_rejection);
     let res = request.reply(&filter).await;
     let store_address = db.get_known_addresses().pop().unwrap();
-    let expected = format!("{{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"New payment address generated\",\"route\":\"payment_address\",\"content\":\"{}\"}}", store_address);
+    let expected = format!("{{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"New payment address generated\",\"route\":\"payment_address\",\"content\":\"{store_address}\"}}");
 
     //
     // Assert
@@ -2053,7 +2053,7 @@ async fn test_post_change_passphrase() {
         "Not able to decrypt addresses stored in WalletDb"
     );
 
-    assert!(matches!(actual, Ok(())), "{:?}", actual);
+    assert!(matches!(actual, Ok(())), "{}", "{actual:?}");
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Passphrase changed successfully\",\"route\":\"change_passphrase\",\"content\":\"null\"}");
 }
@@ -2093,8 +2093,8 @@ async fn test_post_change_passphrase_failure() {
     //
     assert!(
         matches!(actual, Err(WalletDbError::PassphraseError)),
-        "{:?}",
-        actual
+        "{}",
+        "{actual:?}"
     );
     assert_eq!(
         (res.status(), res.headers().clone()),
@@ -2138,8 +2138,8 @@ async fn test_post_change_blank_passphrase_failure() {
     //
     assert!(
         matches!(actual, Err(WalletDbError::PassphraseError)),
-        "{:?}",
-        actual
+        "{}",
+        "{actual:?}"
     );
     assert_eq!(
         (res.status(), res.headers().clone()),

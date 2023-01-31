@@ -46,11 +46,11 @@ pub enum UserError {
 impl fmt::Display for UserError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfigError(err) => write!(f, "Config error: {}", err),
-            Self::Network(err) => write!(f, "Network error: {}", err),
-            Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
-            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
-            Self::WalletError(err) => write!(f, "Wallet error: {}", err),
+            Self::ConfigError(err) => write!(f, "Config error: {err}"),
+            Self::Network(err) => write!(f, "Network error: {err}"),
+            Self::AsyncTask(err) => write!(f, "Async task error: {err}"),
+            Self::Serialization(err) => write!(f, "Serialization error: {err}"),
+            Self::WalletError(err) => write!(f, "Wallet error: {err}"),
         }
     }
 }

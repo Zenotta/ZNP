@@ -60,7 +60,7 @@ impl ActiveRaft {
                 peers,
                 max_size_per_msg: 4096,
                 max_inflight_msgs: 256,
-                tag: format!("[id={}]", peer_id),
+                tag: format!("[id={peer_id}]"),
                 ..Default::default()
             },
             raft_db,

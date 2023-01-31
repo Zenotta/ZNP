@@ -87,10 +87,10 @@ pub enum StorageError {
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfigError(err) => write!(f, "Config error: {}", err),
-            Self::Network(err) => write!(f, "Network error: {}", err),
-            Self::DbError(err) => write!(f, "DB error: {}", err),
-            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Self::ConfigError(err) => write!(f, "Config error: {err}"),
+            Self::Network(err) => write!(f, "Network error: {err}"),
+            Self::DbError(err) => write!(f, "DB error: {err}"),
+            Self::Serialization(err) => write!(f, "Serialization error: {err}"),
         }
     }
 }
@@ -1238,7 +1238,7 @@ fn version_pointer<K: AsRef<[u8]>>(cf: &'static str, key: K) -> Vec<u8> {
 ///
 /// * `b_num`  - The block number
 pub fn indexed_block_hash_key(b_num: u64) -> String {
-    format!("{}{:016x}", INDEXED_BLOCK_HASH_PREFIX_KEY, b_num)
+    format!("{INDEXED_BLOCK_HASH_PREFIX_KEY}{b_num:016x}")
 }
 
 /// The key for indexed block
@@ -1248,10 +1248,7 @@ pub fn indexed_block_hash_key(b_num: u64) -> String {
 /// * `b_num`  - The block number
 /// * `tx_num` - The transaction index in the block
 pub fn indexed_tx_hash_key(b_num: u64, tx_num: u32) -> String {
-    format!(
-        "{}{:016x}_{:08x}",
-        INDEXED_TX_HASH_PREFIX_KEY, b_num, tx_num
-    )
+    format!("{INDEXED_TX_HASH_PREFIX_KEY}{b_num:016x}_{tx_num:08x}")
 }
 
 /// Decodes a version pointer
