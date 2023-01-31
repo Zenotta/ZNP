@@ -3,8 +3,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod constants {
-    pub const NETWORK_VERSION: u32 = 2;
-    pub const NETWORK_VERSION_SERIALIZED: Option<&[u8]> = Some(b"2");
+    pub const NETWORK_VERSION: u32 = 3;
+    pub const NETWORK_VERSION_SERIALIZED: Option<&[u8]> = Some(b"3");
     pub const DB_PATH: &str = "src/db/db";
     pub const WALLET_PATH: &str = "src/wallet/wallet";
 }
@@ -157,6 +157,7 @@ pub mod naom {
     pub struct ReceiptAsset {
         pub amount: u64,
         pub drs_tx_hash: Option<String>,
+        pub metadata: Option<String>,
     }
 
     #[derive(
@@ -221,7 +222,6 @@ pub mod compute {
 pub mod compute_raft {
     use super::block_pipeline::*;
     use super::naom::*;
-    use super::unicorn::UnicornFixedParam;
     use super::*;
 
     // Only serialize the UtxoSet
@@ -251,13 +251,9 @@ pub mod compute_raft {
         pub unanimous_majority: usize,
         pub sufficient_majority: usize,
         pub partition_full_size: usize,
-        pub unicorn_fixed_param: UnicornFixedParam,
         pub tx_pool: BTreeMap<String, Transaction>,
         pub tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
         pub tx_current_block_previous_hash: Option<String>,
-        pub tx_current_block_num: Option<u64>,
-        pub current_block: Option<Block>,
-        pub current_block_tx: BTreeMap<String, Transaction>,
         pub initial_utxo_txs: Option<BTreeMap<String, Transaction>>,
         pub utxo_set: TrackedUtxoSet,
         pub current_block_stored_info:
@@ -265,7 +261,6 @@ pub mod compute_raft {
         pub last_committed_raft_idx_and_term: (u64, u64),
         pub current_circulation: TokenAmount,
         pub block_pipeline: MiningPipelineInfo,
-        pub current_reward: TokenAmount,
         pub last_mining_transaction_hashes: Vec<String>,
         pub special_handling: Option<SpecialHandling>,
     }
@@ -302,6 +297,16 @@ pub mod unicorn {
     }
 }
 
+pub mod raft {
+    use super::*;
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+    pub struct RaftContextKey {
+        pub proposer_id: u64,
+        pub proposer_run: u64,
+        pub proposal_id: u64,
+    }
+}
+
 pub mod block_pipeline {
     use std::net::SocketAddr;
 
@@ -335,7 +340,8 @@ pub mod block_pipeline {
     /// Rolling info particular to a specific mining pipeline
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct MiningPipelineInfo {
-        pub participants: BTreeMap<u64, Participants>,
+        pub participants_intake: BTreeMap<u64, Participants>,
+        pub participants_mining: BTreeMap<u64, Participants>,
         pub empty_participants: Participants,
         pub last_winning_hashes: BTreeSet<String>,
         pub all_winning_pow: Vec<(SocketAddr, WinningPoWInfo)>,
@@ -343,6 +349,13 @@ pub mod block_pipeline {
         pub winning_pow: Option<(SocketAddr, WinningPoWInfo)>,
         pub mining_pipeline_status: MiningPipelineStatus,
         pub current_phase_timeout_peer_ids: BTreeSet<u64>,
+        pub current_phase_reset_pipeline_peer_ids: BTreeSet<u64>,
+        pub unicorn_fixed_param: unicorn::UnicornFixedParam,
+        pub current_block_num: Option<u64>,
+        pub current_block: Option<Block>,
+        pub current_block_tx: BTreeMap<String, Transaction>,
+        pub current_reward: TokenAmount,
+        pub proposed_keys: BTreeSet<raft::RaftContextKey>,
     }
 }
 
@@ -359,12 +372,14 @@ pub mod storage {
     pub const DB_COL_BC_NAMED: &str = "block_chain_named";
     pub const DB_COL_BC_META: &str = "block_chain_meta";
     pub const DB_COL_BC_JSON: &str = "block_chain_json";
+    pub const DB_COL_BC_V0_5_0: &str = "block_chain_v0.5.0";
     pub const DB_COL_BC_V0_4_0: &str = "block_chain_v0.4.0";
     pub const DB_COL_BC_V0_3_0: &str = "block_chain_v0.3.0";
     pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
 
     /// Version columns
     pub const DB_COLS_BC: &[(&str, u32)] = &[
+        (DB_COL_BC_V0_5_0, 3),
         (DB_COL_BC_V0_4_0, 2),
         (DB_COL_BC_V0_3_0, 1),
         (DB_COL_BC_V0_2_0, 0),
@@ -381,6 +396,7 @@ pub mod storage {
             DB_COL_BC_NAMED,
             DB_COL_BC_META,
             DB_COL_BC_JSON,
+            DB_COL_BC_V0_5_0,
             DB_COL_BC_V0_4_0,
             DB_COL_BC_V0_3_0,
             DB_COL_BC_V0_2_0,
@@ -453,8 +469,9 @@ pub mod wallet {
     #[derive(Default, Debug, Clone, Serialize, Deserialize)]
     pub struct FundStore {
         pub running_total: AssetValues,
-        pub transactions: WalletSavedTransactions,
-        pub spent_transactions: WalletSavedTransactions,
+        pub transactions: BTreeMap<OutPoint, Asset>,
+        pub transaction_pages: Vec<BTreeMap<OutPoint, Asset>>, //Vec holding redundent paged version of entries in transactions.
+        pub spent_transactions: BTreeMap<OutPoint, Asset>,
     }
 
     #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -600,7 +617,7 @@ pub mod convert {
         match old {
             old::naom::Asset::Token(v) => Asset::Token(convert_token_amount(v)),
             old::naom::Asset::Data(v) => Asset::Data(convert_data_asset(v)),
-            old::naom::Asset::Receipt(v) => Asset::Receipt(convert_receipt_asset(v)), // Old `Receipt` assets cannot get carried over with the introduction of DRS
+            old::naom::Asset::Receipt(v) => Asset::Receipt(convert_receipt_asset(v)),
         }
     }
 
@@ -608,7 +625,7 @@ pub mod convert {
         ReceiptAsset {
             amount: old.amount,
             drs_tx_hash: old.drs_tx_hash,
-            metadata: None,
+            metadata: old.metadata,
         }
     }
 
@@ -654,13 +671,10 @@ pub mod convert {
     }
 
     pub fn convert_fund_store(old: old::wallet::FundStore) -> wallet::FundStore {
-        let transactions = convert_saved_wallet_transactions(old.transactions);
-        let transaction_pages = convert_saved_wallet_transactions_to_pages(&transactions);
-
         wallet::FundStore::new(
             convert_asset_values(old.running_total),
-            transactions,
-            transaction_pages,
+            convert_saved_wallet_transactions(old.transactions),
+            convert_saved_wallet_transactions_pages(old.transaction_pages),
             convert_saved_wallet_transactions(old.spent_transactions),
         )
     }
@@ -681,20 +695,16 @@ pub mod convert {
     }
 
     //Creares pages from the frozen transactions
-    pub fn convert_saved_wallet_transactions_to_pages(
-        old: &BTreeMap<OutPoint, Asset>,
+    pub fn convert_saved_wallet_transactions_pages(
+        old: Vec<BTreeMap<old::naom::OutPoint, old::naom::Asset>>,
     ) -> Vec<BTreeMap<OutPoint, Asset>> {
-        let mut transaction_pages: Vec<BTreeMap<OutPoint, Asset>> = vec![BTreeMap::new()];
-
-        for key in old.keys() {
-            if transaction_pages.last().unwrap().len() <= wallet::fund_store::ENTRIES_PER_PAGE {
-                transaction_pages
-                    .last_mut()
-                    .unwrap()
-                    .insert(key.clone(), old.get(key).unwrap().clone());
-            }
-        }
-        transaction_pages
+        old.iter()
+            .map(|page| {
+                page.iter()
+                    .map(|(k, v)| (convert_outpoint(k.clone()), convert_asset(v.clone())))
+                    .collect()
+            })
+            .collect()
     }
 
     pub fn convert_compute_consensused_to_import(
@@ -705,9 +715,11 @@ pub mod convert {
             unanimous_majority: old.unanimous_majority,
             sufficient_majority: old.sufficient_majority,
             partition_full_size: old.partition_full_size,
-            unicorn_fixed_param: convert_unicorn_fixed_param(old.unicorn_fixed_param),
-            tx_current_block_num: old.tx_current_block_num,
-            current_block: old.current_block.map(convert_block),
+            unicorn_fixed_param: convert_unicorn_fixed_param(
+                old.block_pipeline.unicorn_fixed_param,
+            ),
+            tx_current_block_num: old.block_pipeline.current_block_num,
+            current_block: old.block_pipeline.current_block.map(convert_block),
             utxo_set: convert_utxoset(old.utxo_set),
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
             current_circulation: convert_token_amount(old.current_circulation),
@@ -788,4 +800,5 @@ pub mod convert {
         (pending, ready)
     }
 }
+
 pub use convert::*;

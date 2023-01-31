@@ -40,14 +40,16 @@ pub const DB_COL_BC_ALL: &str = "block_chain_all";
 pub const DB_COL_BC_NAMED: &str = "block_chain_named";
 pub const DB_COL_BC_META: &str = "block_chain_meta";
 pub const DB_COL_BC_JSON: &str = "block_chain_json";
-pub const DB_COL_BC_NOW: &str = "block_chain_v0.5.0";
+pub const DB_COL_BC_NOW: &str = "block_chain_v0.6.0";
+pub const DB_COL_BC_V0_5_0: &str = "block_chain_v0.5.0";
 pub const DB_COL_BC_V0_4_0: &str = "block_chain_v0.4.0";
 pub const DB_COL_BC_V0_3_0: &str = "block_chain_v0.3.0";
 pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
 
 /// Version columns
 pub const DB_COLS_BC: &[(&str, u32)] = &[
-    (DB_COL_BC_NOW, 3),
+    (DB_COL_BC_NOW, 4),
+    (DB_COL_BC_V0_5_0, 3),
     (DB_COL_BC_V0_4_0, 2),
     (DB_COL_BC_V0_3_0, 1),
     (DB_COL_BC_V0_2_0, 0),
