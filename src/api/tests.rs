@@ -2093,8 +2093,7 @@ async fn test_post_change_passphrase_failure() {
     //
     assert!(
         matches!(actual, Err(WalletDbError::PassphraseError)),
-        "{}",
-        "{actual:?}"
+        "{}", "{actual:?}"
     );
     assert_eq!(
         (res.status(), res.headers().clone()),
@@ -2138,8 +2137,7 @@ async fn test_post_change_blank_passphrase_failure() {
     //
     assert!(
         matches!(actual, Err(WalletDbError::PassphraseError)),
-        "{}",
-        "{actual:?}"
+        "{}", "{actual:?}"
     );
     assert_eq!(
         (res.status(), res.headers().clone()),

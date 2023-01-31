@@ -1248,7 +1248,9 @@ pub fn indexed_block_hash_key(b_num: u64) -> String {
 /// * `b_num`  - The block number
 /// * `tx_num` - The transaction index in the block
 pub fn indexed_tx_hash_key(b_num: u64, tx_num: u32) -> String {
-    format!("{INDEXED_TX_HASH_PREFIX_KEY}{b_num:016x}_{tx_num:08x}")
+    format!(
+        "{INDEXED_TX_HASH_PREFIX_KEY}{b_num:016x}_{tx_num:08x}"
+    )
 }
 
 /// Decodes a version pointer
