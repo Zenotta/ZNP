@@ -604,7 +604,7 @@ fn to_u8_array_literal(value: &[u8]) -> String {
         if v.is_ascii_alphanumeric() || v == &b'_' {
             result.push(*v as char);
         } else {
-            format!("{result}\\x{v:02X}");
+            result.push_str(&format!("\\x{:02X}", v));
         }
     }
     result
