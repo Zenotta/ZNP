@@ -40,14 +40,16 @@ pub const DB_COL_BC_ALL: &str = "block_chain_all";
 pub const DB_COL_BC_NAMED: &str = "block_chain_named";
 pub const DB_COL_BC_META: &str = "block_chain_meta";
 pub const DB_COL_BC_JSON: &str = "block_chain_json";
-pub const DB_COL_BC_NOW: &str = "block_chain_v0.5.0";
+pub const DB_COL_BC_NOW: &str = "block_chain_v0.6.0";
+pub const DB_COL_BC_V0_5_0: &str = "block_chain_v0.5.0";
 pub const DB_COL_BC_V0_4_0: &str = "block_chain_v0.4.0";
 pub const DB_COL_BC_V0_3_0: &str = "block_chain_v0.3.0";
 pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
 
 /// Version columns
 pub const DB_COLS_BC: &[(&str, u32)] = &[
-    (DB_COL_BC_NOW, 3),
+    (DB_COL_BC_NOW, 4),
+    (DB_COL_BC_V0_5_0, 3),
     (DB_COL_BC_V0_4_0, 2),
     (DB_COL_BC_V0_3_0, 1),
     (DB_COL_BC_V0_2_0, 0),
@@ -85,10 +87,10 @@ pub enum StorageError {
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfigError(err) => write!(f, "Config error: {}", err),
-            Self::Network(err) => write!(f, "Network error: {}", err),
-            Self::DbError(err) => write!(f, "DB error: {}", err),
-            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Self::ConfigError(err) => write!(f, "Config error: {err}"),
+            Self::Network(err) => write!(f, "Network error: {err}"),
+            Self::DbError(err) => write!(f, "DB error: {err}"),
+            Self::Serialization(err) => write!(f, "Serialization error: {err}"),
         }
     }
 }
@@ -1236,7 +1238,7 @@ fn version_pointer<K: AsRef<[u8]>>(cf: &'static str, key: K) -> Vec<u8> {
 ///
 /// * `b_num`  - The block number
 pub fn indexed_block_hash_key(b_num: u64) -> String {
-    format!("{}{:016x}", INDEXED_BLOCK_HASH_PREFIX_KEY, b_num)
+    format!("{INDEXED_BLOCK_HASH_PREFIX_KEY}{b_num:016x}")
 }
 
 /// The key for indexed block
@@ -1246,10 +1248,7 @@ pub fn indexed_block_hash_key(b_num: u64) -> String {
 /// * `b_num`  - The block number
 /// * `tx_num` - The transaction index in the block
 pub fn indexed_tx_hash_key(b_num: u64, tx_num: u32) -> String {
-    format!(
-        "{}{:016x}_{:08x}",
-        INDEXED_TX_HASH_PREFIX_KEY, b_num, tx_num
-    )
+    format!("{INDEXED_TX_HASH_PREFIX_KEY}{b_num:016x}_{tx_num:08x}")
 }
 
 /// Decodes a version pointer

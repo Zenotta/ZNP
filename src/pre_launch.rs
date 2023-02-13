@@ -28,10 +28,10 @@ pub enum PreLaunchError {
 impl fmt::Display for PreLaunchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfigError(err) => write!(f, "Config error: {}", err),
-            Self::Network(err) => write!(f, "Network error: {}", err),
-            Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
-            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Self::ConfigError(err) => write!(f, "Config error: {err}"),
+            Self::Network(err) => write!(f, "Network error: {err}"),
+            Self::AsyncTask(err) => write!(f, "Async task error: {err}"),
+            Self::Serialization(err) => write!(f, "Serialization error: {err}"),
         }
     }
 }

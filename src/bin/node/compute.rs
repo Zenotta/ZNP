@@ -12,13 +12,13 @@ use system::{
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let mut config = configuration(load_settings(matches));
 
-    println!("Start node with config {:?}", config);
+    println!("Start node with config {config:?}");
 
     config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
     let node = ComputeNode::new(config, Default::default()).await.unwrap();
     let api_inputs = node.api_inputs();
 
-    println!("API Inputs: {:?}", api_inputs);
+    println!("API Inputs: {api_inputs:?}");
     println!("Started node at {}", node.address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();

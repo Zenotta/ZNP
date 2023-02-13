@@ -26,71 +26,77 @@ use tracing::info;
 type ExtraNodeParamsFilterMap = BTreeMap<String, ExtraNodeParamsFilter>;
 
 const WALLET_PASSWORD: &str = "TestPassword";
-const LAST_BLOCK_STORED_NUM: u64 = 12;
+const LAST_BLOCK_STORED_NUM: u64 = 15;
 const LAST_BLOCK_BLOCK_HASH: &str =
-    "b00eb1a7cc806e6173b799a3f48fbc726c3fde6749d458e441f1cb8a78b949565";
-const LAST_BLOCK_STORAGE_DB_V0_4_0_INDEX: usize = 12;
-const STORAGE_DB_V0_4_0_INDEXES: &[(&str, usize, usize)] = &[
+    "b0033c4bb16a07defbae11c484c61476efb95a73b612001566bc7914848c7876c";
+const LAST_BLOCK_STORAGE_DB_V0_5_0_INDEX: usize = 15;
+const STORAGE_DB_V0_5_0_INDEXES: &[(&str, usize, usize)] = &[
     // (named key, json index, data index)
-    ("nIndexedBlockHashKey_0000000000000000", 62, 231),
-    ("nIndexedBlockHashKey_0000000000000001", 60, 229),
-    ("nIndexedBlockHashKey_0000000000000002", 61, 230),
-    ("nIndexedBlockHashKey_0000000000000003", 72, 243),
-    ("nIndexedBlockHashKey_0000000000000004", 69, 240),
-    ("nIndexedBlockHashKey_0000000000000005", 71, 242),
-    ("nIndexedBlockHashKey_0000000000000006", 70, 241),
-    ("nIndexedBlockHashKey_0000000000000007", 65, 256),
-    ("nIndexedBlockHashKey_0000000000000008", 67, 258),
-    ("nIndexedBlockHashKey_0000000000000009", 64, 255),
-    ("nIndexedBlockHashKey_000000000000000a", 63, 254),
-    ("nIndexedBlockHashKey_000000000000000b", 66, 257),
-    ("nIndexedBlockHashKey_000000000000000c", 68, 259),
-    ("nIndexedTxHashKey_0000000000000000_00000000", 56, 225),
-    ("nIndexedTxHashKey_0000000000000000_00000001", 57, 226),
-    ("nIndexedTxHashKey_0000000000000000_00000002", 58, 227),
-    ("nIndexedTxHashKey_0000000000000000_00000003", 59, 228),
-    ("nIndexedTxHashKey_0000000000000000_00000004", 85, 236),
-    ("nIndexedTxHashKey_0000000000000001_00000000", 77, 232),
-    ("nIndexedTxHashKey_0000000000000001_00000001", 81, 235),
-    ("nIndexedTxHashKey_0000000000000001_00000002", 98, 237),
-    ("nIndexedTxHashKey_0000000000000002_00000000", 80, 234),
-    ("nIndexedTxHashKey_0000000000000002_00000001", 107, 238),
-    ("nIndexedTxHashKey_0000000000000002_00000002", 111, 239),
-    ("nIndexedTxHashKey_0000000000000002_00000003", 78, 233),
-    ("nIndexedTxHashKey_0000000000000003_00000000", 93, 248),
-    ("nIndexedTxHashKey_0000000000000004_00000000", 106, 251),
-    ("nIndexedTxHashKey_0000000000000005_00000000", 76, 245),
-    ("nIndexedTxHashKey_0000000000000005_00000001", 100, 250),
-    ("nIndexedTxHashKey_0000000000000005_00000002", 109, 252),
-    ("nIndexedTxHashKey_0000000000000005_00000003", 91, 247),
-    ("nIndexedTxHashKey_0000000000000006_00000000", 73, 244),
-    ("nIndexedTxHashKey_0000000000000006_00000001", 79, 246),
-    ("nIndexedTxHashKey_0000000000000006_00000002", 110, 253),
-    ("nIndexedTxHashKey_0000000000000006_00000003", 96, 249),
-    ("nIndexedTxHashKey_0000000000000007_00000000", 89, 268),
-    ("nIndexedTxHashKey_0000000000000008_00000000", 90, 269),
-    ("nIndexedTxHashKey_0000000000000008_00000001", 92, 270),
-    ("nIndexedTxHashKey_0000000000000008_00000002", 94, 271),
-    ("nIndexedTxHashKey_0000000000000008_00000003", 74, 260),
-    ("nIndexedTxHashKey_0000000000000009_00000000", 84, 264),
-    ("nIndexedTxHashKey_0000000000000009_00000001", 101, 275),
-    ("nIndexedTxHashKey_0000000000000009_00000002", 108, 280),
-    ("nIndexedTxHashKey_0000000000000009_00000003", 97, 273),
-    ("nIndexedTxHashKey_000000000000000a_00000000", 87, 266),
-    ("nIndexedTxHashKey_000000000000000a_00000001", 88, 267),
-    ("nIndexedTxHashKey_000000000000000a_00000002", 105, 279),
-    ("nIndexedTxHashKey_000000000000000a_00000003", 82, 262),
-    ("nIndexedTxHashKey_000000000000000b_00000000", 83, 263),
-    ("nIndexedTxHashKey_000000000000000b_00000001", 95, 272),
-    ("nIndexedTxHashKey_000000000000000b_00000002", 102, 276),
-    ("nIndexedTxHashKey_000000000000000b_00000003", 104, 278),
-    ("nIndexedTxHashKey_000000000000000c_00000000", 75, 261),
-    ("nIndexedTxHashKey_000000000000000c_00000001", 86, 265),
-    ("nIndexedTxHashKey_000000000000000c_00000002", 103, 277),
-    ("nIndexedTxHashKey_000000000000000c_00000003", 99, 274),
+    ("nIndexedBlockHashKey_0000000000000000", 68, 255),
+    ("nIndexedBlockHashKey_0000000000000001", 66, 253),
+    ("nIndexedBlockHashKey_0000000000000002", 67, 254),
+    ("nIndexedBlockHashKey_0000000000000003", 81, 267),
+    ("nIndexedBlockHashKey_0000000000000004", 78, 264),
+    ("nIndexedBlockHashKey_0000000000000005", 80, 266),
+    ("nIndexedBlockHashKey_0000000000000006", 79, 265),
+    ("nIndexedBlockHashKey_0000000000000007", 73, 280),
+    ("nIndexedBlockHashKey_0000000000000008", 75, 282),
+    ("nIndexedBlockHashKey_0000000000000009", 72, 279),
+    ("nIndexedBlockHashKey_000000000000000a", 71, 278),
+    ("nIndexedBlockHashKey_000000000000000b", 74, 281),
+    ("nIndexedBlockHashKey_000000000000000c", 77, 283),
+    ("nIndexedBlockHashKey_000000000000000d", 70, 306),
+    ("nIndexedBlockHashKey_000000000000000e", 76, 307),
+    ("nIndexedBlockHashKey_000000000000000f", 69, 305),
+    ("nIndexedTxHashKey_0000000000000000_00000000", 62, 249),
+    ("nIndexedTxHashKey_0000000000000000_00000001", 63, 250),
+    ("nIndexedTxHashKey_0000000000000000_00000002", 64, 251),
+    ("nIndexedTxHashKey_0000000000000000_00000003", 65, 252),
+    ("nIndexedTxHashKey_0000000000000000_00000004", 95, 260),
+    ("nIndexedTxHashKey_0000000000000001_00000000", 87, 256),
+    ("nIndexedTxHashKey_0000000000000001_00000001", 91, 259),
+    ("nIndexedTxHashKey_0000000000000001_00000002", 109, 261),
+    ("nIndexedTxHashKey_0000000000000002_00000000", 90, 258),
+    ("nIndexedTxHashKey_0000000000000002_00000001", 118, 262),
+    ("nIndexedTxHashKey_0000000000000002_00000002", 123, 263),
+    ("nIndexedTxHashKey_0000000000000002_00000003", 88, 257),
+    ("nIndexedTxHashKey_0000000000000003_00000000", 104, 272),
+    ("nIndexedTxHashKey_0000000000000004_00000000", 117, 275),
+    ("nIndexedTxHashKey_0000000000000005_00000000", 86, 269),
+    ("nIndexedTxHashKey_0000000000000005_00000001", 111, 274),
+    ("nIndexedTxHashKey_0000000000000005_00000002", 121, 276),
+    ("nIndexedTxHashKey_0000000000000005_00000003", 102, 271),
+    ("nIndexedTxHashKey_0000000000000006_00000000", 82, 268),
+    ("nIndexedTxHashKey_0000000000000006_00000001", 89, 270),
+    ("nIndexedTxHashKey_0000000000000006_00000002", 122, 277),
+    ("nIndexedTxHashKey_0000000000000006_00000003", 107, 273),
+    ("nIndexedTxHashKey_0000000000000007_00000000", 100, 292),
+    ("nIndexedTxHashKey_0000000000000008_00000000", 101, 293),
+    ("nIndexedTxHashKey_0000000000000008_00000001", 103, 294),
+    ("nIndexedTxHashKey_0000000000000008_00000002", 105, 295),
+    ("nIndexedTxHashKey_0000000000000008_00000003", 84, 284),
+    ("nIndexedTxHashKey_0000000000000009_00000000", 94, 288),
+    ("nIndexedTxHashKey_0000000000000009_00000001", 112, 299),
+    ("nIndexedTxHashKey_0000000000000009_00000002", 120, 304),
+    ("nIndexedTxHashKey_0000000000000009_00000003", 108, 297),
+    ("nIndexedTxHashKey_000000000000000a_00000000", 98, 290),
+    ("nIndexedTxHashKey_000000000000000a_00000001", 99, 291),
+    ("nIndexedTxHashKey_000000000000000a_00000002", 116, 303),
+    ("nIndexedTxHashKey_000000000000000a_00000003", 92, 286),
+    ("nIndexedTxHashKey_000000000000000b_00000000", 93, 287),
+    ("nIndexedTxHashKey_000000000000000b_00000001", 106, 296),
+    ("nIndexedTxHashKey_000000000000000b_00000002", 113, 300),
+    ("nIndexedTxHashKey_000000000000000b_00000003", 115, 302),
+    ("nIndexedTxHashKey_000000000000000c_00000000", 85, 285),
+    ("nIndexedTxHashKey_000000000000000c_00000001", 96, 289),
+    ("nIndexedTxHashKey_000000000000000c_00000002", 114, 301),
+    ("nIndexedTxHashKey_000000000000000c_00000003", 110, 298),
+    ("nIndexedTxHashKey_000000000000000d_00000000", 83, 308),
+    ("nIndexedTxHashKey_000000000000000e_00000000", 119, 310),
+    ("nIndexedTxHashKey_000000000000000f_00000000", 97, 309),
 ];
-const STORAGE_DB_V0_4_0_BLOCK_LEN: &[u32] = &[5, 3, 4, 1, 1, 4, 4, 1, 4, 4, 4, 4, 4];
-const STORAGE_DB_V0_4_0_BLOCK_VERSION: &[u32] = &[0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2];
+const STORAGE_DB_V0_5_0_BLOCK_LEN: &[u32] = &[5, 3, 4, 1, 1, 4, 4, 1, 4, 4, 4, 4, 4, 1, 1, 1];
+const STORAGE_DB_V0_5_0_BLOCK_VERSION: &[u32] = &[0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3];
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 const KEEP_ALL_FILTER: ExtraNodeParamsFilter = ExtraNodeParamsFilter {
     db: true,
@@ -190,16 +196,16 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
                 let mut expected = Vec::new();
                 let mut actual = Vec::new();
                 let mut actual_indexed = Vec::new();
-                let db_v4 = tests_last_version_db::STORAGE_DB_V0_4_0;
-                for (idx_meta, json_idx, data_v_idx) in STORAGE_DB_V0_4_0_INDEXES.iter() {
-                    let key = db_v4[*data_v_idx].1;
+                let db_v5 = tests_last_version_db::STORAGE_DB_V0_5_0;
+                for (idx_meta, json_idx, data_v_idx) in STORAGE_DB_V0_5_0_INDEXES.iter() {
+                    let key = db_v5[*data_v_idx].1;
                     let item_meta = index_meta(idx_meta);
                     expected.push(Some(test_hash(BlockchainItem {
-                        version: STORAGE_DB_V0_4_0_BLOCK_VERSION[item_meta.block_num() as usize],
+                        version: STORAGE_DB_V0_5_0_BLOCK_VERSION[item_meta.block_num() as usize],
                         item_meta,
                         key: key.to_vec(),
-                        data: db_v4[*data_v_idx].2.to_vec(),
-                        data_json: db_v4[*json_idx].2.to_vec(),
+                        data: db_v5[*data_v_idx].2.to_vec(),
+                        data_json: db_v5[*json_idx].2.to_vec(),
                     })));
                     actual.push(storage.get_stored_value(key).map(test_hash));
                     actual_indexed.push(storage.get_stored_value(idx_meta).map(test_hash));
@@ -209,7 +215,7 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
                 assert_eq!(storage.get_stored_values_count(), expected.len());
                 assert_eq!(
                     storage.get_stored_value(LAST_BLOCK_HASH_KEY).map(test_hash),
-                    expected[LAST_BLOCK_STORAGE_DB_V0_4_0_INDEX]
+                    expected[LAST_BLOCK_STORAGE_DB_V0_5_0_INDEX]
                 );
                 assert_eq!(
                     storage.get_last_block_stored(),
@@ -240,7 +246,7 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
                 .unwrap();
             assert_eq!(
                 (payment.0.len(), payment.1, payment.2.len()),
-                (7, Asset::token_u64(52571285), 7)
+                (8, Asset::token_u64(60081467), 8)
             );
         }
     }
@@ -470,7 +476,7 @@ async fn upgrade_restart_network_common(
 
         let raft_len = upgrade_cfg.raft_len;
         let expected_count =
-            STORAGE_DB_V0_4_0_INDEXES.len() + extra_blocks * (1 + 1) /* aggregation tx */ + 1;
+            STORAGE_DB_V0_5_0_INDEXES.len() + extra_blocks * (1 + 1) /* aggregation tx */ + 1;
         assert_eq!(actual_count, vec![expected_count; raft_len]);
         assert_eq!(actual_last_bnum, vec![Some(expected_block_num); raft_len]);
     }
@@ -532,12 +538,12 @@ fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
             db: Some(create_old_db(
                 &old::compute::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::COMPUTE_DB_V0_4_0,
+                tests_last_version_db::COMPUTE_DB_V0_5_0,
             )),
             raft_db: Some(create_old_db(
                 &old::compute_raft::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::COMPUTE_RAFT_DB_V0_4_0,
+                tests_last_version_db::COMPUTE_RAFT_DB_V0_5_0,
             )),
             ..Default::default()
         },
@@ -545,12 +551,12 @@ fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
             db: Some(create_old_db(
                 &old::storage::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::STORAGE_DB_V0_4_0,
+                tests_last_version_db::STORAGE_DB_V0_5_0,
             )),
             raft_db: Some(create_old_db(
                 &old::storage_raft::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::STORAGE_RAFT_DB_V0_4_0,
+                tests_last_version_db::STORAGE_RAFT_DB_V0_5_0,
             )),
             ..Default::default()
         },
@@ -558,7 +564,7 @@ fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
             wallet_db: Some(create_old_db(
                 &old::wallet::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::USER_DB_V0_4_0,
+                tests_last_version_db::USER_DB_V0_5_0,
             )),
             ..Default::default()
         },
@@ -566,7 +572,7 @@ fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
             wallet_db: Some(create_old_db(
                 &old::wallet::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::MINER_DB_V0_4_0,
+                tests_last_version_db::MINER_DB_V0_5_0,
             )),
             ..Default::default()
         },
@@ -726,10 +732,10 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
         block_hash: LAST_BLOCK_BLOCK_HASH.to_owned(),
         block_num: LAST_BLOCK_STORED_NUM,
         nonce: vec![
-            51, 48, 162, 113, 120, 18, 37, 30, 133, 141, 143, 173, 190, 189, 84, 151,
+            144, 99, 8, 30, 192, 102, 170, 185, 127, 30, 118, 20, 191, 97, 54, 170,
         ],
         mining_transactions: std::iter::once((
-            "gae23cfe0ce6a4f516ffe42b72ddeb04".to_owned(),
+            "g5edb358984de4a7da28cf1e2ec89415".to_owned(),
             Transaction {
                 inputs: vec![TxIn {
                     previous_out: None,
@@ -738,11 +744,11 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
                     },
                 }],
                 outputs: vec![TxOut {
-                    value: Asset::Token(TokenAmount(7510182)),
+                    value: Asset::Token(TokenAmount(7510181)),
                     locktime: 0,
                     drs_block_hash: None,
                     script_public_key: Some(
-                        "ab043d055c2cadda55684f07abc0a31b523fedd437b1862435ad9f44090fd063"
+                        "3751e1e929efb493377dd7bebf68db13f38180e45ebe42cc94fe81c9cd463363"
                             .to_owned(),
                     ),
                 }],
@@ -877,7 +883,7 @@ fn index_meta(v: &str) -> BlockchainItemMeta {
             let block_num = u64::from_str_radix(block_num, 16).unwrap();
             BlockchainItemMeta::Block {
                 block_num,
-                tx_len: STORAGE_DB_V0_4_0_BLOCK_LEN[block_num as usize],
+                tx_len: STORAGE_DB_V0_5_0_BLOCK_LEN[block_num as usize],
             }
         }
         (Some("nIndexedTxHashKey"), Some(block_num), Some(tx_num)) => BlockchainItemMeta::Tx {

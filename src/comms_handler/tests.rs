@@ -242,7 +242,7 @@ async fn listen_paused_resumed_stopped() {
             )
         ),
         "{:?}",
-        actual
+        "{actual:?}"
     );
 
     complete_compute_nodes(nodes).await;
@@ -307,7 +307,7 @@ async fn connect_full(from_full: bool) {
             ),
         ),
         "{:?}",
-        actual
+        "{actual:?}"
     );
 
     complete_compute_nodes(nodes).await;
@@ -366,7 +366,7 @@ async fn nodes_incompatible() {
             )
         ),
         "{:?}",
-        actual
+        "{actual:?}"
     );
 
     complete_compute_nodes(nodes).await;
@@ -427,7 +427,7 @@ async fn nodes_tls_mismatch() {
             )
         ),
         "{:?}",
-        actual
+        "{actual:?}"
     );
 
     complete_compute_nodes(nodes).await;
@@ -497,7 +497,7 @@ async fn nodes_tls_ca_mismatch() {
             )
         ),
         "{:?}",
-        actual
+        "{actual:?}"
     );
 
     complete_compute_nodes(nodes).await;
@@ -569,7 +569,7 @@ async fn nodes_tls_ca_unmapped_mismatch() {
             )
         ),
         "{:?}",
-        actual
+        "{actual:?}"
     );
 
     complete_compute_nodes(nodes).await;

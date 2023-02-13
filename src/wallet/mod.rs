@@ -53,10 +53,10 @@ pub enum WalletDbError {
 impl fmt::Display for WalletDbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::IO(err) => write!(f, "I/O Error: {}", err),
-            Self::AsyncTask(err) => write!(f, "Async Error: {}", err),
-            Self::Serialization(err) => write!(f, "Serialization Error: {}", err),
-            Self::Database(err) => write!(f, "Database Error: {}", err),
+            Self::IO(err) => write!(f, "I/O Error: {err}"),
+            Self::AsyncTask(err) => write!(f, "Async Error: {err}"),
+            Self::Serialization(err) => write!(f, "Serialization Error: {err}"),
+            Self::Database(err) => write!(f, "Database Error: {err}"),
             Self::PassphraseError => write!(f, "PassphraseError"),
             Self::InsufficientFundsError => write!(f, "InsufficientFundsError"),
             Self::MasterKeyRetrievalError => write!(f, "MasterKeyRetrievalError"),

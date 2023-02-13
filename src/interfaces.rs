@@ -555,7 +555,7 @@ impl fmt::Debug for ComputeRequest {
             }
             SendUtxoRequest { .. } => write!(f, "SendUtxoRequest"),
             SendBlockStored(_) => write!(f, "SendBlockStored"),
-            SendPoW { ref block_num, .. } => write!(f, "SendPoW({})", block_num),
+            SendPoW { ref block_num, .. } => write!(f, "SendPoW({block_num})"),
             SendPartitionEntry { .. } => write!(f, "SendPartitionEntry"),
             SendTransactions { .. } => write!(f, "SendTransactions"),
             SendUserBlockNotificationRequest => write!(f, "SendUserBlockNotificationRequest"),

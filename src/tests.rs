@@ -993,7 +993,7 @@ async fn create_block_with_seed() {
     // Assert
     //
     let expected_seed0 = Some("102382207707718734792748219972459444372508601011471438062299221139355828742917-4092482189202844858141461446747443254065713079405017303649880917821984131927979764736076459305831834761744847895656303682167530187457916798745160233343351193");
-    let expected_seed1 = Some("53625495821249212856076878521348513767221521670305666012024753698723236448933-6042048464677444314873846730787253312210095773631216883298560740834656534445960261717219627892039499767374934275026582314083363460639062445506067499883811293");
+    let expected_seed1 = Some("61860386429385715129932038563928327665132428362661384643349545082089391531133-416435139657154596314786853335634683227532614868699105742210979896123845505259182064943177222638942624441844628610187675305048065512855941094501920628364805");
     assert_eq!((seed0, seed1), (expected_seed0, expected_seed1));
 
     test_step_complete(network).await;
@@ -1317,8 +1317,7 @@ async fn proof_winner(network_config: NetworkConfig) {
             .map(|i| (i.0.clone(), i.1.len(), i.2.len()))
             .collect::<Vec<_>>(),
         expected_before,
-        "Info Before: {:?}",
-        info_before
+        "Info Before: {info_before:?}"
     );
     assert_eq!(
         info_after
@@ -1326,8 +1325,7 @@ async fn proof_winner(network_config: NetworkConfig) {
             .map(|i| (i.0.clone(), i.1.len(), i.2.len()))
             .collect::<Vec<_>>(),
         expected_after,
-        "Info After: {:?}",
-        info_after
+        "Info After: {info_after:?}"
     );
 
     test_step_complete(network).await;
@@ -1595,7 +1593,7 @@ async fn main_loops_raft_1_node_common(
     let (mut actual_stored, mut expected_stored) = (Vec::new(), Vec::new());
     let (mut actual_compute, mut expected_compute) = (Vec::new(), Vec::new());
     for (idx, expected_block_num) in expected_block_nums.iter().copied().enumerate() {
-        let tag = format!("Before start {}", idx);
+        let tag = format!("Before start {idx}");
         modify_network(&mut network, &tag, modify_cfg).await;
 
         for node_name in compute_nodes {
@@ -2082,7 +2080,7 @@ async fn handle_messages_lost_reset_pipeline_stage() {
     let actual0 = storage_get_last_stored_info(&mut network, "storage1").await;
     let actual0_values = actual0.1.as_ref();
     let actual0_values = actual0_values.map(|(_, b_num, min_tx)| (*b_num, *min_tx));
-    assert_eq!(actual0_values, Some((0, 1)), "Actual: {:?}", actual0);
+    assert_eq!(actual0_values, Some((0, 1)), "Actual: {actual0:?}");
 }
 
 async fn handle_message_lost_common(
@@ -2163,7 +2161,7 @@ async fn handle_message_lost_common_with_pow(
     let actual1 = storage_get_last_stored_info(&mut network, "storage1").await;
     let actual1_values = actual1.1.as_ref();
     let actual1_values = actual1_values.map(|(_, b_num, min_tx)| (*b_num, *min_tx));
-    assert_eq!(actual1_values, Some((1, 1)), "Actual: {:?}", actual1);
+    assert_eq!(actual1_values, Some((1, 1)), "Actual: {actual1:?}");
 
     let stored0 = stored0.unwrap();
     let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
@@ -2309,7 +2307,7 @@ async fn catchup_fetch_blockchain_item_raft() {
     for (i, block) in blocks.iter().enumerate() {
         info!("Test Step Storage add block {}", i);
 
-        let tag = format!("Before store block {}", i);
+        let tag = format!("Before store block {i}");
         modify_network(&mut network, &tag, &modify_cfg).await;
         let storage_nodes = network.active_nodes(NodeType::Storage).to_owned();
 
@@ -3173,7 +3171,7 @@ async fn reject_receipt_based_payment() {
     let mut network = Network::create_from_config(&network_config).await;
     create_first_block_act(&mut network).await;
     let mut create_receipt_asset_txs = BTreeMap::default();
-    let tx_hash = "g82321f36b78c1f9a9923fdf8e5a88b7";
+    let tx_hash = "g81dcfb4f3d6726395adbe0a2a1ac133";
     create_receipt_asset_txs.insert(
         tx_hash.to_owned(),
         construct_receipt_create_tx(
@@ -4109,7 +4107,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
             // Check match expected block_hash:
             let mut reader = Cursor::new(stored_value.as_slice());
             let header = match deserialize_from::<_, BlockHeader>(&mut reader) {
-                Err(e) => return Some(format!("error: {:?}", e)),
+                Err(e) => return Some(format!("error: {e:?}")),
                 Ok(v) => v,
             };
 
@@ -4126,7 +4124,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
         }
 
         match deserialize::<StoredSerializingBlock>(&stored_value) {
-            Err(e) => return Some(format!("error: {:?}", e)),
+            Err(e) => return Some(format!("error: {e:?}")),
             Ok(v) => v,
         }
     };
@@ -4142,7 +4140,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
         let stored_value =
             checked_blockchain_item_data(stored_value, BlockchainItemType::Tx).unwrap();
         let stored_tx = match deserialize::<Transaction>(&stored_value) {
-            Err(e) => return Some(format!("error tx hash: {:?} : {:?}", e, tx_hash)),
+            Err(e) => return Some(format!("error tx hash: {e:?} : {tx_hash:?}")),
             Ok(v) => v,
         };
         block_txs.insert(tx_hash.clone(), stored_tx);
@@ -4159,7 +4157,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
         unicorn_witness: Default::default(),
     };
     let complete = CompleteBlock { common, extra_info };
-    Some(format!("{:?}", complete))
+    Some(format!("{complete:?}"))
 }
 
 async fn storage_all_get_last_stored_info(
@@ -4889,7 +4887,7 @@ async fn complete_block_with_seed(
     };
 
     let hash_key = construct_valid_block_pow_hash(&stored.block).unwrap();
-    let complete_str = format!("{:?}", complete);
+    let complete_str = format!("{complete:?}");
 
     ((hash_key, complete_str), complete)
 }

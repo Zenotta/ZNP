@@ -97,10 +97,10 @@ pub enum UpgradeError {
 impl fmt::Display for UpgradeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfigError(err) => write!(f, "Config error: {}", err),
-            Self::DbError(err) => write!(f, "DB error: {}", err),
-            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
-            Self::StringError(err) => write!(f, "String error: {}", err),
+            Self::ConfigError(err) => write!(f, "Config error: {err}"),
+            Self::DbError(err) => write!(f, "DB error: {err}"),
+            Self::Serialization(err) => write!(f, "Serialization error: {err}"),
+            Self::StringError(err) => write!(f, "String error: {err}"),
         }
     }
 }
@@ -341,7 +341,7 @@ pub fn upgrade_storage_db_batch<'a>(
         }
     }
 
-    let column = old::storage::DB_COL_BC_V0_4_0;
+    let column = old::storage::DB_COL_BC_V0_5_0;
     for (key, value) in db.iter_cf_clone(column) {
         if is_transaction_key(&key) {
             let _: old::naom::Transaction = tracked_deserialize("Tx deserialize", &key, &value)?;
@@ -594,7 +594,7 @@ pub fn dump_db(db: &'_ SimpleDb) -> impl Iterator<Item = String> + '_ {
         .flat_map(|(c, it)| it.map(move |(k, v)| (c.clone(), k, v)))
         .map(|(c, k, v)| (c, to_u8_array_literal(&k), v))
         .map(|(c, k, v)| (c, k, to_u8_array_literal(&v)))
-        .map(|(c, k, v)| format!("\"{}\", b\"{}\", b\"{}\"", c, k, v))
+        .map(|(c, k, v)| format!("\"{c}\", b\"{k}\", b\"{v}\""))
 }
 
 /// Convert to a valid array literal displaying ASCII nicely
@@ -604,7 +604,7 @@ fn to_u8_array_literal(value: &[u8]) -> String {
         if v.is_ascii_alphanumeric() || v == &b'_' {
             result.push(*v as char);
         } else {
-            format!("{result}\\x{:02X}", v);
+            format!("{result}\\x{v:02X}");
         }
     }
     result
@@ -614,7 +614,7 @@ fn key_value_error(info: &str, key: &[u8], value: &[u8]) -> UpgradeError {
     let log_key = to_u8_array_literal(key);
     let log_value = to_u8_array_literal(value);
 
-    let error = format!("{} \"{}\" -> \"{}\"", info, log_key, log_value);
+    let error = format!("{info} \"{log_key}\" -> \"{log_value}\"");
     error!("{}", &error);
 
     StringError(error).into()
@@ -627,7 +627,7 @@ fn tracked_deserialize<'a, T: serde::Deserialize<'a>>(
 ) -> Result<T> {
     match deserialize(value) {
         Ok(v) => Ok(v),
-        Err(e) => Err(key_value_error(&format!("{}: {:?}", tag, e), key, value)),
+        Err(e) => Err(key_value_error(&format!("{tag}: {e:?}"), key, value)),
     }
 }
 

@@ -283,7 +283,7 @@ pub async fn get_debug_data(
             let aux_type = node_type_as_str(aux.get_node_type());
             let aux_peers = aux.get_peer_list().await;
             DebugData {
-                node_type: format!("{}/{}", node_type, aux_type),
+                node_type: format!("{node_type}/{aux_type}"),
                 node_api: debug_paths,
                 node_peers: [node_peers, aux_peers].concat(),
                 routes_pow,

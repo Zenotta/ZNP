@@ -12,7 +12,7 @@ use system::{
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let config = configuration(load_settings(matches));
 
-    println!("Start node with config {:?}", config);
+    println!("Start node with config {config:?}");
     let node = StorageNode::new(config, Default::default()).await.unwrap();
 
     println!("Started node at {}", node.address());

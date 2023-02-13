@@ -12,7 +12,7 @@ use system::{MinerNode, UserNode};
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let (config, user_config) = configuration(load_settings(matches));
-    println!("Start node with config {:?}", config);
+    println!("Start node with config {config:?}");
     let mut node = MinerNode::new(config, Default::default()).await.unwrap();
     println!("Started node at {}", node.address());
 
@@ -38,7 +38,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     // Send any requests here
     if let Some(value) = matches.value_of("request_bc_item") {
         let storage_addr = node.storage_address();
-        println!("Connect to storage address: {:?}", storage_addr);
+        println!("Connect to storage address: {storage_addr:?}");
         node.connect_to(storage_addr).await.unwrap();
 
         node.request_blockchain_item(value.to_string())
@@ -74,7 +74,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                 ..Default::default()
             };
 
-            println!("Start user node with config {:?}", config);
+            println!("Start user node with config {config:?}");
             let user_node = UserNode::new(config, shared_members).await.unwrap();
             let api_inputs = (user_node.api_inputs(), miner_api_inputs);
             println!("Started user node at {}", user_node.address());

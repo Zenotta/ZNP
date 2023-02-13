@@ -254,7 +254,7 @@ fn from_ser_err(err: BincodeError) -> StorageError {
 
 /// Format entry key for db
 fn format_entry_key(index: u64) -> String {
-    format!("{}_{}", ENTRY_KEY, index)
+    format!("{ENTRY_KEY}_{index}")
 }
 
 fn batch_write(presistent: &mut SimpleDb, batch: SimpleDbWriteBatchDone) -> RaftResult<()> {

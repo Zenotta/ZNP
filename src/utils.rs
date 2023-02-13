@@ -386,7 +386,7 @@ pub async fn create_and_save_fake_to_wallet(
 ///
 /// * `addr`    - Socket address of used in the proof of work
 pub fn format_parition_pow_address(addr: SocketAddr) -> String {
-    format!("{}", addr)
+    format!("{addr}")
 }
 
 /// Calculates the reward for the next block, to be placed within the coinbase tx
@@ -776,7 +776,7 @@ pub fn decode_pub_key(key: &str) -> Result<PublicKey, StringError> {
             return Ok(key);
         }
     }
-    Err(StringError(format!("Public key decoding error: {}", key)))
+    Err(StringError(format!("Public key decoding error: {key}")))
 }
 
 /// Decodes a secret key
@@ -790,7 +790,7 @@ pub fn decode_secret_key(key: &str) -> Result<SecretKey, StringError> {
             return Ok(key);
         }
     }
-    Err(StringError(format!("Secret key decoding error: {}", key)))
+    Err(StringError(format!("Secret key decoding error: {key}")))
 }
 
 /// Decodes a signature
@@ -804,7 +804,7 @@ pub fn decode_signature(sig: &str) -> Result<Signature, StringError> {
             return Ok(sig);
         }
     }
-    Err(StringError(format!("Signature decoding error: {}", sig)))
+    Err(StringError(format!("Signature decoding error: {sig}")))
 }
 
 /// Stop listening for connection and disconnect existing ones
