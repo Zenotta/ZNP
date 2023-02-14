@@ -126,9 +126,7 @@ pub mod naom {
                 0x6d => Ok(Self::OP_CREATE),
                 0x6e => Ok(Self::OP_HASH256_V0),
                 0x6f => Ok(Self::OP_HASH256_TEMP),
-                v => Err(serde::de::Error::custom(format!(
-                    "Unkown OpCodes x{v:02X}"
-                ))),
+                v => Err(serde::de::Error::custom(format!("Unkown OpCodes x{v:02X}"))),
             }
         }
     }
