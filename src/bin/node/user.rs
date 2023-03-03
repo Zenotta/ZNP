@@ -252,17 +252,21 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
                 user_nodes.push(passed_addr_val);
                 user_nodes.len() - 1
             };
-            settings.set("user_address", address).unwrap();
         }
+        settings.set("user_address", address).unwrap();
     }
 
-    // Index will be defaulted to 0 if not updated in the above block
-    // Set node's address from the user_node's map
-    let user_nodes = settings.get_array("user_nodes").unwrap();
-    let raw_map: &Value = user_nodes.get(node_index).unwrap();
-    let map = raw_map.clone().into_table().unwrap();
-    let addr = map.get("address").unwrap();
-    settings.set("user_address", addr.to_string()).unwrap();
+    // Set node's address from the user_node's map if it is not supplied as an argument
+    // NOTE: Index will be defaulted to 0 if not updated in the above block
+    if matches.value_of("address").is_none() {
+        let user_nodes = settings
+            .get_array("user_nodes")
+            .expect("No 'user_nodes' entry in the TOML");
+        let raw_map: &Value = user_nodes.get(node_index).unwrap();
+        let map = raw_map.clone().into_table().unwrap();
+        let addr = map.get("address").unwrap();
+        settings.set("user_address", addr.to_string()).unwrap();
+    }
 
     let mut db_mode = settings.get_table("user_db_mode").unwrap();
     if let Some(test_idx) = db_mode.get_mut("Test") {
