@@ -1,7 +1,7 @@
 //! App to run a user node.
 
 use clap::{App, Arg, ArgMatches};
-use naom::primitives::asset::TokenAmount;
+use config::Value;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use system::configurations::UserNodeConfig;
@@ -16,15 +16,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     println!("Starting node with config: {config:?}");
     println!();
 
-    // Handle a payment amount
-    let amount_to_send = match matches.value_of("amount").map(|a| a.parse::<u64>()) {
-        None => None,
-        Some(Ok(v)) => Some(TokenAmount(v)),
-        Some(Err(e)) => panic!("Unable to pay with amount specified due to error: {:?}", e),
-    };
-
-    let peer_user_node = *config.user_nodes.get(config.peer_user_node_idx).unwrap();
-    let mut node = UserNode::new(config, Default::default()).await.unwrap();
+    let node = UserNode::new(config, Default::default()).await.unwrap();
 
     println!("Started node at {}", node.address());
 
@@ -45,16 +37,6 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     // Need to connect first so Raft messages can be sent.
     loop_wait_connnect_to_peers_async(node_conn.clone(), expected_connected_addrs).await;
-
-    // Send any requests here
-
-    if let Some(amount_to_send) = amount_to_send {
-        println!("Connect to user address: {:?}", peer_user_node.address);
-        node.connect_to(peer_user_node.address).await.unwrap();
-        node.send_address_request(peer_user_node.address, amount_to_send)
-            .await
-            .unwrap();
-    }
 
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
@@ -115,7 +97,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
 pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
     App::new("user")
-        .about("Runs a basic miner node.")
+        .about("Runs a basic User node.")
         .arg(
             Arg::with_name("config")
                 .long("config")
@@ -155,13 +137,6 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("amount")
-                .short("a")
-                .long("amount")
-                .help("The amount of tokens to send to a recipient address")
-                .takes_value(true),
-        )
-        .arg(
             Arg::with_name("auto_donate")
                 .long("auto_donate")
                 .help("The amount of tokens to send any requester")
@@ -178,12 +153,6 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("compute_index")
                 .long("compute_index")
                 .help("Endpoint index of a compute node that the user should connect to")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("peer_user_index")
-                .long("peer_user_index")
-                .help("Endpoint index of a peer user node that the user should connect to")
                 .takes_value(true),
         )
         .arg(
@@ -216,6 +185,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
 
 fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     let mut settings = config::Config::default();
+    let mut node_index = 0;
     let setting_file = matches
         .value_of("config")
         .unwrap_or("src/bin/node_settings.toml");
@@ -234,9 +204,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .unwrap();
     settings.set_default("user_api_port", 3000).unwrap();
     settings.set_default("user_api_use_tls", true).unwrap();
-    settings.set_default("user_node_idx", 0).unwrap();
     settings.set_default("user_compute_node_idx", 0).unwrap();
-    settings.set_default("peer_user_node_idx", 0).unwrap();
     settings.set_default("user_auto_donate", 0).unwrap();
 
     settings
@@ -259,33 +227,66 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .merge(config::File::with_name(api_setting_file))
         .unwrap();
 
-    if let Some(index) = matches.value_of("index") {
-        settings.set("user_node_idx", index).unwrap();
-        let mut db_mode = settings.get_table("user_db_mode").unwrap();
-        if let Some(test_idx) = db_mode.get_mut("Test") {
-            let index = index.parse::<usize>().unwrap();
-            let index = index + test_idx.clone().try_into::<usize>().unwrap();
-            *test_idx = config::Value::new(None, index.to_string());
-            settings.set("user_db_mode", db_mode).unwrap();
-        }
-    }
-
-    if let Some(address) = matches.value_of("address") {
-        let mut user_nodes = settings.get_array("user_nodes").unwrap();
+    // If index is passed, take note of the index to set address later
+    if let Some(idx) = matches.value_of("index") {
+        node_index = idx.parse::<usize>().unwrap();
+    // If index is not passed, lookout if 'address' is supplied
+    } else if let Some(address) = matches.value_of("address") {
         let mut node = HashMap::new();
         node.insert("address".to_owned(), address.to_owned());
-        user_nodes.push(config::Value::new(None, node));
 
-        let index = (user_nodes.len() - 1).to_string();
-        settings.set("user_nodes", user_nodes).unwrap();
-        settings.set("user_node_idx", index).unwrap();
+        if let Ok(mut user_nodes) = settings.get_array("user_nodes") {
+            let passed_addr_val = Value::new(None, node);
+
+            // Check if the address is already present in the toml
+            // if yes, take index from the toml
+            node_index = if user_nodes.contains(&passed_addr_val) {
+                user_nodes
+                    .iter()
+                    .position(|r| r == &passed_addr_val)
+                    .unwrap()
+            } else {
+                // if no, consider the node to be a new entry
+                // hence the index will be the existing length + 1
+                // which is already adjusted in the `Vec::len()` method.
+                user_nodes.push(passed_addr_val);
+                user_nodes.len() - 1
+            };
+        }
+        settings.set("user_address", address).unwrap();
+    }
+
+    // Set node's address from the user_node's map if it is not supplied as an argument
+    // NOTE: Index will be defaulted to 0 if not updated in the above block
+    if matches.value_of("address").is_none() {
+        let user_nodes = settings
+            .get_array("user_nodes")
+            .expect("No 'user_nodes' entry in the TOML");
+        let raw_map: &Value = user_nodes.get(node_index).unwrap();
+        let map = raw_map.clone().into_table().unwrap();
+        let addr = map.get("address").unwrap();
+        settings.set("user_address", addr.to_string()).unwrap();
+    }
+
+    let mut db_mode = settings.get_table("user_db_mode").unwrap();
+    if let Some(test_idx) = db_mode.get_mut("Test") {
+        let index = node_index + test_idx.clone().try_into::<usize>().unwrap();
+        *test_idx = Value::new(None, index.to_string());
+        settings.set("user_db_mode", db_mode).unwrap();
+    }
+
+    // Select the user_wallet_seed according to the node_index
+    if let Ok(user_wallet_seeds) = settings.get_array("user_wallet_seeds") {
+        settings
+            .set("user_wallet_seeds", user_wallet_seeds[node_index].clone())
+            .unwrap();
     }
 
     if let Some(certificate) = matches.value_of("tls_certificate_override") {
         let mut tls_config = settings.get_table("tls_config").unwrap();
         tls_config.insert(
             "pem_certificate_override".to_owned(),
-            config::Value::new(None, certificate),
+            Value::new(None, certificate),
         );
         settings.set("tls_config", tls_config).unwrap();
     }
@@ -293,7 +294,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         let mut tls_config = settings.get_table("tls_config").unwrap();
         tls_config.insert(
             "pem_pkcs8_private_key_override".to_owned(),
-            config::Value::new(None, key),
+            Value::new(None, key),
         );
         settings.set("tls_config", tls_config).unwrap();
     }
@@ -304,10 +305,6 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
 
     if let Some(index) = matches.value_of("compute_index") {
         settings.set("user_compute_node_idx", index).unwrap();
-    }
-
-    if let Some(index) = matches.value_of("peer_user_index") {
-        settings.set("peer_user_node_idx", index).unwrap();
     }
 
     if let Some(index) = matches.value_of("passphrase") {
@@ -328,10 +325,10 @@ fn configuration(settings: config::Config) -> UserNodeConfig {
     settings.try_into().unwrap()
 }
 
-fn default_user_test_auto_gen_setup() -> HashMap<String, config::Value> {
+fn default_user_test_auto_gen_setup() -> HashMap<String, Value> {
     let mut value = HashMap::new();
-    let zero = config::Value::new(None, 0);
-    let empty = config::Value::new(None, Vec::<String>::new());
+    let zero = Value::new(None, 0);
+    let empty = Value::new(None, Vec::<String>::new());
     value.insert("user_initial_transactions".to_owned(), empty);
     value.insert("user_setup_tx_chunk_size".to_owned(), zero.clone());
     value.insert("user_setup_tx_in_per_tx".to_owned(), zero.clone());

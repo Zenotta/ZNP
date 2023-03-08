@@ -1031,16 +1031,12 @@ async fn init_miner(
     // Create node
     let node_info = &info.node_infos[name];
     let config = MinerNodeConfig {
-        miner_node_idx: node_info.index,
+        miner_address: node_info.node_spec.address,
         miner_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
         miner_compute_node_idx,
-        miner_storage_node_idx: 0,
         compute_nodes: info.compute_nodes.clone(),
-        storage_nodes: info.storage_nodes.clone(),
-        miner_nodes: info.miner_nodes.clone(),
-        user_nodes: info.user_nodes.clone(),
         passphrase: config.passphrase.clone(),
         miner_api_port: 3004,
         miner_api_use_tls: true,
@@ -1078,7 +1074,6 @@ async fn init_storage(
         api_keys: Default::default(),
         compute_nodes: info.compute_nodes.clone(),
         storage_nodes: info.storage_nodes.clone(),
-        user_nodes: info.user_nodes.clone(),
         storage_raft,
         storage_api_port: 3001,
         storage_api_use_tls: true,
@@ -1160,20 +1155,25 @@ async fn init_user(
     extra: ExtraNodeParams,
 ) -> ArcUserNode {
     let node_info = &info.node_infos[name];
+
+    let user_wallet_seeds = if config.user_wallet_seeds.is_empty()
+        || config.user_wallet_seeds.len() <= node_info.index
+    {
+        vec![]
+    } else {
+        config.user_wallet_seeds[node_info.index].clone()
+    };
+
     let config = UserNodeConfig {
-        user_node_idx: node_info.index,
+        user_address: node_info.node_spec.address,
         user_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
         user_compute_node_idx: 0,
-        peer_user_node_idx: 0,
         compute_nodes: info.compute_nodes.clone(),
-        storage_nodes: info.storage_nodes.clone(),
-        miner_nodes: info.miner_nodes.clone(),
-        user_nodes: info.user_nodes.clone(),
         user_api_port: 3000,
         user_api_use_tls: true,
-        user_wallet_seeds: config.user_wallet_seeds.clone(),
+        user_wallet_seeds,
         passphrase: config.passphrase.clone(),
         user_auto_donate: config.user_auto_donate,
         user_test_auto_gen_setup: config.user_test_auto_gen_setup.clone(),

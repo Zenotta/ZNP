@@ -139,11 +139,7 @@ impl UserNode {
     /// * `config` - UserNodeConfig object containing UserNode parameters.
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: UserNodeConfig, mut extra: ExtraNodeParams) -> Result<UserNode> {
-        let addr = config
-            .user_nodes
-            .get(config.user_node_idx)
-            .ok_or(UserError::ConfigError("Invalid user index"))?
-            .address;
+        let addr = config.user_address;
         let compute_addr = config
             .compute_nodes
             .get(config.user_compute_node_idx)
@@ -167,17 +163,14 @@ impl UserNode {
                 config.passphrase,
             ),
         };
-        let wallet_db = wallet_db
-            .with_seed(config.user_node_idx, &config.user_wallet_seeds)
-            .await;
+        let wallet_db = wallet_db.with_seed(config.user_wallet_seeds).await;
 
         let pending_payments = match config.user_auto_donate {
             0 => (Default::default(), AutoDonate::Disabled),
             amount => (Default::default(), AutoDonate::Enabled(TokenAmount(amount))),
         };
 
-        let test_auto_gen_tx =
-            make_transaction_gen(config.user_test_auto_gen_setup, config.user_node_idx);
+        let test_auto_gen_tx = make_transaction_gen(config.user_test_auto_gen_setup);
 
         Ok(UserNode {
             node,
@@ -1364,15 +1357,10 @@ pub fn make_rb_payment_send_transaction(
     )
 }
 
-fn make_transaction_gen(setup: UserAutoGenTxSetup, user_node_idx: usize) -> Option<AutoGenTx> {
-    let initial_transactions = setup
-        .user_initial_transactions
-        .get(user_node_idx)
-        .cloned()
-        .unwrap_or_default();
-    if !initial_transactions.is_empty() {
+fn make_transaction_gen(setup: UserAutoGenTxSetup) -> Option<AutoGenTx> {
+    if !setup.user_initial_transactions.is_empty() {
         Some(AutoGenTx {
-            tx_generator: TransactionGen::new(initial_transactions),
+            tx_generator: TransactionGen::new(setup.user_initial_transactions),
             tx_chunk_size: setup.user_setup_tx_chunk_size,
             tx_in_per_tx: setup.user_setup_tx_in_per_tx,
             tx_max_count: setup.user_setup_tx_max_count,

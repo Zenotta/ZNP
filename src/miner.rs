@@ -133,7 +133,6 @@ pub struct MinerNode {
     wallet_db: WalletDb,
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
-    storage_addr: SocketAddr,
     rand_num: Vec<u8>,
     current_block: CurrentBlockWithMutex,
     last_pow: Option<ProofOfWork>,
@@ -156,20 +155,11 @@ impl MinerNode {
     /// * `config`   - MinerNodeConfig object that hold the miner_nodes and miner_db_mode
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: MinerNodeConfig, mut extra: ExtraNodeParams) -> Result<MinerNode> {
-        let addr = config
-            .miner_nodes
-            .get(config.miner_node_idx)
-            .ok_or(MinerError::ConfigError("Invalid miner index"))?
-            .address;
+        let addr = config.miner_address;
         let compute_addr = config
             .compute_nodes
             .get(config.miner_compute_node_idx)
             .ok_or(MinerError::ConfigError("Invalid compute index"))?
-            .address;
-        let storage_addr = config
-            .storage_nodes
-            .get(config.miner_storage_node_idx)
-            .ok_or(MinerError::ConfigError("Invalid storage index"))?
             .address;
         let wallet_db = WalletDb::new(
             config.miner_db_mode,
@@ -191,7 +181,6 @@ impl MinerNode {
             local_events: Default::default(),
             wallet_db,
             compute_addr,
-            storage_addr,
             rand_num: Default::default(),
             current_block: Arc::new(Mutex::new(None)),
             last_pow: None,
@@ -241,11 +230,6 @@ impl MinerNode {
     /// Returns the node's compute endpoint.
     pub fn compute_address(&self) -> SocketAddr {
         self.compute_addr
-    }
-
-    /// Returns the node's storage endpoint.
-    pub fn storage_address(&self) -> SocketAddr {
-        self.storage_addr
     }
 
     /// Connect to a peer on the network.
@@ -558,24 +542,29 @@ impl MinerNode {
         })
     }
 
-    /// Sends a request to retrieve a blockchain item from storage
-    ///
-    /// ### Arguments
-    ///
-    /// * `key`  - The blockchain item key.
-    pub async fn request_blockchain_item(&mut self, key: String) -> Result<()> {
-        self.blockchain_item_received = None;
-        self.node
-            .send(self.storage_addr, StorageRequest::GetBlockchainItem { key })
-            .await?;
-        Ok(())
-    }
-
     /// Return the blockchain item received
     pub async fn get_blockchain_item_received(
         &mut self,
     ) -> &Option<(String, BlockchainItem, SocketAddr)> {
         &self.blockchain_item_received
+    }
+
+    /// Sends a request to retrieve a blockchain item from storage
+    ///
+    /// ### Arguments
+    ///
+    /// * `key`  - The blockchain item key.
+    #[allow(unused)]
+    pub async fn request_blockchain_item(
+        &mut self,
+        key: String,
+        storage_node_addr: SocketAddr,
+    ) -> Result<()> {
+        self.blockchain_item_received = None;
+        self.node
+            .send(storage_node_addr, StorageRequest::GetBlockchainItem { key })
+            .await?;
+        Ok(())
     }
 
     /// Receives a new block to be mined

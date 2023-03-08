@@ -993,7 +993,7 @@ async fn create_block_with_seed() {
     // Assert
     //
     let expected_seed0 = Some("102382207707718734792748219972459444372508601011471438062299221139355828742917-4092482189202844858141461446747443254065713079405017303649880917821984131927979764736076459305831834761744847895656303682167530187457916798745160233343351193");
-    let expected_seed1 = Some("61860386429385715129932038563928327665132428362661384643349545082089391531133-416435139657154596314786853335634683227532614868699105742210979896123845505259182064943177222638942624441844628610187675305048065512855941094501920628364805");
+    let expected_seed1 = Some("60615650383079966912142685083553754989278928317870105375630833988176113413620-3212338306518153913180488486456445424605922120193292479740565806825668083688230592272050897761185478426362203037991958038321363690859355756616018848392612924");
     assert_eq!((seed0, seed1), (expected_seed0, expected_seed1));
 
     test_step_complete(network).await;
@@ -1575,9 +1575,9 @@ async fn main_loops_raft_1_node_common(
     network_config.compute_seed_utxo =
         make_compute_seed_utxo(&[(seed_count, "000000")], initial_amount);
     network_config.user_test_auto_gen_setup = UserAutoGenTxSetup {
-        user_initial_transactions: vec![(0..seed_wallet_count)
+        user_initial_transactions: (0..seed_wallet_count)
             .map(|i| wallet_seed((i, "000000"), &initial_amount))
-            .collect()],
+            .collect::<Vec<WalletTxSpec>>(),
         user_setup_tx_chunk_size: Some(5),
         user_setup_tx_in_per_tx: Some(3),
         user_setup_tx_max_count: tx_max_count,
@@ -1837,7 +1837,7 @@ async fn gen_transactions_common(
     // Arrange
     //
     network_config.user_test_auto_gen_setup = UserAutoGenTxSetup {
-        user_initial_transactions: vec![vec![wallet_seed(VALID_TXS_IN[0], &DEFAULT_SEED_AMOUNT)]],
+        user_initial_transactions: vec![wallet_seed(VALID_TXS_IN[0], &DEFAULT_SEED_AMOUNT)],
         user_setup_tx_chunk_size: None,
         user_setup_tx_in_per_tx: Some(2),
         user_setup_tx_max_count: 4,
@@ -2262,10 +2262,29 @@ async fn request_blockchain_item_act(
     storage_to: &str,
     block_key: &str,
 ) {
-    miner_request_blockchain_item(network, miner_from, block_key).await;
+    let storage_node_addr = network
+        .storage(storage_to)
+        .unwrap()
+        .clone()
+        .lock()
+        .await
+        .address();
+    miner_request_blockchain_item(network, miner_from, block_key, storage_node_addr).await;
     storage_handle_event(network, storage_to, "Blockchain item fetched from storage").await;
     storage_send_blockchain_item(network, storage_to).await;
     miner_handle_event(network, miner_from, "Blockchain item received").await;
+}
+
+async fn miner_request_blockchain_item(
+    network: &mut Network,
+    miner_from: &str,
+    block_key: &str,
+    storage_node_addr: SocketAddr,
+) {
+    let mut m = network.miner(miner_from).unwrap().lock().await;
+    m.request_blockchain_item(block_key.to_owned(), storage_node_addr)
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3171,7 +3190,7 @@ async fn reject_receipt_based_payment() {
     let mut network = Network::create_from_config(&network_config).await;
     create_first_block_act(&mut network).await;
     let mut create_receipt_asset_txs = BTreeMap::default();
-    let tx_hash = "g81dcfb4f3d6726395adbe0a2a1ac133";
+    let tx_hash = "ge595d639d53715591bd1df38fba2710";
     create_receipt_asset_txs.insert(
         tx_hash.to_owned(),
         construct_receipt_create_tx(
@@ -4467,13 +4486,6 @@ async fn user_send_receipt_asset(
 //
 // MinerNode helpers
 //
-
-async fn miner_request_blockchain_item(network: &mut Network, miner_from: &str, block_key: &str) {
-    let mut m = network.miner(miner_from).unwrap().lock().await;
-    m.request_blockchain_item(block_key.to_owned())
-        .await
-        .unwrap();
-}
 
 async fn miner_get_blockchain_item_received_b_num(
     network: &mut Network,

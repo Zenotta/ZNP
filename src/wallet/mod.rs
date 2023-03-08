@@ -223,13 +223,7 @@ impl WalletDb {
         .await?
     }
 
-    pub async fn with_seed(self, index: usize, seeds: &[Vec<WalletTxSpec>]) -> Self {
-        let seeds = if let Some(seeds) = seeds.get(index) {
-            seeds
-        } else {
-            return self;
-        };
-
+    pub async fn with_seed(self, seeds: Vec<WalletTxSpec>) -> Self {
         {
             let fund_store = self.get_fund_store();
             let addresses = self.get_known_addresses();
@@ -242,7 +236,7 @@ impl WalletDb {
         }
 
         for seed in seeds {
-            let (tx_out_p, pk, sk, amount, v) = make_wallet_tx_info(seed);
+            let (tx_out_p, pk, sk, amount, v) = make_wallet_tx_info(&seed);
             let (address, _) = self.store_payment_address(pk, sk, v).await;
             let payments = vec![(tx_out_p, Asset::Token(amount), address)];
             self.save_usable_payments_to_wallet(payments).await.unwrap();

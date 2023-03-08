@@ -780,7 +780,7 @@ fn get_test_auto_gen_setup(count_override: Option<usize>) -> UserAutoGenTxSetup 
     ];
 
     UserAutoGenTxSetup {
-        user_initial_transactions: vec![user1_tx],
+        user_initial_transactions: user1_tx,
         user_setup_tx_chunk_size: Some(5),
         user_setup_tx_in_per_tx: Some(3),
         user_setup_tx_max_count: count_override.unwrap_or(100000),

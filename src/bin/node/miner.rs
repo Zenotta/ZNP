@@ -1,6 +1,7 @@
 //! App to run a mining node.
 
 use clap::{App, Arg, ArgMatches};
+use config::Value;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use system::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
@@ -12,8 +13,8 @@ use system::{MinerNode, UserNode};
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let (config, user_config) = configuration(load_settings(matches));
-    println!("Start node with config {config:?}");
-    let mut node = MinerNode::new(config, Default::default()).await.unwrap();
+    println!("Start node with config {:?}", config);
+    let node = MinerNode::new(config, Default::default()).await.unwrap();
     println!("Started node at {}", node.address());
 
     let miner_api_inputs = node.api_inputs();
@@ -34,17 +35,6 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     // Need to connect first so Raft messages can be sent.
     loop_wait_connnect_to_peers_async(node_conn.clone(), expected_connected_addrs).await;
-
-    // Send any requests here
-    if let Some(value) = matches.value_of("request_bc_item") {
-        let storage_addr = node.storage_address();
-        println!("Connect to storage address: {storage_addr:?}");
-        node.connect_to(storage_addr).await.unwrap();
-
-        node.request_blockchain_item(value.to_string())
-            .await
-            .unwrap()
-    };
 
     // Miner main loop
     let main_loop_handle = tokio::spawn({
@@ -290,18 +280,6 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("storage_index")
-                .long("storage_index")
-                .help("Endpoint index of a storage node that the miner should connect to")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("request_bc_item")
-                .long("request_bc_item")
-                .help("Key (hash or name) of the blockchain item to request from storage")
-                .takes_value(true),
-        )
-        .arg(
             Arg::with_name("passphrase")
                 .long("passphrase")
                 .help("Enter a password or passphase for the encryption of the Wallet.")
@@ -337,6 +315,8 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
 
 fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::Config>) {
     let mut settings = config::Config::default();
+    let mut miner_index: usize = 0;
+    let mut user_index: usize = 0;
 
     let setting_file = matches
         .value_of("config")
@@ -354,7 +334,6 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
     settings
         .set_default("api_keys", Vec::<String>::new())
         .unwrap();
-    settings.set_default("miner_node_idx", 0).unwrap();
     settings.set_default("miner_compute_node_idx", 0).unwrap();
     settings.set_default("miner_storage_node_idx", 0).unwrap();
     settings.set_default("user_api_port", 3000).unwrap();
@@ -386,50 +365,116 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
         .merge(config::File::with_name(api_setting_file))
         .unwrap();
 
-    if let Some(index) = matches.value_of("index") {
-        settings.set("miner_node_idx", index).unwrap();
-        let mut db_mode = settings.get_table("miner_db_mode").unwrap();
-        if let Some(test_idx) = db_mode.get_mut("Test") {
-            *test_idx = config::Value::new(None, index);
-            settings.set("miner_db_mode", db_mode.clone()).unwrap();
-        }
-    }
+    // ======== Miner settings ========
 
-    if let Some(address) = matches.value_of("address") {
-        let mut user_nodes = settings.get_array("miner_nodes").unwrap();
+    // If index is passed, take note of the index to set address later
+    if let Some(idx) = matches.value_of("index") {
+        miner_index = idx.parse::<usize>().unwrap();
+        // If index is not passed, lookout if 'address' is supplied
+    } else if let Some(address) = matches.value_of("address") {
         let mut node = HashMap::new();
         node.insert("address".to_owned(), address.to_owned());
-        user_nodes.push(config::Value::new(None, node));
 
-        let index = (user_nodes.len() - 1).to_string();
-        settings.set("miner_nodes", user_nodes).unwrap();
-        settings.set("miner_node_idx", index).unwrap();
+        if let Ok(mut miner_nodes) = settings.get_array("miner_nodes") {
+            let passed_addr_val = Value::new(None, node);
+
+            // Check if the address is already present in the toml
+            // if yes, take index from the toml
+            miner_index = if miner_nodes.contains(&passed_addr_val) {
+                miner_nodes
+                    .iter()
+                    .position(|r| r == &passed_addr_val)
+                    .unwrap()
+            } else {
+                // if no, consider the node to be a new entry
+                // hence the index will be the existing length + 1
+                // which is already adjusted in the `Vec::len()` method.
+                miner_nodes.push(passed_addr_val);
+                miner_nodes.len() - 1
+            };
+        }
+        settings.set("miner_address", address).unwrap();
     }
 
+    // Set node's address from the miner_node's map if it is not supplied as an argument
+    // NOTE: Index will be defaulted to 0 if not updated in the above block
+    if matches.value_of("address").is_none() {
+        let miner_nodes = settings
+            .get_array("miner_nodes")
+            .expect("No miner_nodes entry in the TOML");
+        let raw_map: &Value = miner_nodes
+            .get(miner_index)
+            .expect("No entry found at provided index");
+        let map = raw_map.clone().into_table().unwrap();
+        let addr = map.get("address").unwrap();
+        settings.set("miner_address", addr.to_string()).unwrap();
+    }
+
+    let mut db_mode = settings.get_table("miner_db_mode").unwrap();
+    if let Some(test_idx) = db_mode.get_mut("Test") {
+        *test_idx = Value::new(None, miner_index.to_string());
+        settings.set("miner_db_mode", db_mode.clone()).unwrap();
+    }
+
+    // ======== User settings ========
+    // TODO: This can soon be removed/refactored due to the introduction of Transactor trait.
+
     let mut has_user_settings = false;
-    if let Some(index) = matches.value_of("with_user_index") {
-        settings.set("user_node_idx", index).unwrap();
+
+    // If index is passed, take note of the index to set address later
+    if let Some(idx) = matches.value_of("with_user_index") {
+        user_index = idx.parse::<usize>().unwrap();
         let db_mode = settings.get_table("miner_db_mode").unwrap();
         settings.set("user_db_mode", db_mode).unwrap();
         has_user_settings = true;
-    }
-    if let Some(address) = matches.value_of("with_user_address") {
-        let mut user_nodes = settings.get_array("user_nodes").unwrap();
+        // If index is not passed, lookout if 'address' is supplied
+    } else if let Some(address) = matches.value_of("with_user_address") {
         let mut node = HashMap::new();
         node.insert("address".to_owned(), address.to_owned());
-        user_nodes.push(config::Value::new(None, node));
 
-        let index = (user_nodes.len() - 1).to_string();
-        settings.set("user_nodes", user_nodes).unwrap();
-        settings.set("user_node_idx", index).unwrap();
-        has_user_settings = true;
+        if let Ok(mut user_nodes) = settings.get_array("user_nodes") {
+            let passed_addr_val = Value::new(None, node);
+
+            // Check if the address is already present in the toml
+            // if yes, take index from the toml
+            user_index = if user_nodes.contains(&passed_addr_val) {
+                user_nodes
+                    .iter()
+                    .position(|r| r == &passed_addr_val)
+                    .unwrap()
+            } else {
+                // if no, consider the node to be a new entry
+                // hence the index will be the existing length + 1
+                // which is already adjusted in the `Vec::len()` method.
+                user_nodes.push(passed_addr_val);
+                user_nodes.len() - 1
+            };
+            has_user_settings = true;
+        }
+    }
+
+    if has_user_settings {
+        // Index will be defaulted to 0 if not updated in the above block
+        // Set node's address from the user_node's map
+        let user_nodes = settings.get_array("user_nodes").unwrap();
+        let raw_map: &Value = user_nodes.get(user_index).unwrap();
+        let map = raw_map.clone().into_table().unwrap();
+        let addr = map.get("address").unwrap();
+        settings.set("user_address", addr.to_string()).unwrap();
+
+        // Select the user_wallet_seed according to the node_index
+        if let Ok(user_wallet_seeds) = settings.get_array("user_wallet_seeds") {
+            settings
+                .set("user_wallet_seeds", user_wallet_seeds[user_index].clone())
+                .unwrap();
+        }
     }
 
     if let Some(certificate) = matches.value_of("tls_certificate_override") {
         let mut tls_config = settings.get_table("tls_config").unwrap();
         tls_config.insert(
             "pem_certificate_override".to_owned(),
-            config::Value::new(None, certificate),
+            Value::new(None, certificate),
         );
         settings.set("tls_config", tls_config).unwrap();
     }
@@ -437,7 +482,7 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
         let mut tls_config = settings.get_table("tls_config").unwrap();
         tls_config.insert(
             "pem_pkcs8_private_key_override".to_owned(),
-            config::Value::new(None, key),
+            Value::new(None, key),
         );
         settings.set("tls_config", tls_config).unwrap();
     }
@@ -478,7 +523,7 @@ fn configuration(
     )
 }
 
-fn default_user_test_auto_gen_setup() -> HashMap<String, config::Value> {
+fn default_user_test_auto_gen_setup() -> HashMap<String, Value> {
     let mut value = HashMap::new();
     let zero = config::Value::new(None, 0);
     let empty = config::Value::new(None, Vec::<String>::new());
@@ -507,9 +552,9 @@ mod test {
 
     #[test]
     fn validate_startup_with_user_index_1() {
-        let args = vec!["bin_name", "--index=3", "--with_user_index=1"];
-        let expected: Expected = (DbMode::Test(3), None);
-        let user_expected: UserExpected = Some((DbMode::Test(3), None));
+        let args = vec!["bin_name", "--index=1", "--with_user_index=1"];
+        let expected: Expected = (DbMode::Test(1), None);
+        let user_expected: UserExpected = Some((DbMode::Test(1), None));
 
         validate_startup_common(args, expected, user_expected);
     }
@@ -528,12 +573,12 @@ mod test {
         // Use argument instead of std::env as env apply to all tests
         let args = vec![
             "bin_name",
-            "--index=3",
+            "--index=1",
             "--tls_private_key_override=42",
             "--with_user_index=1",
         ];
-        let expected: Expected = (DbMode::Test(3), Some("42".to_owned()));
-        let user_expected: UserExpected = Some((DbMode::Test(3), Some("42".to_owned())));
+        let expected: Expected = (DbMode::Test(1), Some("42".to_owned()));
+        let user_expected: UserExpected = Some((DbMode::Test(1), Some("42".to_owned())));
         validate_startup_common(args, expected, user_expected);
     }
 
@@ -543,7 +588,7 @@ mod test {
             "bin_name",
             "--config=src/bin/node_settings_aws.toml",
             "--initial_block_config=src/bin/initial_block_aws.json",
-            "--with_user_index=1",
+            "--with_user_index=0",
         ];
         let expected = (DbMode::Live, None);
         let user_expected: UserExpected = Some((DbMode::Live, None));
