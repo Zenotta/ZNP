@@ -142,8 +142,8 @@ pub fn get_upgrade_compute_db(
     let spec = &old::compute::DB_SPEC;
     let raft_spec = &old::compute_raft::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let db = new_db_with_version(db_mode, spec, version, old_dbs.db)?;
-    let raft_db = new_db_with_version(db_mode, raft_spec, version, old_dbs.raft_db)?;
+    let db = new_db_with_version(db_mode, spec, version, old_dbs.db, None)?;
+    let raft_db = new_db_with_version(db_mode, raft_spec, version, old_dbs.raft_db, None)?;
 
     Ok(ExtraNodeParams {
         db: Some(db),
@@ -284,8 +284,8 @@ pub fn get_upgrade_storage_db(
     let spec = &old::storage::DB_SPEC;
     let raft_spec = &old::storage_raft::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let mut db = new_db_with_version(db_mode, spec, version, old_dbs.db)?;
-    let raft_db = new_db_with_version(db_mode, raft_spec, version, old_dbs.raft_db)?;
+    let mut db = new_db_with_version(db_mode, spec, version, old_dbs.db, None)?;
+    let raft_db = new_db_with_version(db_mode, raft_spec, version, old_dbs.raft_db, None)?;
 
     db.upgrade_create_missing_cf(storage::DB_COL_BC_NOW)?;
     Ok(ExtraNodeParams {
@@ -460,7 +460,7 @@ fn clean_same_raft_db(
 pub fn get_upgrade_wallet_db(db_mode: DbMode, old_dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
     let spec = &old::wallet::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let db = new_db_with_version(db_mode, spec, version, old_dbs.wallet_db)?;
+    let db = new_db_with_version(db_mode, spec, version, old_dbs.wallet_db, None)?;
     Ok(ExtraNodeParams {
         wallet_db: Some(db),
         ..Default::default()
@@ -488,7 +488,7 @@ pub fn upgrade_wallet_db_batch<'a>(
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
 
     let passphrase = upgrade_cfg.passphrase.as_bytes();
-    let masterkey = wallet::get_or_save_master_key_store(db, &mut batch, passphrase);
+    let masterkey = wallet::get_or_save_master_key_store(db, &mut batch, passphrase).unwrap();
 
     for (key, value) in db.iter_cf_clone(DB_COL_DEFAULT) {
         if key == DB_VERSION_KEY.as_bytes() {
@@ -584,7 +584,7 @@ pub fn get_db_to_dump_no_checks(
         suffix: db_info.suffix,
         columns: &[],
     };
-    Ok(new_db_no_check_version(db_mode, &spec, old_db)?)
+    Ok(new_db_no_check_version(db_mode, &spec, old_db, None)?)
 }
 
 /// Dump the database as string
@@ -604,7 +604,7 @@ fn to_u8_array_literal(value: &[u8]) -> String {
         if v.is_ascii_alphanumeric() || v == &b'_' {
             result.push(*v as char);
         } else {
-            result.push_str(&format!("\\x{:02X}", v));
+            result.push_str(&format!("\\x{v:02X}"));
         }
     }
     result

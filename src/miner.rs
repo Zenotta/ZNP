@@ -3,14 +3,15 @@ use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
     BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, PowInfo, ProofOfWork,
-    Response, StorageRequest, UtxoFetchType, UtxoSet,
+    Response, Rs2JsMsg, StorageRequest, UtxoFetchType, UtxoSet,
 };
+use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transactor::Transactor;
 use crate::utils::{
     self, apply_mining_tx, format_parition_pow_address, generate_pow_for_block,
     get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, to_api_keys, to_route_pow_infos,
-    ApiKeys, DeserializedBlockchainItem, LocalEvent, LocalEventChannel, LocalEventSender,
-    ResponseResult, RoutesPoWInfo, RunningTaskOrResult,
+    try_send_to_ui, ApiKeys, DeserializedBlockchainItem, LocalEvent, LocalEventChannel,
+    LocalEventSender, ResponseResult, RoutesPoWInfo, RunningTaskOrResult,
 };
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::Node;
@@ -32,6 +33,7 @@ use std::{
     str,
     time::SystemTime,
 };
+use tokio::sync::{mpsc, RwLock};
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;
@@ -132,8 +134,11 @@ pub struct MinerNode {
     node: Node,
     wallet_db: WalletDb,
     local_events: LocalEventChannel,
+    threaded_calls: ThreadedCallChannel<MinerNode>,
+    ui_feedback_tx: Option<mpsc::Sender<Rs2JsMsg>>,
     compute_addr: SocketAddr,
     rand_num: Vec<u8>,
+    pause_node: Arc<RwLock<bool>>,
     current_block: CurrentBlockWithMutex,
     last_pow: Option<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
@@ -165,23 +170,33 @@ impl MinerNode {
             config.miner_db_mode,
             extra.wallet_db.take(),
             config.passphrase,
-        );
-
+            extra.custom_wallet_spec,
+        )?;
+        let disable_tcp_listener = extra.disable_tcp_listener;
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(addr.ip(), config.miner_api_port);
         let api_tls_info = config
             .miner_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
         let api_keys = to_api_keys(config.api_keys.clone());
-        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Miner).await?;
+        let node = Node::new(
+            &tcp_tls_config,
+            PEER_LIMIT,
+            NodeType::Miner,
+            disable_tcp_listener,
+        )
+        .await?;
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
 
         MinerNode {
             node,
             local_events: Default::default(),
+            threaded_calls: Default::default(),
+            ui_feedback_tx: Default::default(),
             wallet_db,
             compute_addr,
             rand_num: Default::default(),
+            pause_node: Arc::new(RwLock::new(false)),
             current_block: Arc::new(Mutex::new(None)),
             last_pow: None,
             current_coinbase: None,
@@ -222,6 +237,20 @@ impl MinerNode {
         )
     }
 
+    /// Only used during initialization
+    pub async fn force_set_paused(&mut self, paused: bool) {
+        *self.pause_node.write().await = paused;
+    }
+
+    /// Injects a new event into miner node
+    pub fn inject_next_event(
+        &self,
+        from_peer_addr: SocketAddr,
+        data: impl Serialize,
+    ) -> Result<()> {
+        Ok(self.node.inject_next_event(from_peer_addr, data)?)
+    }
+
     /// Returns the node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
@@ -230,6 +259,15 @@ impl MinerNode {
     /// Returns the node's compute endpoint.
     pub fn compute_address(&self) -> SocketAddr {
         self.compute_addr
+    }
+
+    /// Returns whether the node is connected to its Compute peer
+    pub async fn is_disconnected(&self) -> bool {
+        !self
+            .node
+            .unconnected_peers(&[self.compute_address()])
+            .await
+            .is_empty()
     }
 
     /// Connect to a peer on the network.
@@ -266,6 +304,22 @@ impl MinerNode {
         &self.local_events.tx
     }
 
+    /// Local event channel.
+    pub fn local_event_tx_mut(&mut self) -> &mut LocalEventSender {
+        &mut self.local_events.tx
+    }
+
+    /// UI feedback channel.
+    pub fn ui_feedback_tx(&self) -> Option<mpsc::Sender<Rs2JsMsg>> {
+        self.ui_feedback_tx.clone()
+    }
+
+    /// Set UI feedback channel.
+    pub fn set_ui_feedback_tx(&mut self, tx: mpsc::Sender<Rs2JsMsg>) {
+        self.ui_feedback_tx = Some(tx.clone());
+        self.wallet_db.set_ui_feedback_tx(tx);
+    }
+
     /// Extract persistent dbs
     pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
         let wallet_db = self.wallet_db.take_closed_persistent_store().await;
@@ -282,6 +336,18 @@ impl MinerNode {
     ) -> ResponseResult {
         debug!("Response: {:?}", response);
 
+        if let Ok(resp) = &response {
+            let ui_message = match resp.success {
+                true => Rs2JsMsg::Info {
+                    info: resp.reason.to_owned(),
+                },
+                false => Rs2JsMsg::Error {
+                    error: resp.reason.to_owned(),
+                },
+            };
+            try_send_to_ui(self.ui_feedback_tx.as_ref(), ui_message).await;
+        }
+
         match response {
             Ok(Response {
                 success: true,
@@ -296,6 +362,7 @@ impl MinerNode {
                 reason: "Shutdown",
             }) => {
                 warn!("Shutdown now");
+                try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Exit).await;
                 return ResponseResult::Exit;
             }
             Ok(Response {
@@ -356,6 +423,67 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Node is not mining",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Node is mining",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Node is connected",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Node is disconnected",
+            }) => {}
+            Ok(Response {
+                success: true, // Not always an error
+                reason: "Node is disconnected",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Connected to compute",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Disconnected from compute",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Failed to connect to compute",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Failed to disconnect from compute",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Already disconnected from compute",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Initiate pause node",
+            }) => {
+                info!("Initiate pause node");
+                if let Err(e) = self
+                    .node
+                    .send(self.compute_address(), ComputeRequest::RequestRemoveMiner)
+                    .await
+                {
+                    error!("Failed to send request to remove miner: {:?}", e);
+                }
+            }
+            Ok(Response {
+                success: true,
+                reason: "Node is paused",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Node is resumed",
+            }) => {}
+            Ok(Response {
+                success: true,
                 reason,
             }) => {
                 error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
@@ -408,6 +536,9 @@ impl MinerNode {
                     if let Some(res) = self.handle_local_event(event).await {
                         return Some(Ok(res));
                     }
+                }
+                Some(f) = self.threaded_calls.rx.recv() => {
+                    f(self);
                 }
                 reason = &mut *exit => return Some(Ok(Response {
                     success: true,
@@ -523,6 +654,197 @@ impl MinerNode {
             }
             SendUtxoSet { utxo_set } => Some(self.receive_utxo_set(utxo_set)),
             Closing => self.receive_closing(peer),
+            GetConnectionStatus => Some(self.receive_connection_status_request().await),
+            GetMiningStatus => Some(self.receive_get_mining_status_request().await),
+            PauseNode => Some(self.receive_pause_node_request(peer, true).await),
+            ResumeNode => Some(self.receive_pause_node_request(peer, false).await),
+            ConnectToCompute => Some(self.handle_connect_to_compute().await),
+            DisconnectFromCompute => Some(self.handle_disconnect_from_compute().await),
+        }
+    }
+
+    /// Handle disconnect from compute node
+    pub async fn handle_disconnect_from_compute(&mut self) -> Response {
+        let compute_addr = self.compute_address();
+        let join_handles = self.node.disconnect_all(Some(&[compute_addr])).await;
+        if join_handles.is_empty() {
+            return Response {
+                success: false,
+                reason: "Already disconnected from compute",
+            };
+        }
+        for join_handle in join_handles {
+            if let Err(err) = join_handle.await {
+                error!("Failed to disconnect from compute: {}", err);
+                return Response {
+                    success: false,
+                    reason: "Failed to disconnect from compute",
+                };
+            }
+        }
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Value(serde_json::json!({
+                "connected": false,
+            })),
+        )
+        .await;
+        Response {
+            success: true,
+            reason: "Disconnected from compute",
+        }
+    }
+
+    /// Handle connect to compute node
+    pub async fn handle_connect_to_compute(&mut self) -> Response {
+        let compute_addr = self.compute_address();
+        if let Err(e) = self.node.connect_to(compute_addr).await {
+            error!("Failed to connect to compute: {e:?}");
+            return Response {
+                success: false,
+                reason: "Failed to connect to compute",
+            };
+        }
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Value(serde_json::json!({
+                "connected": true,
+            })),
+        )
+        .await;
+        // We do not send startup requests here,
+        // because we don't necessarily want to start mining
+        Response {
+            success: true,
+            reason: "Connected to compute",
+        }
+    }
+
+    /// Handles a request to pause the node
+    pub async fn receive_pause_node_request(&mut self, peer: SocketAddr, pause: bool) -> Response {
+        if self.compute_address() == peer && pause {
+            *self.pause_node.write().await = pause;
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Value(serde_json::json!({
+                    "mining": false,
+                })),
+            )
+            .await;
+            return Response {
+                success: true,
+                reason: "Node is paused",
+            };
+        }
+
+        if self.is_disconnected().await {
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Value(serde_json::json!({
+                    "mining": false,
+                })),
+            )
+            .await;
+
+            return Response {
+                success: false,
+                reason: "Node is disconnected",
+            };
+        }
+
+        // Request came from the miner node itself,
+        // which means we need to send a request to
+        // the compute node to have the miner removed
+        if pause {
+            // Pause mining
+            Response {
+                success: true,
+                reason: "Initiate pause node",
+            }
+        } else {
+            // Resume mining
+            if let Err(err) = self.send_startup_requests().await {
+                error!("Failed to send startup requests: {}", err);
+                try_send_to_ui(
+                    self.ui_feedback_tx.as_ref(),
+                    Rs2JsMsg::Error {
+                        error: "Failed to send startup requests on reconnection".to_owned(),
+                    },
+                )
+                .await;
+                return Response {
+                    success: false,
+                    reason: "Failed to send startup requests on reconnection",
+                };
+            }
+            *self.pause_node.write().await = false;
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Value(serde_json::json!({
+                    "mining": true,
+                })),
+            )
+            .await;
+            Response {
+                success: true,
+                reason: "Node is resumed",
+            }
+        }
+    }
+
+    /// Handles a request to get the mining status
+    pub async fn receive_get_mining_status_request(&self) -> Response {
+        if self.is_disconnected().await || *self.pause_node.read().await {
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Value(serde_json::json!({
+                    "mining": false,
+                })),
+            )
+            .await;
+            return Response {
+                success: true,
+                reason: "Node is not mining",
+            };
+        }
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Value(serde_json::json!({
+                "mining": true,
+            })),
+        )
+        .await;
+        Response {
+            success: true,
+            reason: "Node is mining",
+        }
+    }
+
+    /// Handles the request to check connection status
+    pub async fn receive_connection_status_request(&self) -> Response {
+        if self.is_disconnected().await {
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Value(serde_json::json!({
+                    "connected":false,
+                })),
+            )
+            .await;
+            return Response {
+                success: true,
+                reason: "Node is disconnected",
+            };
+        }
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Value(serde_json::json!({
+                "connected": true,
+            })),
+        )
+        .await;
+        Response {
+            success: true,
+            reason: "Node is connected",
         }
     }
 
@@ -547,6 +869,11 @@ impl MinerNode {
         &mut self,
     ) -> &Option<(String, BlockchainItem, SocketAddr)> {
         &self.blockchain_item_received
+    }
+
+    /// Threaded call channel.
+    pub fn threaded_call_tx(&self) -> &ThreadedCallSender<MinerNode> {
+        &self.threaded_calls.tx
     }
 
     /// Sends a request to retrieve a blockchain item from storage
@@ -641,7 +968,9 @@ impl MinerNode {
                     )
                     .await
                 {
-                    error!("Error sending UTXO request to compute nodes: {e:?}");
+                    let error = format!("Error sending UTXO request to compute nodes: {e:?}");
+                    error!("{:?}", &error);
+                    try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
                 } else {
                     trace!("Sending UTXO request from Miner node to confirm our previous aggregation of winnings");
                 }
@@ -756,7 +1085,9 @@ impl MinerNode {
         } = match self.mining_block_task.completed_result() {
             Some(Ok(v)) => v.clone(),
             Some(Err(e)) => {
-                error!("process_found_block_pow PoW {:?}", e);
+                let error = format!("process_found_block_pow PoW {:?}", e);
+                error!("{:?}", &error);
+                try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
                 return false;
             }
             None => {
@@ -770,7 +1101,9 @@ impl MinerNode {
         }
 
         if let Err(e) = self.send_pow(peer, b_num, nonce, coinbase.clone()).await {
-            error!("process_found_block_pow PoW {:?}", e);
+            let error = format!("process_found_block_pow PoW {:?}", e);
+            error!("{:?}", &error);
+            try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
             return false;
         }
 
@@ -811,7 +1144,9 @@ impl MinerNode {
         let (partition_entry, p_info, peer) = match self.mining_partition_task.completed_result() {
             Some(Ok((e, p_info, p))) => (e.clone(), *p_info, *p),
             Some(Err(e)) => {
-                error!("process_found_partition_pow PoW {:?}", e);
+                let error = format!("process_found_partition_pow PoW {:?}", e);
+                error!("{:?}", &error);
+                try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
                 return false;
             }
             None => {
@@ -821,7 +1156,9 @@ impl MinerNode {
         };
 
         if let Err(e) = self.send_partition_pow(peer, p_info, partition_entry).await {
-            error!("process_found_partition_pow PoW {:?}", e);
+            let error = format!("process_found_partition_pow PoW {:?}", e);
+            error!("{:?}", &error);
+            try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
             return false;
         }
 
@@ -875,7 +1212,7 @@ impl MinerNode {
     /// Commit our winning mining tx to wallet
     async fn commit_found_coinbase(&mut self) {
         trace!("Committing our latest winning");
-        self.current_payment_address = Some(generate_mining_address(&self.wallet_db).await);
+        self.current_payment_address = Some(generate_mining_address(&mut self.wallet_db).await);
         let (hash, transaction) = std::mem::replace(
             &mut self.current_coinbase,
             store_last_coinbase(&self.wallet_db, None).await,
@@ -888,6 +1225,15 @@ impl MinerNode {
             .save_usable_payments_to_wallet(payments)
             .await
             .unwrap();
+
+        // Notify the end user that a winning PoW has been found
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Success {
+                success: "Found winning PoW".to_string(),
+            },
+        )
+        .await;
 
         self.check_for_threshold_and_send_aggregation_tx().await;
     }
@@ -905,7 +1251,7 @@ impl MinerNode {
             trace!("Winnings aggregation triggered");
 
             // Begin aggregating `NO_OF_ADDRESSES_FOR_AGGREGATION_TX` address's winnings under a single address
-            let aggregating_addr = generate_mining_address(&self.wallet_db).await;
+            let aggregating_addr = generate_mining_address(&mut self.wallet_db).await;
 
             let mut valid_addresses: Vec<(OutPoint, Asset)> = vec![];
 
@@ -947,7 +1293,9 @@ impl MinerNode {
                 .send_transactions_to_compute(self.compute_addr, vec![aggregating_tx.clone()])
                 .await
             {
-                error!("Error sending aggregation tx to compute nodes: {e:?}");
+                let error = format!("Error sending aggregation tx to compute nodes: {e:?}");
+                error!("{:?}", &e);
+                try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
                 return;
             }
 
@@ -960,7 +1308,9 @@ impl MinerNode {
                 .await;
 
             trace!("Pruning the wallet of old keys after aggregation");
-            self.wallet_db.destroy_spent_transactions_and_keys().await;
+            self.wallet_db
+                .destroy_spent_transactions_and_keys(None)
+                .await;
         }
     }
 
@@ -1054,7 +1404,7 @@ impl MinerNode {
                 debug!("load_local_db: current_payment_address {:?}", addr);
                 Some(addr)
             } else {
-                Some(generate_mining_address(&self.wallet_db).await)
+                Some(generate_mining_address(&mut self.wallet_db).await)
             };
 
         Ok(self)
@@ -1164,7 +1514,7 @@ async fn load_mining_address(wallet_db: &WalletDb) -> Result<Option<String>> {
 }
 
 /// Generate mining address storing it in wallet
-async fn generate_mining_address(wallet_db: &WalletDb) -> String {
+async fn generate_mining_address(wallet_db: &mut WalletDb) -> String {
     let addr: String = wallet_db.generate_payment_address().await.0;
     let ser_addr = serialize(&addr).unwrap();
     wallet_db.set_db_value(MINING_ADDRESS_KEY, ser_addr).await;

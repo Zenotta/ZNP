@@ -5,6 +5,7 @@ use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
 };
 use crate::wallet::WalletDb;
+use crate::Rs2JsMsg;
 use bincode::serialize;
 use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
@@ -357,7 +358,7 @@ pub fn get_sanction_addresses(path: String, jurisdiction: &str) -> Vec<String> {
 ///
 /// * `wallet_db`    - &WalletDb object. Reference to a wallet database
 pub async fn create_and_save_fake_to_wallet(
-    wallet_db: &WalletDb,
+    wallet_db: &mut WalletDb,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (final_address, address_keys) = wallet_db.generate_payment_address().await;
     let (receiver_addr, _) = wallet_db.generate_payment_address().await;
@@ -1101,6 +1102,15 @@ pub fn get_test_common_unicorn() -> UnicornFixedInfo {
         modulus: "6864797660130609714981900799081393217269435300143305409394463459185543183397656052122559640661454554977296311391480858037121987999716643812574028291115057151".to_owned(),
         iterations: 2,
         security: 1
+    }
+}
+
+/// Attempt to send a message to the UI
+///
+/// NOTE: This channel is not guaranteed to be open, so we ignore any errors
+pub async fn try_send_to_ui(ui_tx: Option<&mpsc::Sender<Rs2JsMsg>>, msg: Rs2JsMsg) {
+    if let Some(ui_tx) = ui_tx {
+        let _res = ui_tx.send(msg).await;
     }
 }
 

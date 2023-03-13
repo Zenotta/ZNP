@@ -227,14 +227,14 @@ impl ComputeRaft {
         let use_raft = config.compute_raft != 0;
 
         if config.backup_restore.unwrap_or(false) {
-            db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC).unwrap();
+            db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC, None).unwrap();
         }
         let raft_active = ActiveRaft::new(
             config.compute_node_idx,
             &config.compute_nodes,
             use_raft,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
-            db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db),
+            db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db, None),
         );
 
         let propose_transactions_timeout_duration =

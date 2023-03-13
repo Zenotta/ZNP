@@ -152,6 +152,7 @@ pub struct ComputeNode {
     partition_full_size: usize,
     request_list: BTreeSet<SocketAddr>,
     request_list_first_flood: Option<usize>,
+    miner_removal_list: BTreeSet<SocketAddr>,
     storage_addr: SocketAddr,
     sanction_list: Vec<String>,
     user_notification_list: BTreeSet<SocketAddr>,
@@ -189,13 +190,13 @@ impl ComputeNode {
             .compute_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
 
-        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Compute).await?;
+        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Compute, false).await?;
         let node_raft = ComputeRaft::new(&config, extra.raft_db.take()).await;
 
         if config.backup_restore.unwrap_or(false) {
-            db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC).unwrap();
+            db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC, None).unwrap();
         }
-        let db = db_utils::new_db(config.compute_db_mode, &DB_SPEC, extra.db.take());
+        let db = db_utils::new_db(config.compute_db_mode, &DB_SPEC, extra.db.take(), None);
         let shutdown_group = {
             let storage = std::iter::once(storage_addr);
             let raft_peers = node_raft.raft_peer_addrs().copied();
@@ -231,6 +232,7 @@ impl ComputeNode {
             enable_trigger_messages_pipeline_reset,
             previous_random_num: Default::default(),
             current_random_num: Default::default(),
+            miner_removal_list: Default::default(),
             request_list: Default::default(),
             sanction_list: config.sanction_list,
             jurisdiction: config.jurisdiction,
@@ -613,6 +615,10 @@ impl ComputeNode {
             }) => {
                 warn!("No shared config to apply");
             }
+            Ok(Response {
+                success: true,
+                reason: "Miner removal request received",
+            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Shutdown",
@@ -1030,11 +1036,24 @@ impl ComputeNode {
             Closing => self.receive_closing(peer),
             CoordinatedPause { b_num } => self.handle_coordinated_pause(peer, b_num).await,
             CoordinatedResume => self.handle_coordinated_resume(peer).await,
+            RequestRemoveMiner => self.handle_request_remove_miner(peer).await,
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
                 None
             }
         }
+    }
+
+    /// Handles a request to remove a miner
+    ///
+    /// NOTE: This request is received from a Miner node
+    /// who no longer wishes to participate in mining
+    async fn handle_request_remove_miner(&mut self, peer: SocketAddr) -> Option<Response> {
+        self.miner_removal_list.insert(peer);
+        Some(Response {
+            success: true,
+            reason: "Miner removal request received",
+        })
     }
 
     /// Handles a coordinated command
@@ -1458,7 +1477,21 @@ impl ComputeNode {
             unsent_miners.extend(unsent_nodes);
         }
 
+        for miner_to_remove in self.miner_removal_list.iter() {
+            if let Err(e) = self
+                .node
+                .send(*miner_to_remove, MineRequest::PauseNode)
+                .await
+            {
+                error!("Failed to send pause node request to miner: {}", e);
+            } else {
+                unsent_miners.push(*miner_to_remove);
+            }
+        }
+
         if !unsent_miners.is_empty() {
+            self.miner_removal_list
+                .retain(|v| !unsent_miners.contains(v));
             self.flush_stale_miners(unsent_miners);
         }
 
@@ -1507,13 +1540,25 @@ impl ComputeNode {
     pub async fn flood_block_to_users(&mut self) -> Result<()> {
         let block: Block = self.node_raft.get_mining_block().clone().unwrap();
 
-        self.node
+        let unsent = self
+            .node
             .send_to_all(
                 self.user_notification_list.iter().copied(),
                 UserRequest::BlockMining { block },
             )
-            .await
-            .unwrap();
+            .await?;
+
+        if !unsent.is_empty() {
+            warn!("Purging users: {:?}", unsent);
+            self.user_notification_list.retain(|v| !unsent.contains(v));
+            self.db
+                .put_cf(
+                    DB_COL_INTERNAL,
+                    USER_NOTIFY_LIST_KEY,
+                    &serialize(&self.user_notification_list).unwrap(),
+                )
+                .unwrap();
+        }
 
         Ok(())
     }

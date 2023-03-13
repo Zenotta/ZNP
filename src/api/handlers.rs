@@ -239,7 +239,7 @@ pub async fn get_export_keypairs(
 
 /// Gets a newly generated payment address
 pub async fn get_payment_address(
-    wallet_db: WalletDb,
+    mut wallet_db: WalletDb,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {

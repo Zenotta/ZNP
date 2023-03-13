@@ -7,6 +7,13 @@ pub type ThreadedCall<T> = Box<dyn FnOnce(&mut T) + Send + 'static>;
 pub type ThreadedCallSender<T> = MpscTracingSender<ThreadedCall<T>>;
 pub type ThreadedCallReceiver<T> = mpsc::Receiver<ThreadedCall<T>>;
 
+// Implement blank Debug for ThreadedCallSender
+impl<T> std::fmt::Debug for ThreadedCallSender<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "")
+    }
+}
+
 /// Channel for remote calls
 pub struct ThreadedCallChannel<T: ?Sized> {
     pub tx: ThreadedCallSender<T>,

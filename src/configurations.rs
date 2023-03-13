@@ -1,4 +1,4 @@
-use crate::db_utils::SimpleDb;
+use crate::db_utils::{CustomDbSpec, SimpleDb};
 use crate::wallet::WalletDb;
 use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
@@ -91,6 +91,12 @@ pub enum DbMode {
     Live,
     Test(usize),
     InMemory,
+}
+
+impl Default for DbMode {
+    fn default() -> Self {
+        DbMode::Live
+    }
 }
 
 /// Configuration option for a compute node
@@ -297,6 +303,8 @@ pub struct ExtraNodeParams {
     pub raft_db: Option<SimpleDb>,
     pub wallet_db: Option<SimpleDb>,
     pub shared_wallet_db: Option<WalletDb>,
+    pub custom_wallet_spec: Option<CustomDbSpec>,
+    pub disable_tcp_listener: bool,
 }
 
 ///Hacky deserializer to work around deserializatio error with u128

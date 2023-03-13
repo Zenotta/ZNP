@@ -5,13 +5,16 @@ use crate::interfaces::{
     ComputeRequest, NodeType, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response,
     UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
+use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transaction_gen::{PendingMap, TransactionGen};
 use crate::transactor::Transactor;
 use crate::utils::{
     generate_half_druid, get_paiments_for_wallet_from_utxo, to_api_keys, to_route_pow_infos,
-    ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
+    try_send_to_ui, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
+    RoutesPoWInfo,
 };
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
+use crate::Rs2JsMsg;
 use async_trait::async_trait;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -23,7 +26,10 @@ use naom::utils::transaction_utils::{
     construct_rb_payments_send_tx, construct_rb_receive_payment_tx, construct_receipt_create_tx,
     construct_tx_core, construct_tx_ins_address,
 };
+use serde::Serialize;
+use std::collections::BTreeSet;
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
+use tokio::sync::mpsc;
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;
@@ -118,6 +124,8 @@ pub struct UserNode {
     node: Node,
     wallet_db: WalletDb,
     local_events: LocalEventChannel,
+    threaded_calls: ThreadedCallChannel<UserNode>,
+    ui_feedback_tx: Option<mpsc::Sender<Rs2JsMsg>>,
     compute_addr: SocketAddr,
     api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, RoutesPoWInfo),
     trading_peer: Option<SocketAddr>,
@@ -152,8 +160,14 @@ impl UserNode {
             .then(|| tcp_tls_config.clone_private_info());
         let api_keys = to_api_keys(config.api_keys.clone());
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
-
-        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::User).await?;
+        let disable_tcp_listener = extra.disable_tcp_listener;
+        let node = Node::new(
+            &tcp_tls_config,
+            PEER_LIMIT,
+            NodeType::User,
+            disable_tcp_listener,
+        )
+        .await?;
 
         let wallet_db = match extra.shared_wallet_db {
             Some(shared_db) => shared_db,
@@ -161,7 +175,8 @@ impl UserNode {
                 config.user_db_mode,
                 extra.wallet_db.take(),
                 config.passphrase,
-            ),
+                extra.custom_wallet_spec,
+            )?,
         };
         let wallet_db = wallet_db.with_seed(config.user_wallet_seeds).await;
 
@@ -176,6 +191,8 @@ impl UserNode {
             node,
             wallet_db,
             local_events: Default::default(),
+            threaded_calls: Default::default(),
+            ui_feedback_tx: Default::default(),
             compute_addr,
             api_info: (api_addr, api_tls_info, api_keys, api_pow_info),
             trading_peer: None,
@@ -190,6 +207,15 @@ impl UserNode {
         })
     }
 
+    /// Injects a new event into user node
+    pub fn inject_next_event(
+        &self,
+        from_peer_addr: SocketAddr,
+        data: impl Serialize,
+    ) -> Result<()> {
+        Ok(self.node.inject_next_event(from_peer_addr, data)?)
+    }
+
     /// Returns the node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
@@ -200,9 +226,23 @@ impl UserNode {
         self.compute_addr
     }
 
+    /// Returns whether the node is connected to its Compute peer
+    pub async fn is_disconnected(&self) -> bool {
+        !self
+            .node
+            .unconnected_peers(&[self.compute_address()])
+            .await
+            .is_empty()
+    }
+
     /// Check if auto generator is active
     pub fn is_test_auto_gen_tx_active(&self) -> bool {
         self.test_auto_gen_tx.is_some()
+    }
+
+    /// Returns the last generated address.
+    pub fn get_last_generated_address(&self) -> Option<String> {
+        self.wallet_db.get_last_generated_address()
     }
 
     /// Connect to a peer on the network.
@@ -261,7 +301,9 @@ impl UserNode {
     /// Backup persistent storage
     pub async fn backup_persistent_store(&mut self) {
         if let Err(e) = self.wallet_db.backup_persistent_store().await {
-            error!("Error backup up main db: {:?}", e);
+            let error = format!("Error backup up main db: {:?}", e);
+            error!("{:?}", &error);
+            try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
         }
     }
 
@@ -271,6 +313,18 @@ impl UserNode {
         response: Result<Response>,
     ) -> ResponseResult {
         debug!("Response: {:?}", response);
+
+        if let Ok(resp) = &response {
+            let ui_message = match resp.success {
+                true => Rs2JsMsg::Info {
+                    info: resp.reason.to_owned(),
+                },
+                false => Rs2JsMsg::Error {
+                    error: resp.reason.to_owned(),
+                },
+            };
+            try_send_to_ui(self.ui_feedback_tx.as_ref(), ui_message).await;
+        }
 
         match response {
             Ok(Response {
@@ -286,6 +340,7 @@ impl UserNode {
                 reason: "Shutdown",
             }) => {
                 warn!("Shutdown now");
+                try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Exit).await;
                 return ResponseResult::Exit;
             }
             Ok(Response {
@@ -334,6 +389,22 @@ impl UserNode {
             }
             Ok(Response {
                 success: true,
+                reason: "New address generated",
+            }) => {
+                debug!("New address generated");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Addresses deleted",
+            }) => {
+                debug!("Addresses deleted");
+            }
+            Ok(Response {
+                success: false,
+                reason: "Not an internal request",
+            }) => {}
+            Ok(Response {
+                success: true,
                 reason: "Next payment transaction ready",
             }) => {
                 self.send_next_payment_to_destinations(self.compute_address())
@@ -364,6 +435,38 @@ impl UserNode {
             }) => {
                 self.update_running_total().await;
             }
+            Ok(Response {
+                success: true,
+                reason: "Node is connected",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Node is disconnected",
+            }) => {}
+            Ok(Response {
+                success: true, // Not always an error
+                reason: "Node is disconnected",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Connected to compute",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Disconnected from compute",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Failed to connect to compute",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Failed to disconnect from compute",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Already disconnected from compute",
+            }) => {}
             Ok(Response {
                 success: true,
                 reason,
@@ -406,6 +509,9 @@ impl UserNode {
                         return Some(Ok(res));
                     }
                 }
+                Some(f) = self.threaded_calls.rx.recv() => {
+                    f(self);
+                }
                 reason = &mut *exit => return Some(Ok(Response {
                     success: true,
                     reason,
@@ -424,9 +530,25 @@ impl UserNode {
         Ok(())
     }
 
+    /// Threaded call channel.
+    pub fn threaded_call_tx(&self) -> &ThreadedCallSender<UserNode> {
+        &self.threaded_calls.tx
+    }
+
     /// Local event channel.
     pub fn local_event_tx(&self) -> &LocalEventSender {
         &self.local_events.tx
+    }
+
+    /// UI feedback channel.
+    pub fn ui_feedback_tx(&self) -> Option<mpsc::Sender<Rs2JsMsg>> {
+        self.ui_feedback_tx.clone()
+    }
+
+    /// Set UI feedback channel.
+    pub fn set_ui_feedback_tx(&mut self, tx: mpsc::Sender<Rs2JsMsg>) {
+        self.ui_feedback_tx = Some(tx.clone());
+        self.wallet_db.set_ui_feedback_tx(tx);
     }
 
     ///Handle a local event
@@ -530,7 +652,7 @@ impl UserNode {
                 self.receive_rb_payment_response(peer, rb_payment_response)
                     .await,
             ),
-            BlockMining { block } => Some(self.notified_block_mining(peer, block)),
+            BlockMining { block } => Some(self.notified_block_mining(peer, block).await),
             Closing => self.receive_closing(peer),
         }
     }
@@ -576,6 +698,150 @@ impl UserNode {
                 self.generate_receipt_asset_tx(receipt_amount, drs_tx_hash_spec, metadata)
                     .await,
             ),
+            MakePaymentWithExcessAddress {
+                address,
+                amount,
+                excess_address,
+            } => Some(
+                self.make_payment_transactions_provided_excess(
+                    None,
+                    address,
+                    amount,
+                    Some(excess_address),
+                )
+                .await,
+            ),
+            GenerateNewAddress => Some(self.generate_new_address().await),
+            GetConnectionStatus => Some(self.receive_connection_status_request().await),
+            ConnectToCompute => Some(self.handle_connect_to_compute().await),
+            DisconnectFromCompute => Some(self.handle_disconnect_from_compute().await),
+            DeleteAddresses { addresses } => {
+                Some(self.delete_addresses_from_wallet(peer, addresses).await)
+            }
+            MergeAddresses {
+                addresses,
+                excess_address,
+            } => Some(
+                self.make_merged_payment_transaction_from_input_addrs(
+                    peer,
+                    addresses,
+                    excess_address,
+                )
+                .await,
+            ),
+        }
+    }
+
+    /// Handle delete addresses from wallet
+    pub async fn delete_addresses_from_wallet(
+        &mut self,
+        peer: SocketAddr,
+        addresses: BTreeSet<String>,
+    ) -> Response {
+        if peer != self.address() {
+            return Response {
+                success: false,
+                reason: "Not an internal request",
+            };
+        }
+
+        self.wallet_db
+            .destroy_spent_transactions_and_keys(Some(addresses))
+            .await;
+
+        Response {
+            success: true,
+            reason: "Addresses deleted",
+        }
+    }
+
+    /// Handle connect to compute node
+    pub async fn handle_disconnect_from_compute(&mut self) -> Response {
+        let compute_addr = self.compute_address();
+        let join_handles = self.node.disconnect_all(Some(&[compute_addr])).await;
+        if join_handles.is_empty() {
+            return Response {
+                success: false,
+                reason: "Already disconnected from compute",
+            };
+        }
+        for join_handle in join_handles {
+            if let Err(err) = join_handle.await {
+                error!("Failed to disconnect from compute: {}", err);
+                return Response {
+                    success: false,
+                    reason: "Failed to disconnect from compute",
+                };
+            }
+        }
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Value(serde_json::json!({
+                "connected": false,
+            })),
+        )
+        .await;
+        Response {
+            success: true,
+            reason: "Disconnected from compute",
+        }
+    }
+
+    /// Handle connect to compute node
+    pub async fn handle_connect_to_compute(&mut self) -> Response {
+        let compute_addr = self.compute_address();
+        if let Err(e) = self.node.connect_to(compute_addr).await {
+            error!("Failed to connect to compute: {e:?}");
+            return Response {
+                success: false,
+                reason: "Failed to connect to compute",
+            };
+        }
+        if let Err(e) = self.send_block_notification_request().await {
+            error!("Failed to send startup requests to compute: {e:?}");
+            return Response {
+                success: false,
+                reason: "Failed to send startup requests on reconnection",
+            };
+        }
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Value(serde_json::json!({
+                "connected": true,
+            })),
+        )
+        .await;
+        Response {
+            success: true,
+            reason: "Connected to compute",
+        }
+    }
+
+    /// Handles the request to check connection status
+    pub async fn receive_connection_status_request(&self) -> Response {
+        if self.is_disconnected().await {
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Value(serde_json::json!({
+                    "connected":false,
+                })),
+            )
+            .await;
+            return Response {
+                success: true,
+                reason: "Node is disconnected",
+            };
+        }
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Value(serde_json::json!({
+                "connected": true,
+            })),
+        )
+        .await;
+        Response {
+            success: true,
+            reason: "Node is connected",
         }
     }
 
@@ -759,24 +1025,27 @@ impl UserNode {
         )
     }
 
-    /// Process specified payment, updating wallet and next_payment
+    /// Process specified payment with a provided excess address,
+    /// updating wallet and next_payment
     ///
     /// ### Arguments
     ///
     /// * `peer`    - Peer recieving the payment.
     /// * `address` - Address to assign the payment transaction to
     /// * `amount`  - Price/amount payed
-    pub async fn make_payment_transactions(
+    /// * `excess_address` - Address to assign the excess to
+    pub async fn make_payment_transactions_provided_excess(
         &mut self,
         peer: Option<SocketAddr>,
         address: String,
         amount: TokenAmount,
+        excess_address: Option<String>,
     ) -> Response {
         let tx_out = vec![TxOut::new_token_amount(address, amount)];
         let asset_required = Asset::Token(amount);
         let (tx_ins, tx_outs) = if let Ok(value) = self
             .wallet_db
-            .fetch_tx_ins_and_tx_outs(asset_required, tx_out)
+            .fetch_tx_ins_and_tx_outs_provided_excess(asset_required, tx_out, excess_address)
             .await
         {
             value
@@ -793,6 +1062,67 @@ impl UserNode {
             success: true,
             reason: "Next payment transaction ready",
         }
+    }
+
+    /// Process specified payment with a provided excess address,
+    /// as well as provided input addresses; updating wallet and next_payment
+    ///
+    /// NOTE: This payment is meant to merge existing addresses in the wallet
+    /// to a new address, and is not meant to be used for payments to peers
+    ///
+    /// ### Arguments
+    ///
+    /// * `input_addresses`  - Input addresses to use in this payment
+    /// * `excess_address` - Address to assign the excess to
+    pub async fn make_merged_payment_transaction_from_input_addrs(
+        &mut self,
+        peer: SocketAddr,
+        input_addresses: BTreeSet<String>,
+        excess_address: Option<String>,
+    ) -> Response {
+        if peer != self.address() {
+            return Response {
+                success: false,
+                reason: "Not an internal request",
+            };
+        }
+
+        let (tx_ins, tx_outs) = if let Ok(value) = self
+            .wallet_db
+            .fetch_tx_ins_and_tx_outs_merge_input_addrs(input_addresses, excess_address)
+            .await
+        {
+            value
+        } else {
+            return Response {
+                success: false,
+                reason: "Insufficient funds for payment",
+            };
+        };
+        let payment_tx = construct_tx_core(tx_ins, tx_outs);
+        self.next_payment = Some((None, payment_tx));
+
+        Response {
+            success: true,
+            reason: "Next payment transaction ready",
+        }
+    }
+
+    /// Process specified payment, updating wallet and next_payment
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`    - Peer recieving the payment.
+    /// * `address` - Address to assign the payment transaction to
+    /// * `amount`  - Price/amount payed
+    pub async fn make_payment_transactions(
+        &mut self,
+        peer: Option<SocketAddr>,
+        address: String,
+        amount: TokenAmount,
+    ) -> Response {
+        self.make_payment_transactions_provided_excess(peer, address, amount, None)
+            .await
     }
 
     /// Sends a payment transaction to the receiving party
@@ -882,10 +1212,17 @@ impl UserNode {
     ///
     /// * `peer` -  SocketAdress of the peer notifying.
     /// * `block` - Block that is being mined and will be stored.
-    pub fn notified_block_mining(&mut self, peer: SocketAddr, block: Block) -> Response {
+    pub async fn notified_block_mining(&mut self, peer: SocketAddr, block: Block) -> Response {
         if peer == self.compute_addr {
             self.last_block_notified = block;
-
+            // Send the block to the UI for realtime feedback
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Value(serde_json::json!( {
+                    "last_block_notified": self.last_block_notified.clone(),
+                })),
+            )
+            .await;
             Response {
                 success: true,
                 reason: "Block mining notified",
@@ -945,7 +1282,9 @@ impl UserNode {
                 .send_transactions_to_compute(self.compute_address(), txs_chunk)
                 .await
             {
-                error!("Autogenerated tx not sent to {:?}", e);
+                let error = format!("Autogenerated tx not sent to {:?}", e);
+                error!("{:?}", &error);
+                try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
             }
         }
         if total_txs > 0 {
@@ -973,6 +1312,15 @@ impl UserNode {
     /// Get the last block notified to us
     pub fn get_last_block_notified(&self) -> &Block {
         &self.last_block_notified
+    }
+
+    /// Generate a new payment address
+    pub async fn generate_new_address(&mut self) -> Response {
+        let _ = self.wallet_db.generate_payment_address().await;
+        Response {
+            success: true,
+            reason: "New address generated",
+        }
     }
 
     /// Receives a request for a new payment address to be produced

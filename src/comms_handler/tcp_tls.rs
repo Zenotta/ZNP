@@ -2,7 +2,6 @@
 
 use super::{CommsError, Result};
 use crate::configurations::{TlsPrivateInfo, TlsSpec};
-use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Cursor;
@@ -12,6 +11,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 use tokio_rustls::rustls::internal::pemfile::{certs, pkcs8_private_keys};
 use tokio_rustls::rustls::{
     AllowAnyAuthenticatedClient, Certificate, ClientConfig, NoClientAuth, PrivateKey,
@@ -32,7 +32,7 @@ pub struct TcpTlsConfig {
     pem_pkcs8_private_keys: String,
     trusted_pem_certs: Vec<String>,
     use_tls: bool,
-    listener: Cell<Option<TcpListener>>,
+    listener: Arc<Mutex<Option<TcpListener>>>,
 }
 
 impl TcpTlsConfig {
@@ -106,8 +106,8 @@ impl TcpTlsConfig {
         &mut self.trusted_pem_certs
     }
 
-    pub fn with_listener(self, listener: TcpListener) -> Self {
-        self.listener.set(Some(listener));
+    pub async fn with_listener(self, listener: TcpListener) -> Self {
+        *self.listener.lock().await = Some(listener);
         self
     }
 
@@ -138,7 +138,7 @@ impl TcpTlsListner {
             None
         };
 
-        let tcp_listener = if let Some(listener) = config.listener.replace(None) {
+        let tcp_listener = if let Some(listener) = config.listener.lock().await.take() {
             listener
         } else {
             Self::new_raw_listner(config.address).await?

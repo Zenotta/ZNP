@@ -136,14 +136,14 @@ impl PreLaunchNode {
             .address;
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
 
-        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::PreLaunch).await?;
+        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::PreLaunch, false).await?;
         let db = {
             let spec = &config.db_spec;
-            db_utils::new_db(config.pre_launch_db_mode, spec, extra.db.take())
+            db_utils::new_db(config.pre_launch_db_mode, spec, extra.db.take(), None)
         };
         let raft_db = {
             let spec = &config.raft_db_spec;
-            db_utils::new_db(config.pre_launch_db_mode, spec, extra.raft_db.take())
+            db_utils::new_db(config.pre_launch_db_mode, spec, extra.raft_db.take(), None)
         };
 
         let pre_launch_nodes = config.pre_launch_nodes.iter().map(|s| s.address);

@@ -25,6 +25,12 @@ pub struct SimpleDbSpec {
     pub columns: &'static [&'static str],
 }
 
+#[derive(Debug, Clone)]
+pub struct CustomDbSpec {
+    pub db_path: String,
+    pub suffix: String,
+}
+
 #[derive(Debug)]
 pub struct SimpleDbError(String);
 
@@ -574,8 +580,21 @@ fn check_old_includes_new<'a>(
 /// * `db_moode` - Mode for the database.
 /// * `db_spec`  - Database specification.
 /// * `old_db`   - Old in memory Database to try to open.
-pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec, old_db: Option<SimpleDb>) -> SimpleDb {
-    new_db_with_version(db_mode, db_spec, Some(NETWORK_VERSION_SERIALIZED), old_db).unwrap()
+/// * `custom_db_spec` - Custom database specification.
+pub fn new_db(
+    db_mode: DbMode,
+    db_spec: &SimpleDbSpec,
+    old_db: Option<SimpleDb>,
+    custom_db_spec: Option<CustomDbSpec>,
+) -> SimpleDb {
+    new_db_with_version(
+        db_mode,
+        db_spec,
+        Some(NETWORK_VERSION_SERIALIZED),
+        old_db,
+        custom_db_spec,
+    )
+    .unwrap()
 }
 
 /// Creates a new database(db) object in selected mode
@@ -586,13 +605,15 @@ pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec, old_db: Option<SimpleDb>)
 /// * `db_spec`  - Database specification.
 /// * `version`  - Database exact version to use (if none check key absent).
 /// * `old_db`   - Old in memory Database to try to open.
+/// * `custom_db_spec` - Custom database specification.
 pub fn new_db_with_version(
     db_mode: DbMode,
     db_spec: &SimpleDbSpec,
     version: Option<&[u8]>,
     old_db: Option<SimpleDb>,
+    custom_db_spec: Option<CustomDbSpec>,
 ) -> Result<SimpleDb> {
-    let db = new_db_no_check_version(db_mode, db_spec, old_db)?;
+    let db = new_db_no_check_version(db_mode, db_spec, old_db, custom_db_spec)?;
     check_version(&db, version)?;
     Ok(db)
 }
@@ -604,12 +625,14 @@ pub fn new_db_with_version(
 /// * `db_moode` - Mode for the database.
 /// * `db_spec`  - Database specification.
 /// * `old_db`   - Old in memory Database to try to open.
+/// * `custom_db_spec` - Custom database specification.
 pub fn new_db_no_check_version(
     db_mode: DbMode,
     db_spec: &SimpleDbSpec,
     old_db: Option<SimpleDb>,
+    custom_db_spec: Option<CustomDbSpec>,
 ) -> Result<SimpleDb> {
-    if let Some(save_path) = new_db_save_path(db_mode, db_spec) {
+    if let Some(save_path) = new_db_save_path(db_mode, db_spec, custom_db_spec) {
         if old_db.is_some() {
             panic!("new_db: Do not provide database, read it from disk");
         }
@@ -625,9 +648,17 @@ pub fn new_db_no_check_version(
 ///
 /// * `db_moode` - Mode for the database.
 /// * `db_spec`  - Database specification.
-pub fn new_db_save_path(db_mode: DbMode, db_spec: &SimpleDbSpec) -> Option<String> {
-    let db_path = db_spec.db_path;
-    let suffix = db_spec.suffix;
+/// * `custom_db_spec` - Custom database specification.
+pub fn new_db_save_path(
+    db_mode: DbMode,
+    db_spec: &SimpleDbSpec,
+    custom_db_spec: Option<CustomDbSpec>,
+) -> Option<String> {
+    let db_path = custom_db_spec
+        .as_ref().map(|spec| spec.db_path.clone())
+        .unwrap_or(db_spec.db_path.to_owned());
+    let suffix = custom_db_spec.map(|spec| spec.suffix)
+        .unwrap_or(db_spec.suffix.to_owned());
     match db_mode {
         DbMode::Live => Some(format!("{db_path}/{DB_PATH_LIVE}{suffix}")),
         DbMode::Test(idx) => Some(format!("{db_path}/{DB_PATH_TEST}{suffix}.{idx}")),
@@ -636,8 +667,12 @@ pub fn new_db_save_path(db_mode: DbMode, db_spec: &SimpleDbSpec) -> Option<Strin
 }
 
 /// Restore backup for file db
-pub fn restore_file_backup(db_mode: DbMode, db_spec: &SimpleDbSpec) -> Result<()> {
-    if let Some(path) = new_db_save_path(db_mode, db_spec) {
+pub fn restore_file_backup(
+    db_mode: DbMode,
+    db_spec: &SimpleDbSpec,
+    custom_db_spec: Option<CustomDbSpec>,
+) -> Result<()> {
+    if let Some(path) = new_db_save_path(db_mode, db_spec, custom_db_spec) {
         let backup_path = path.clone() + "_backup";
         let backup_opts = BackupEngineOptions::default();
         let mut backup_engine = BackupEngine::open(&backup_opts, &backup_path).unwrap();

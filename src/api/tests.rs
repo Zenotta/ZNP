@@ -213,7 +213,7 @@ async fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
 async fn get_wallet_db(passphrase: &str) -> WalletDb {
     let simple_db = Some(get_db_with_block_no_mutex().await);
     let passphrase = Some(passphrase.to_owned());
-    WalletDb::new(DbMode::InMemory, simple_db, passphrase)
+    WalletDb::new(DbMode::InMemory, simple_db, passphrase, None).unwrap()
 }
 
 async fn get_db_with_block_no_mutex() -> SimpleDb {
@@ -254,7 +254,7 @@ async fn get_db_with_block_no_mutex() -> SimpleDb {
 
     let block_to_input = StoredSerializingBlock { block };
 
-    let mut db = new_db(DbMode::InMemory, &DB_SPEC, None);
+    let mut db = new_db(DbMode::InMemory, &DB_SPEC, None, None);
     let mut batch = db.batch_writer();
 
     // Handle block insert
@@ -370,7 +370,9 @@ async fn new_self_node_with_port(node_type: NodeType, port: u16) -> (Node, Socke
     bind_address.set_port(port);
 
     let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
-    let self_node = Node::new(&tcp_tls_config, 20, node_type).await.unwrap();
+    let self_node = Node::new(&tcp_tls_config, 20, node_type, false)
+        .await
+        .unwrap();
     socket_address.set_port(self_node.address().port());
     (self_node, socket_address)
 }
@@ -2019,7 +2021,7 @@ async fn test_post_change_passphrase() {
     //
     // Arrange
     //
-    let db = get_wallet_db("old_passphrase").await;
+    let mut db = get_wallet_db("old_passphrase").await;
     let (payment_address, expected_address_store) = db.generate_payment_address().await;
 
     let json_body = ChangePassphraseData {
