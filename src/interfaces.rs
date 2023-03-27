@@ -420,6 +420,23 @@ pub trait StorageInterface {
 
 ///============ MINER NODE ============///
 
+#[allow(clippy::enum_variant_names)]
+#[derive(Deserialize, Serialize, Clone)]
+pub enum MineApiRequest {
+    /// Get the connection status of this node
+    GetConnectionStatus,
+    /// Get mining status
+    GetMiningStatus,
+    /// Initiate pause mining
+    InitiatePauseMining,
+    /// Initiate resume mining
+    InitiateResumeMining,
+    /// Connect to to compute Node
+    ConnectToCompute,
+    // Disconnect from compute Node
+    DisconnectFromCompute,
+}
+
 /// Encapsulates miner requests
 #[derive(Serialize, Deserialize, Clone)]
 pub enum MineRequest {
@@ -441,18 +458,8 @@ pub enum MineRequest {
     SendUtxoSet {
         utxo_set: UtxoSet,
     },
-    /// Get the connection status of this node
-    GetConnectionStatus,
-    /// Get mining status
-    GetMiningStatus,
-    /// Pause node
-    PauseNode,
-    /// Resume node
-    ResumeNode,
-    /// Connect to to compute Node
-    ConnectToCompute,
-    // Disconnect from compute Node
-    DisconnectFromCompute,
+    MinerRemovedAck,
+    MinerApi(MineApiRequest),
     Closing,
 }
 
@@ -466,12 +473,13 @@ impl fmt::Debug for MineRequest {
             SendTransactions { .. } => write!(f, "SendTransactions"),
             SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             Closing => write!(f, "Closing"),
-            GetConnectionStatus => write!(f, "GetConnectionStatus"),
-            GetMiningStatus => write!(f, "GetMiningStatus"),
-            PauseNode => write!(f, "PauseNode"),
-            ResumeNode => write!(f, "ResumeNode"),
-            ConnectToCompute => write!(f, "ConnectToCompute"),
-            DisconnectFromCompute => write!(f, "DisconnectFromCompute"),
+            MinerRemovedAck => write!(f, "MinerRemovedAck"),
+            MinerApi(MineApiRequest::GetConnectionStatus) => write!(f, "GetConnectionStatus"),
+            MinerApi(MineApiRequest::GetMiningStatus) => write!(f, "GetMiningStatus"),
+            MinerApi(MineApiRequest::InitiatePauseMining) => write!(f, "InitiatePauseMining"),
+            MinerApi(MineApiRequest::InitiateResumeMining) => write!(f, "InitiateResumeMining"),
+            MinerApi(MineApiRequest::ConnectToCompute) => write!(f, "ConnectToCompute"),
+            MinerApi(MineApiRequest::DisconnectFromCompute) => write!(f, "DisconnectFromCompute"),
         }
     }
 }

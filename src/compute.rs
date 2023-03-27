@@ -1443,6 +1443,14 @@ impl ComputeNode {
 
         let mut unsent_miners = vec![];
 
+        let _ = self
+            .node
+            .send_to_all(
+                self.miner_removal_list.iter().copied(),
+                MineRequest::MinerRemovedAck,
+            )
+            .await;
+
         if let Ok(unsent_nodes) = self
             .node
             .send_to_all(
@@ -1477,21 +1485,8 @@ impl ComputeNode {
             unsent_miners.extend(unsent_nodes);
         }
 
-        for miner_to_remove in self.miner_removal_list.iter() {
-            if let Err(e) = self
-                .node
-                .send(*miner_to_remove, MineRequest::PauseNode)
-                .await
-            {
-                error!("Failed to send pause node request to miner: {}", e);
-            } else {
-                unsent_miners.push(*miner_to_remove);
-            }
-        }
-
         if !unsent_miners.is_empty() {
-            self.miner_removal_list
-                .retain(|v| !unsent_miners.contains(v));
+            self.miner_removal_list.clear();
             self.flush_stale_miners(unsent_miners);
         }
 

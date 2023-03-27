@@ -400,10 +400,6 @@ impl UserNode {
                 debug!("Addresses deleted");
             }
             Ok(Response {
-                success: false,
-                reason: "Not an internal request",
-            }) => {}
-            Ok(Response {
                 success: true,
                 reason: "Next payment transaction ready",
             }) => {
@@ -735,16 +731,9 @@ impl UserNode {
     /// Handle delete addresses from wallet
     pub async fn delete_addresses_from_wallet(
         &mut self,
-        peer: SocketAddr,
+        _peer: SocketAddr,
         addresses: BTreeSet<String>,
     ) -> Response {
-        if peer != self.address() {
-            return Response {
-                success: false,
-                reason: "Not an internal request",
-            };
-        }
-
         self.wallet_db
             .destroy_spent_transactions_and_keys(Some(addresses))
             .await;
@@ -1076,17 +1065,10 @@ impl UserNode {
     /// * `excess_address` - Address to assign the excess to
     pub async fn make_merged_payment_transaction_from_input_addrs(
         &mut self,
-        peer: SocketAddr,
+        _peer: SocketAddr,
         input_addresses: BTreeSet<String>,
         excess_address: Option<String>,
     ) -> Response {
-        if peer != self.address() {
-            return Response {
-                success: false,
-                reason: "Not an internal request",
-            };
-        }
-
         let (tx_ins, tx_outs) = if let Ok(value) = self
             .wallet_db
             .fetch_tx_ins_and_tx_outs_merge_input_addrs(input_addresses, excess_address)

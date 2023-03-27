@@ -92,6 +92,7 @@ pub enum UpgradeError {
     DbError(SimpleDbError),
     Serialization(bincode::Error),
     StringError(StringError),
+    WalletError(wallet::WalletDbError),
 }
 
 impl fmt::Display for UpgradeError {
@@ -101,6 +102,7 @@ impl fmt::Display for UpgradeError {
             Self::DbError(err) => write!(f, "DB error: {err}"),
             Self::Serialization(err) => write!(f, "Serialization error: {err}"),
             Self::StringError(err) => write!(f, "String error: {err}"),
+            Self::WalletError(err) => write!(f, "Wallet error: {err}"),
         }
     }
 }
@@ -112,6 +114,7 @@ impl Error for UpgradeError {
             Self::DbError(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
             Self::StringError(ref e) => Some(e),
+            Self::WalletError(ref e) => Some(e),
         }
     }
 }
@@ -131,6 +134,12 @@ impl From<bincode::Error> for UpgradeError {
 impl From<StringError> for UpgradeError {
     fn from(other: StringError) -> Self {
         Self::StringError(other)
+    }
+}
+
+impl From<wallet::WalletDbError> for UpgradeError {
+    fn from(other: wallet::WalletDbError) -> Self {
+        Self::WalletError(other)
     }
 }
 
@@ -488,7 +497,7 @@ pub fn upgrade_wallet_db_batch<'a>(
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
 
     let passphrase = upgrade_cfg.passphrase.as_bytes();
-    let masterkey = wallet::get_or_save_master_key_store(db, &mut batch, passphrase).unwrap();
+    let masterkey = wallet::get_or_save_master_key_store(db, &mut batch, passphrase)?;
 
     for (key, value) in db.iter_cf_clone(DB_COL_DEFAULT) {
         if key == DB_VERSION_KEY.as_bytes() {

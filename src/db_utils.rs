@@ -655,9 +655,11 @@ pub fn new_db_save_path(
     custom_db_spec: Option<CustomDbSpec>,
 ) -> Option<String> {
     let db_path = custom_db_spec
-        .as_ref().map(|spec| spec.db_path.clone())
+        .as_ref()
+        .map(|spec| spec.db_path.clone())
         .unwrap_or(db_spec.db_path.to_owned());
-    let suffix = custom_db_spec.map(|spec| spec.suffix)
+    let suffix = custom_db_spec
+        .map(|spec| spec.suffix)
         .unwrap_or(db_spec.suffix.to_owned());
     match db_mode {
         DbMode::Live => Some(format!("{db_path}/{DB_PATH_LIVE}{suffix}")),

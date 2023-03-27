@@ -2,8 +2,8 @@ use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
-    BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, PowInfo, ProofOfWork,
-    Response, Rs2JsMsg, StorageRequest, UtxoFetchType, UtxoSet,
+    BlockchainItem, ComputeRequest, MineApiRequest, MineRequest, MinerInterface, NodeType, PowInfo,
+    ProofOfWork, Response, Rs2JsMsg, StorageRequest, UtxoFetchType, UtxoSet,
 };
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transactor::Transactor;
@@ -483,6 +483,10 @@ impl MinerNode {
                 reason: "Node is resumed",
             }) => {}
             Ok(Response {
+                success: false,
+                reason: "Received miner removed ack from non-compute peer",
+            }) => {}
+            Ok(Response {
                 success: true,
                 reason,
             }) => {
@@ -654,12 +658,62 @@ impl MinerNode {
             }
             SendUtxoSet { utxo_set } => Some(self.receive_utxo_set(utxo_set)),
             Closing => self.receive_closing(peer),
-            GetConnectionStatus => Some(self.receive_connection_status_request().await),
-            GetMiningStatus => Some(self.receive_get_mining_status_request().await),
-            PauseNode => Some(self.receive_pause_node_request(peer, true).await),
-            ResumeNode => Some(self.receive_pause_node_request(peer, false).await),
-            ConnectToCompute => Some(self.handle_connect_to_compute().await),
-            DisconnectFromCompute => Some(self.handle_disconnect_from_compute().await),
+            MinerRemovedAck => Some(self.handle_receive_miner_removed_ack(peer).await),
+            MinerApi(api_request) => self.handle_miner_api(peer, api_request).await,
+        }
+    }
+
+    /// Handle a miner API request
+    ///
+    /// ## Arguments
+    /// `peer` - Socket address of the peer sending the message.
+    /// `api_request` - The API request to handle
+    pub async fn handle_miner_api(
+        &mut self,
+        peer: SocketAddr,
+        api_request: MineApiRequest,
+    ) -> Option<Response> {
+        if self.address() != peer {
+            return None; // Only Process internal requests
+        }
+        match api_request {
+            MineApiRequest::GetConnectionStatus => {
+                Some(self.receive_connection_status_request().await)
+            }
+            MineApiRequest::GetMiningStatus => Some(self.receive_get_mining_status_request().await),
+            MineApiRequest::InitiatePauseMining => {
+                Some(self.receive_pause_node_request(peer, true).await)
+            }
+            MineApiRequest::InitiateResumeMining => {
+                Some(self.receive_pause_node_request(peer, false).await)
+            }
+            MineApiRequest::ConnectToCompute => Some(self.handle_connect_to_compute().await),
+            MineApiRequest::DisconnectFromCompute => {
+                Some(self.handle_disconnect_from_compute().await)
+            }
+        }
+    }
+
+    /// Handle acknowledgement of miner removed from compute node
+    pub async fn handle_receive_miner_removed_ack(&mut self, peer: SocketAddr) -> Response {
+        if self.compute_address() == peer {
+            *self.pause_node.write().await = true;
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Value(serde_json::json!({
+                    "mining": false,
+                })),
+            )
+            .await;
+            Response {
+                success: true,
+                reason: "Node is paused",
+            }
+        } else {
+            Response {
+                success: false,
+                reason: "Received miner removed ack from non-compute peer",
+            }
         }
     }
 
@@ -721,22 +775,7 @@ impl MinerNode {
     }
 
     /// Handles a request to pause the node
-    pub async fn receive_pause_node_request(&mut self, peer: SocketAddr, pause: bool) -> Response {
-        if self.compute_address() == peer && pause {
-            *self.pause_node.write().await = pause;
-            try_send_to_ui(
-                self.ui_feedback_tx.as_ref(),
-                Rs2JsMsg::Value(serde_json::json!({
-                    "mining": false,
-                })),
-            )
-            .await;
-            return Response {
-                success: true,
-                reason: "Node is paused",
-            };
-        }
-
+    pub async fn receive_pause_node_request(&mut self, _peer: SocketAddr, pause: bool) -> Response {
         if self.is_disconnected().await {
             try_send_to_ui(
                 self.ui_feedback_tx.as_ref(),
