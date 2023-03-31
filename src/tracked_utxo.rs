@@ -6,11 +6,13 @@ use naom::utils::transaction_utils::get_tx_out_with_out_point_cloned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Deref;
+use std::collections::hash_map::DefaultHasher;
+use cuckoofilter::{CuckooFilter, ExportedCuckooFilter};
 
 #[derive(Default, Debug, Clone, Serialize)]
 pub struct TrackedUtxoBalance {
     total: AssetValues,
-    address_list: AddressesWithOutPoints,
+    address_list: AddressesWithOutPoints
 }
 
 impl TrackedUtxoBalance {
@@ -18,6 +20,7 @@ impl TrackedUtxoBalance {
         &self.total
     }
 }
+
 /// Invariant: `pk_cache` contains exactly all relevant mapping for `base`
 #[derive(Default, Clone, Debug)]
 pub struct TrackedUtxoSet {
@@ -25,13 +28,16 @@ pub struct TrackedUtxoSet {
     base: UtxoSet,
     /// Cache mapping of Some `script_public_key` to `OutPoints` present in `base`.
     pk_cache: HashMap<String, Vec<OutPoint>>,
+    cuckoo_filter: ExportedCuckooFilter,
 }
 
 impl TrackedUtxoSet {
     /// Create a new TrackedUtxoSet from `UtxoSet` base
     pub fn new(base: UtxoSet) -> Self {
         let pk_cache = create_pk_cache_from_base(&base);
-        TrackedUtxoSet { base, pk_cache }
+        let cuckoo_core = CuckooFilter::new();
+        let cuckoo_filter = ExportedCuckooFilter::from(&cuckoo_core);
+        TrackedUtxoSet { base, pk_cache, cuckoo_filter }
     }
 
     // Take ownership of self; return base `UtxoSet`
@@ -48,6 +54,8 @@ impl TrackedUtxoSet {
     pub fn extend_tracked_utxo_set(&mut self, block_tx: &BTreeMap<String, Transaction>) {
         self.base
             .extend(get_tx_out_with_out_point_cloned(block_tx.iter()));
+
+        self.add_to_cuckoo_filter(block_tx);
         extend_pk_cache_vec(
             &mut self.pk_cache,
             get_pk_with_out_point_cloned(block_tx.iter()),
@@ -62,6 +70,10 @@ impl TrackedUtxoSet {
             if pk_cache_entry.is_empty() {
                 self.pk_cache.remove(&spk);
             }
+
+            // Update cuckoo filter
+            self.remove_from_cuckoo_filter(&spk);
+
             Some(key)
         })
     }
@@ -104,7 +116,32 @@ impl TrackedUtxoSet {
             .filter_map(|(_, tx_out)| tx_out.script_public_key.clone())
             .collect::<Vec<String>>()
     }
+
+    // ===== CUCKOO FILTER METHODS ===== //
+    
+    /// Add to cuckoo filter
+    fn add_to_cuckoo_filter(&mut self, block_tx: &BTreeMap<String, Transaction>) {
+        let mut cuckoo_filter: CuckooFilter<DefaultHasher> = CuckooFilter::from(self.cuckoo_filter);
+
+        block_tx.iter().for_each(|(_, tx)| {
+            tx.outputs.iter().for_each(|tx_out| {
+                if let Some(spk) = &tx_out.script_public_key {
+                    let _ = cuckoo_filter.add(spk);
+                }
+            })
+        });
+
+        self.cuckoo_filter = ExportedCuckooFilter::from(&cuckoo_filter);
+    }
+
+    /// Removes from cuckoo filter
+    fn remove_from_cuckoo_filter(&mut self, spk: &str) {
+        let mut cuckoo_filter: CuckooFilter<DefaultHasher> = CuckooFilter::from(self.cuckoo_filter);
+        let _ = cuckoo_filter.delete(&spk);
+        self.cuckoo_filter = ExportedCuckooFilter::from(&cuckoo_filter);
+    }
 }
+
 
 /// Create `pk_cache` entries from base `UtxoSet`
 pub fn create_pk_cache_from_base(base: &UtxoSet) -> HashMap<String, Vec<OutPoint>> {
@@ -142,6 +179,11 @@ impl<'a> Deserialize<'a> for TrackedUtxoSet {
     fn deserialize<D: Deserializer<'a>>(deserializer: D) -> Result<Self, D::Error> {
         let base: UtxoSet = Deserialize::deserialize(deserializer)?;
         let pk_cache: HashMap<String, Vec<OutPoint>> = create_pk_cache_from_base(&base);
-        Ok(TrackedUtxoSet { base, pk_cache })
+
+        // fix deserialisation for cuckoo filter
+        let cuckoo_core = CuckooFilter::new();
+        let cuckoo_filter = ExportedCuckooFilter::from(&cuckoo_core);
+
+        Ok(TrackedUtxoSet { base, pk_cache, cuckoo_filter })
     }
 }

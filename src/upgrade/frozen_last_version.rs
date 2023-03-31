@@ -596,8 +596,8 @@ pub mod convert {
             old::naom::OpCodes::OP_EQUALVERIFY => OpCodes::OP_EQUALVERIFY,
             old::naom::OpCodes::OP_CHECKSIG => OpCodes::OP_CHECKSIG,
             old::naom::OpCodes::OP_CREATE => OpCodes::OP_CREATE,
-            old::naom::OpCodes::OP_HASH256_V0 => OpCodes::OP_HASH256_V0,
-            old::naom::OpCodes::OP_HASH256_TEMP => OpCodes::OP_HASH256_TEMP,
+            old::naom::OpCodes::OP_HASH256_V0 => OpCodes::OP_HASH256V0,
+            old::naom::OpCodes::OP_HASH256_TEMP => OpCodes::OP_HASH256TEMP,
         }
     }
 
