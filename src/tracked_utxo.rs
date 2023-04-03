@@ -58,7 +58,7 @@ impl TrackedUtxoSet {
     pub fn remove_tracked_utxo_entry<'a>(&mut self, key: &'a OutPoint) -> Option<&'a OutPoint> {
         self.base.remove(key)?.script_public_key.and_then(|spk| {
             let pk_cache_entry = self.pk_cache.get_mut(&spk)?;
-            pk_cache_entry.retain(|op| op != key);
+            pk_cache_entry.retain(|op| op.t_hash != key.t_hash && op.n != key.n);
             if pk_cache_entry.is_empty() {
                 self.pk_cache.remove(&spk);
             }

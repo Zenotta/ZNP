@@ -8,10 +8,11 @@ use crate::interfaces::{
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transactor::Transactor;
 use crate::utils::{
-    self, apply_mining_tx, format_parition_pow_address, generate_pow_for_block,
-    get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, to_api_keys, to_route_pow_infos,
-    try_send_to_ui, ApiKeys, DeserializedBlockchainItem, LocalEvent, LocalEventChannel,
-    LocalEventSender, ResponseResult, RoutesPoWInfo, RunningTaskOrResult,
+    self, apply_mining_tx, construct_coinbase_tx, format_parition_pow_address,
+    generate_pow_for_block, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo,
+    to_api_keys, to_route_pow_infos, try_send_to_ui, ApiKeys, DeserializedBlockchainItem,
+    LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
+    RunningTaskOrResult,
 };
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::Node;
@@ -21,10 +22,10 @@ use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::{self, BlockHeader};
 use naom::primitives::transaction::Transaction;
-use naom::utils::transaction_utils::{construct_coinbase_tx, construct_tx_core, construct_tx_hash};
+use naom::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::{
     error::Error,
     fmt,
@@ -34,10 +35,13 @@ use std::{
     str,
     time::SystemTime,
 };
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;
+
+/// Key for locked coinbase transactions
+pub const LOCKED_COINBASE_KEY: &str = "LockedCoinbaseKey";
 
 /// Key for last pow coinbase produced
 pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
@@ -79,6 +83,18 @@ pub enum MinerError {
     Serialization(bincode::Error),
     AsyncTask(task::JoinError),
     WalletError(WalletDbError),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum AggregationStatus {
+    Idle,
+    UtxoUpdate(String),
+}
+
+impl Default for AggregationStatus {
+    fn default() -> Self {
+        Self::Idle
+    }
 }
 
 impl fmt::Display for MinerError {
@@ -144,7 +160,7 @@ pub struct MinerNode {
     last_pow: Option<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
-    last_aggregation_address: Option<String>,
+    aggregation_status: AggregationStatus,
     wait_partition_task: bool,
     received_utxo_set: Option<UtxoSet>,
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, PowInfo, SocketAddr)>,
@@ -202,7 +218,7 @@ impl MinerNode {
             last_pow: None,
             current_coinbase: None,
             current_payment_address: None,
-            last_aggregation_address: None,
+            aggregation_status: Default::default(),
             received_utxo_set: None,
             wait_partition_task: Default::default(),
             mining_partition_task: Default::default(),
@@ -640,6 +656,7 @@ impl MinerNode {
                 win_coinbases,
                 reward,
                 block,
+                b_num,
             } => {
                 self.receive_pre_block_and_random(
                     peer,
@@ -648,6 +665,7 @@ impl MinerNode {
                     win_coinbases,
                     reward,
                     block,
+                    b_num,
                 )
                 .await
             }
@@ -941,6 +959,7 @@ impl MinerNode {
     /// * `peer`     - Sending peer's socket address
     /// * `pre_block` - New block to be mined
     /// * `reward`    - The block reward to be paid on successful PoW
+    #[allow(clippy::too_many_arguments)]
     async fn receive_pre_block_and_random(
         &mut self,
         peer: SocketAddr,
@@ -949,6 +968,7 @@ impl MinerNode {
         win_coinbases: Vec<String>,
         reward: TokenAmount,
         pre_block: Option<BlockHeader>,
+        b_num: u64,
     ) -> Option<Response> {
         let process_rnd = self
             .receive_random_number(peer, pow_info, rand_num, win_coinbases)
@@ -958,6 +978,10 @@ impl MinerNode {
         } else {
             false
         };
+
+        self.filter_locked_coinbase(b_num).await;
+        // TODO: should we check even if coinbase was not committed?
+        self.check_for_threshold_and_send_aggregation_tx().await;
 
         match (process_rnd, process_block) {
             (true, false) => Some(Response {
@@ -996,26 +1020,6 @@ impl MinerNode {
 
         // Commit our previous winnings if present
         if self.is_current_coinbase_found(&win_coinbases) {
-            // Request for UTXO set to confirm that aggregation tx has went through.
-            if let Some(ref addr) = self.last_aggregation_address {
-                let compute_addr = self.compute_address();
-
-                if let Err(e) = self
-                    .send_request_utxo_set(
-                        UtxoFetchType::AnyOf(vec![addr.clone()]),
-                        compute_addr,
-                        NodeType::Miner,
-                    )
-                    .await
-                {
-                    let error = format!("Error sending UTXO request to compute nodes: {e:?}");
-                    error!("{:?}", &error);
-                    try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
-                } else {
-                    trace!("Sending UTXO request from Miner node to confirm our previous aggregation of winnings");
-                }
-            }
-
             self.commit_found_coinbase().await;
         }
 
@@ -1050,7 +1054,7 @@ impl MinerNode {
         let current_b_num = self
             .current_block
             .lock()
-            .unwrap()
+            .await
             .as_ref()
             .map(|c| c.block.b_num);
         if new_b_num <= current_b_num {
@@ -1065,6 +1069,17 @@ impl MinerNode {
         true
     }
 
+    /// Filter locked coinbase after receiving new block to mine
+    pub async fn filter_locked_coinbase(&mut self, b_num: u64) {
+        // Remove all fields where current_block_num >= locktime
+        let mut locked_coinbase = self.get_locked_coinbase();
+        if let Some(l_coinbase) = locked_coinbase.as_mut() {
+            l_coinbase.retain(|(_, locktime)| b_num < *locktime)
+        };
+        let value = store_locked_coinbase(&self.wallet_db, locked_coinbase).await;
+        self.wallet_db.set_locked_coinbase(value);
+    }
+
     /// Verifies the block by checking the transactions using a merkle tree.
     ///
     /// ### Arguments
@@ -1074,7 +1089,7 @@ impl MinerNode {
         &self,
         tx_merkle_verification: Vec<String>,
     ) -> Option<Response> {
-        let current_block_info = self.current_block.lock().unwrap().clone().unwrap();
+        let current_block_info = self.current_block.lock().await.clone().unwrap();
         let merkle_root = current_block_info.block.txs_merkle_root_and_hash.0.clone();
         let mut valid = true;
 
@@ -1147,8 +1162,12 @@ impl MinerNode {
             return false;
         }
 
-        let coinbase = (coinbase_hash, coinbase);
-        self.current_coinbase = store_last_coinbase(&self.wallet_db, Some(coinbase)).await;
+        self.current_coinbase = store_last_coinbase(
+            &self.wallet_db,
+            Some((coinbase_hash.clone(), coinbase.clone())),
+        )
+        .await;
+
         true
     }
 
@@ -1266,6 +1285,28 @@ impl MinerNode {
             .await
             .unwrap();
 
+        // Add coinbase transaction to locked coinbase transactions
+        let coinbase_locktime = transaction
+            .outputs
+            .iter()
+            .map(|tx_out| tx_out.locktime)
+            .max()
+            .unwrap_or_default();
+
+        // Add the new coinbase to the locked coinbase
+        let mut locked_coinbase = self.get_locked_coinbase();
+        let new_locked_coinbase = if let Some(l_coinbase) = locked_coinbase.as_mut() {
+            l_coinbase.push((hash, coinbase_locktime));
+            locked_coinbase
+        } else {
+            // Locked coinbase struct is empty, so we create it
+            Some(vec![(hash, coinbase_locktime)])
+        };
+
+        // Store locked coinbase transactions
+        let value = store_locked_coinbase(&self.wallet_db, new_locked_coinbase).await;
+        self.wallet_db.set_locked_coinbase(value);
+
         // Notify the end user that a winning PoW has been found
         try_send_to_ui(
             self.ui_feedback_tx.as_ref(),
@@ -1274,77 +1315,107 @@ impl MinerNode {
             },
         )
         .await;
-
-        self.check_for_threshold_and_send_aggregation_tx().await;
     }
 
     /// Checks and aggregates all the winnings into a single address if the number of addresses stored
     /// breaches the set threshold `MAX_NO_OF_WINNINGS_HELD`
     async fn check_for_threshold_and_send_aggregation_tx(&mut self) {
-        trace!(
-            "Checking if we are holding more than {NO_OF_ADDRESSES_FOR_AGGREGATION_TX:?} addresses to trigger aggregation tx"
-        );
+        match self.aggregation_status.clone() {
+            AggregationStatus::Idle => {
+                trace!(
+                    "Checking if we are holding more than {NO_OF_ADDRESSES_FOR_AGGREGATION_TX:?} addresses to trigger aggregation tx"
+                );
 
-        // All last known addresses
-        let known_addresses = self.wallet_db.get_known_addresses();
+                // All last known addresses
+                let known_addresses = self.wallet_db.get_known_addresses();
 
-        // Check if we have a reached the threshold of addresses stored
-        if known_addresses.len() >= NO_OF_ADDRESSES_FOR_AGGREGATION_TX {
-            trace!("Winnings aggregation triggered");
+                // Check if we have a reached the threshold of addresses stored
+                if known_addresses.len() >= NO_OF_ADDRESSES_FOR_AGGREGATION_TX {
+                    trace!("Winnings aggregation triggered");
 
-            // Slice known addresses up to NO_OF_ADDRESSES_FOR_AGGREGATION_TX
-            let addresses_to_aggregate = known_addresses
-                .iter()
-                .take(NO_OF_ADDRESSES_FOR_AGGREGATION_TX)
-                .cloned()
-                .collect::<BTreeSet<_>>();
+                    // Slice known addresses up to NO_OF_ADDRESSES_FOR_AGGREGATION_TX
+                    let addresses_to_aggregate = known_addresses
+                        .iter()
+                        .take(NO_OF_ADDRESSES_FOR_AGGREGATION_TX)
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
 
-            // Fetch the aggregating transaction inputs and outputs
-            let (tx_ins, tx_outs) = self
-                .wallet_db
-                .fetch_tx_ins_and_tx_outs_merge_input_addrs(addresses_to_aggregate, None)
-                .await
-                .unwrap();
+                    // Fetch the aggregating transaction inputs and outputs
+                    let (tx_ins, tx_outs) = self
+                        .wallet_db
+                        .fetch_tx_ins_and_tx_outs_merge_input_addrs(addresses_to_aggregate, None)
+                        .await
+                        .unwrap();
 
-            // Aggregation address is last generated address,
-            // which is generated by passing `None` as the `excess_address`
-            // to `fetch_tx_ins_and_tx_outs_merge_input_addrs`
-            let aggregating_addr = self.wallet_db.get_last_generated_address();
+                    // Aggregation address is last generated address,
+                    // which is generated by passing `None` as the `excess_address`
+                    // to `fetch_tx_ins_and_tx_outs_merge_input_addrs`
+                    let aggregating_addr = self.wallet_db.get_last_generated_address().unwrap(); // Should panic if `None`
 
-            trace!(
-                "Aggregating {:?} assets to {:?}",
-                tx_ins.len(),
-                aggregating_addr
-            );
+                    trace!(
+                        "Aggregating {:?} assets to {:?}",
+                        tx_ins.len(),
+                        aggregating_addr
+                    );
 
-            // Construct aggregation transaction
-            let aggregating_tx = construct_tx_core(tx_ins, tx_outs);
+                    // Construct aggregation transaction
+                    let aggregating_tx = construct_tx_core(tx_ins, tx_outs);
 
-            trace!("Sending aggregation tx to compute node");
-            // Send aggregating Transaction to compute node
-            if let Err(e) = self
-                .send_transactions_to_compute(self.compute_addr, vec![aggregating_tx.clone()])
-                .await
-            {
-                let error = format!("Error sending aggregation tx to compute nodes: {e:?}");
-                error!("{:?}", &e);
-                try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
-                return;
+                    trace!("Sending aggregation tx to compute node");
+
+                    // Send aggregating Transaction to compute node
+                    if let Err(e) = self
+                        .send_transactions_to_compute(
+                            self.compute_addr,
+                            vec![aggregating_tx.clone()],
+                        )
+                        .await
+                    {
+                        let error = format!("Error sending aggregation tx to compute nodes: {e:?}");
+                        error!("{:?}", &e);
+                        try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error })
+                            .await;
+                        // Return if sending to compute has failed
+                        return;
+                    }
+
+                    // After aggregation, our wallets will hold only 2 addresses: one for the holding all the winnings
+                    // and the other for the excess amount(which will be `0` theoretically).
+
+                    // TODO: Should we update the wallet DB here, or only once we've got confirmation
+                    // from compute node through received UTXO set?
+                    self.wallet_db
+                        .store_payment_transaction(aggregating_tx)
+                        .await;
+
+                    trace!("Pruning the wallet of old keys after aggregation");
+                    self.wallet_db
+                        .destroy_spent_transactions_and_keys(None)
+                        .await;
+
+                    self.aggregation_status = AggregationStatus::UtxoUpdate(aggregating_addr);
+                }
             }
+            AggregationStatus::UtxoUpdate(aggregation_addr) => {
+                // Request for UTXO set to confirm that aggregation tx
+                // has went through the previous time.
+                let compute_addr = self.compute_address();
 
-            // Set last known aggregation address
-            self.last_aggregation_address = aggregating_addr;
-
-            // After aggregation, our wallets will hold only 2 addresses: one for the holding all the winnings
-            // and the other for the excess amount(which will be `0` theoretically).
-            self.wallet_db
-                .store_payment_transaction(aggregating_tx)
-                .await;
-
-            trace!("Pruning the wallet of old keys after aggregation");
-            self.wallet_db
-                .destroy_spent_transactions_and_keys(None)
-                .await;
+                if let Err(e) = self
+                    .send_request_utxo_set(
+                        UtxoFetchType::AnyOf(vec![aggregation_addr.clone()]),
+                        compute_addr,
+                        NodeType::Miner,
+                    )
+                    .await
+                {
+                    let error = format!("Error sending UTXO request to compute nodes: {e:?}");
+                    error!("{:?}", &error);
+                    try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
+                } else {
+                    trace!("Sending UTXO request from Miner node to confirm our previous aggregation of winnings");
+                }
+            }
         }
     }
 
@@ -1373,7 +1444,7 @@ impl MinerNode {
                 coinbase: mining_tx,
             }))
         };
-        let mut current_block = self.current_block.lock().unwrap();
+        let mut current_block = self.current_block.lock().await;
         *current_block = Some(new_block);
     }
 
@@ -1419,13 +1490,27 @@ impl MinerNode {
         &self.last_pow
     }
 
-    // Get the wallet db
+    /// Get the wallet db
     pub fn get_wallet_db(&self) -> &WalletDb {
         &self.wallet_db
     }
 
+    /// Get locked coinbase
+    pub fn get_locked_coinbase(&self) -> Option<Vec<(String, u64)>> {
+        self.wallet_db.get_locked_coinbase()
+    }
+
     /// Load and apply the local database to our state
     async fn load_local_db(mut self) -> Result<Self> {
+        let locked_coinbase = if let Some(cb) = load_locked_coinbase(&self.wallet_db).await? {
+            debug!("load_local_db: locked_coinbase {:?}", cb);
+            Some(cb)
+        } else {
+            None
+        };
+
+        self.wallet_db.set_locked_coinbase(locked_coinbase);
+
         self.current_coinbase = if let Some(cb) = load_last_coinbase(&self.wallet_db).await? {
             debug!("load_local_db: current_coinbase {:?}", cb);
             Some(cb)
@@ -1449,9 +1534,12 @@ impl MinerNode {
         &self.node
     }
 
-    /// Returns `true` if the miner has sent an aggregation tx and has not received the UTXO set yet.
+    /// Returns `Some` if the miner has sent an aggregation tx and has not received the UTXO set yet.
     pub fn has_aggregation_tx_active(&self) -> Option<String> {
-        self.last_aggregation_address.clone()
+        match self.aggregation_status.clone() {
+            AggregationStatus::UtxoUpdate(addr) => Some(addr),
+            _ => None,
+        }
     }
 }
 
@@ -1514,8 +1602,8 @@ impl Transactor for MinerNode {
     fn receive_utxo_set(&mut self, utxo_set: UtxoSet) -> Response {
         self.received_utxo_set = Some(utxo_set);
 
-        // Reset the last known aggregation address since we've received the UTXO set for it.
-        self.last_aggregation_address = None;
+        // Reset aggregation status.
+        self.aggregation_status = AggregationStatus::Idle;
 
         Response {
             success: true,
@@ -1531,10 +1619,6 @@ impl Transactor for MinerNode {
             .save_usable_payments_to_wallet(payments)
             .await
             .unwrap();
-
-        // Since we have received the UTXO set for the aggregating tx, let's check for wallet threshold to
-        // aggregate another batch of addresses
-        self.check_for_threshold_and_send_aggregation_tx().await;
     }
 }
 
@@ -1553,6 +1637,15 @@ async fn generate_mining_address(wallet_db: &mut WalletDb) -> String {
     let ser_addr = serialize(&addr).unwrap();
     wallet_db.set_db_value(MINING_ADDRESS_KEY, ser_addr).await;
     addr
+}
+
+/// Load locked coinbase from wallet
+async fn load_locked_coinbase(wallet_db: &WalletDb) -> Result<Option<Vec<(String, u64)>>> {
+    Ok(wallet_db
+        .get_db_value(LOCKED_COINBASE_KEY)
+        .await
+        .map(|v| deserialize(&v))
+        .transpose()?)
 }
 
 /// Load last coinbase from wallet
@@ -1576,6 +1669,20 @@ async fn store_last_coinbase(
         wallet_db.delete_db_value(LAST_COINBASE_KEY).await;
     }
     coinbase
+}
+
+/// Add to locked coinbase transactions
+async fn store_locked_coinbase(
+    wallet_db: &WalletDb,
+    locked_coinbase: Option<Vec<(String, u64)>>,
+) -> Option<Vec<(String, u64)>> {
+    if let Some(cb) = &locked_coinbase {
+        let ser_cb = serialize(cb).unwrap();
+        wallet_db.set_db_value(LOCKED_COINBASE_KEY, ser_cb).await;
+    } else {
+        wallet_db.delete_db_value(LOCKED_COINBASE_KEY).await;
+    }
+    locked_coinbase
 }
 
 /// Log the received blockchain item

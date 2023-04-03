@@ -1188,9 +1188,9 @@ impl ComputeConsensused {
         block: &mut Block,
         block_tx: &mut BTreeMap<String, Transaction>,
     ) {
-        for hash in get_inputs_previous_out_point(txs.values()) {
+        for outpoint in get_inputs_previous_out_point(txs.values()) {
             // All previous hash in valid txs set are present and must be removed.
-            self.utxo_set.remove_tracked_utxo_entry(hash);
+            self.utxo_set.remove_tracked_utxo_entry(outpoint);
         }
         block.transactions.extend(txs.keys().cloned());
         block_tx.append(&mut txs);

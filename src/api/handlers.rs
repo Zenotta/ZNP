@@ -309,7 +309,7 @@ pub async fn get_current_mining_block(
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
-    let data: Option<BlockPoWReceived> = current_block.lock().unwrap().clone();
+    let data: Option<BlockPoWReceived> = current_block.lock().await.clone();
     r.into_ok(
         "Current mining block successfully retrieved",
         json_serialize_embed(data),

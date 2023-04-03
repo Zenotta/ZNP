@@ -1,6 +1,8 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{BLOCK_PREPEND, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
+use crate::constants::{
+    BLOCK_PREPEND, COINBASE_MATURITY, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL,
+};
 use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
 };
@@ -1076,6 +1078,27 @@ pub fn create_receipt_asset_tx_from_sig(
     let tx_hash = drs_tx_hash_create.unwrap_or_else(|| construct_tx_hash(&tx));
 
     Ok((tx, tx_hash))
+}
+
+/// Constructs a coinbase transaction
+/// TODO: Adding block number to coinbase construction non-ideal. Consider moving to Compute
+/// construction or mining later
+///
+/// ### Arguments
+///
+/// * `b_num`       - Block number for the current coinbase block
+/// * `amount`      - Amount of tokens allowed in coinbase
+/// * `address`     - Address to send the coinbase amount to
+pub fn construct_coinbase_tx(b_num: u64, amount: TokenAmount, address: String) -> Transaction {
+    let tx_in = TxIn::new_from_script(Script::new_for_coinbase(b_num));
+    let tx_out = TxOut {
+        value: Asset::Token(amount),
+        script_public_key: Some(address),
+        locktime: b_num + COINBASE_MATURITY,
+        ..Default::default()
+    };
+
+    construct_tx_core(vec![tx_in], vec![tx_out])
 }
 
 /// Confert to ApiKeys data structure

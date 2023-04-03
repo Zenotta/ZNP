@@ -93,6 +93,10 @@ pub const MR_PRIME_ITERS: u32 = 15;
 /// Number of old backups to keep before purging
 pub const OLD_BACKUP_COUNT: usize = 5;
 
+/// Coinbase locktime constant
+/// TODO: Update to 5 once locktime tests are introduced
+pub const COINBASE_MATURITY: u64 = if cfg!(test) { 0 } else { 100 };
+
 /*------- TESTS -------*/
 
 #[cfg(test)]

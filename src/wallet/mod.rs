@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::{error, fmt, io};
 use tokio::task;
+use tracing::warn;
 pub mod fund_store;
 pub use fund_store::FundStore;
 
@@ -37,6 +38,9 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 ///
 /// TODO: Determine the remaining functions that require the `Result` wrapper for error handling
 pub type Result<T> = std::result::Result<T, WalletDbError>;
+
+/// Wrapper for locked coinbase
+pub type LockedCoinbaseWithMutex = Arc<Mutex<Option<Vec<(String, u64)>>>>;
 
 /// Enum for errors that occur during WalletDb operations
 #[derive(Debug)]
@@ -129,6 +133,7 @@ pub struct WalletDb {
     db: Arc<Mutex<SimpleDb>>,
     encryption_key: secretbox::Key,
     ui_feedback_tx: Option<tokio::sync::mpsc::Sender<Rs2JsMsg>>,
+    locked_coinbase: LockedCoinbaseWithMutex,
     last_generated_address: Option<String>,
 }
 
@@ -149,6 +154,7 @@ impl WalletDb {
         db.write(batch).unwrap();
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
+            locked_coinbase: Arc::new(Mutex::new(None)),
             encryption_key: masterkey,
             ui_feedback_tx: None,
             last_generated_address: None,
@@ -161,6 +167,20 @@ impl WalletDb {
     /// * `tx` - The channel to send UI feedback messages to
     pub fn set_ui_feedback_tx(&mut self, tx: tokio::sync::mpsc::Sender<Rs2JsMsg>) {
         self.ui_feedback_tx = Some(tx);
+    }
+
+    /// Set locked coinbase value
+    ///
+    /// ## Arguments
+    /// * `value` - The locked coinbase value
+    pub fn set_locked_coinbase(&mut self, value: Option<Vec<(String, u64)>>) {
+        let mut locked_coinbase = self.locked_coinbase.lock().unwrap();
+        *locked_coinbase = value;
+    }
+
+    /// Get locked coinbase value
+    pub fn get_locked_coinbase(&self) -> Option<Vec<(String, u64)>> {
+        self.locked_coinbase.lock().unwrap().clone()
     }
 
     /// Test old passphrase and then change to a new passphrase
@@ -456,7 +476,7 @@ impl WalletDb {
         input_addresses: BTreeSet<String>,
         excess_address: Option<String>,
     ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
-        let (tx_cons, total_amounts, tx_used) = self
+        let (tx_cons, asset, tx_used) = self
             .fetch_inputs_for_payment_from_supplied_input_addrs(input_addresses)
             .await
             .unwrap();
@@ -466,11 +486,7 @@ impl WalletDb {
             None => self.generate_payment_address().await.0,
         };
 
-        let tx_outs = total_amounts
-            .into_iter()
-            .map(|a| TxOut::new_asset(excess_addr.clone(), a))
-            .collect();
-
+        let tx_outs: Vec<TxOut> = vec![TxOut::new_asset(excess_addr, asset)];
         let tx_ins = self.consume_inputs_for_payment(tx_cons, tx_used).await;
 
         Ok((tx_ins, tx_outs))
@@ -555,9 +571,15 @@ impl WalletDb {
     ) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
         let db = self.db.clone();
         let encryption_key = self.encryption_key.clone();
+        let locked_coinbase = self.get_locked_coinbase();
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
-            fetch_inputs_for_payment_from_db(&db, asset_required, &encryption_key)
+            fetch_inputs_for_payment_from_db(
+                &db,
+                asset_required,
+                &encryption_key,
+                locked_coinbase.as_ref(),
+            )
         })
         .await?
     }
@@ -572,12 +594,18 @@ impl WalletDb {
     pub async fn fetch_inputs_for_payment_from_supplied_input_addrs(
         &self,
         addresses: BTreeSet<String>,
-    ) -> Result<(Vec<TxConstructor>, Vec<Asset>, Vec<(OutPoint, String)>)> {
+    ) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
         let db = self.db.clone();
+        let locked_coinbase = self.get_locked_coinbase();
         let encryption_key = self.encryption_key.clone();
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
-            fetch_inputs_for_payment_from_supplied_input_addrs_db(&db, addresses, &encryption_key)
+            fetch_inputs_for_payment_from_supplied_input_addrs_db(
+                &db,
+                addresses,
+                &encryption_key,
+                locked_coinbase.as_ref(),
+            )
         })
         .await?
     }
@@ -920,10 +948,15 @@ pub fn fetch_inputs_for_payment_from_db(
     db: &SimpleDb,
     asset_required: Asset,
     encryption_key: &secretbox::Key,
+    locked_coinbase: Option<&Vec<(String, u64)>>,
 ) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
     let mut tx_cons = Vec::new();
     let mut tx_used = Vec::new();
-    let fund_store = get_fund_store(db);
+    let mut fund_store = get_fund_store(db);
+    // We need to filter here, because we are fetching inputs for a transaction
+    if let Some(count) = fund_store.filter_locked_coinbase(locked_coinbase) {
+        warn!("{count} locked coinbase transaction(s) filtered out");
+    }
     let mut amount_made = Asset::default_of_type(&asset_required);
 
     if !fund_store.running_total().has_enough(&asset_required) {
@@ -951,29 +984,26 @@ pub fn fetch_inputs_for_payment_from_supplied_input_addrs_db(
     db: &SimpleDb,
     addresses: BTreeSet<String>,
     encryption_key: &secretbox::Key,
-) -> Result<(Vec<TxConstructor>, Vec<Asset>, Vec<(OutPoint, String)>)> {
-    let mut tx_cons = Vec::new();
-    let mut tx_used = Vec::new();
+    locked_coinbase: Option<&Vec<(String, u64)>>,
+) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
     // Only use addresses that actually contain assets
     let addresses_to_use = retrieve_non_empty_addresses(addresses, db);
-    let fund_store = get_fund_store(db);
+    let mut fund_store = get_fund_store(db);
+    // We need to filter here because we are fetching inputs for a transaction
+    if let Some(count) = fund_store.filter_locked_coinbase(locked_coinbase) {
+        warn!("{count} locked coinbase transaction(s) filtered out");
+    }
     let fund_store_txs = fund_store.into_transactions();
-    let mut amounts_made = Vec::new();
+    let mut txs_to_use = Vec::new();
 
     for addr in addresses_to_use {
-        let tx_to_use = fund_store_txs
+        fund_store_txs
             .iter()
-            .filter(|(out_p, _)| addr == get_transaction_store(db, out_p).key_address);
-
-        for (out_p, amount) in tx_to_use {
-            let (cons, used) = tx_constructor_from_prev_out(db, out_p.clone(), encryption_key);
-            tx_cons.push(cons);
-            tx_used.push(used);
-            amounts_made.push(amount.clone());
-        }
+            .filter(|(out_p, _)| addr == get_transaction_store(db, out_p).key_address)
+            .for_each(|(op, asset)| txs_to_use.push((op.clone(), asset.clone())));
     }
 
-    Ok((tx_cons, amounts_made, tx_used))
+    fetch_inputs_from_supplied_txs_for_payment_from_db(db, txs_to_use, encryption_key)
 }
 
 /// Make TxConstructors from stored TxOut
@@ -986,7 +1016,7 @@ pub fn fetch_inputs_from_supplied_txs_for_payment_from_db(
 ) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
     let mut tx_cons = Vec::new();
     let mut tx_used = Vec::new();
-    let mut amount_made = Asset::Token(TokenAmount(0));
+    let mut amount_made = Asset::Token(TokenAmount(0)); // TODO: Allow any asset type here
 
     for (out_p, amount) in addresses {
         if amount_made.add_assign(&amount) {

@@ -1461,6 +1461,7 @@ impl ComputeNode {
                     win_coinbases: win_coinbases.clone(),
                     block: Some(header.clone()),
                     reward: *reward,
+                    b_num: header.b_num,
                 },
             )
             .await
@@ -1478,6 +1479,7 @@ impl ComputeNode {
                     win_coinbases,
                     block: None,
                     reward: *reward,
+                    b_num: header.b_num,
                 },
             )
             .await

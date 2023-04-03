@@ -446,6 +446,7 @@ pub enum MineRequest {
         win_coinbases: Vec<String>,
         reward: TokenAmount,
         block: Option<BlockHeader>,
+        b_num: u64,
     },
     SendBlockchainItem {
         key: String,

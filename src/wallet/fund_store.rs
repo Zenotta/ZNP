@@ -3,6 +3,7 @@ use naom::primitives::transaction::OutPoint;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+
 /// A reference to fund stores, where `transactions` contains the hash
 /// of the transaction and its holding `AssetValue`
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +45,41 @@ impl FundStore {
         &self.transactions
     }
 
-    //Returns a page (or nearest page) with tranasactions
+    /// Filters out locked coinbase transactions, updating the running total.
+    ///
+    /// Returns amount of filtered out coinbase transactions due to locktime
+    ///
+    /// # Arguments
+    /// * `locked_coinbase` - A vector of tuples containing the transaction hash and the block height at which it is locked
+    pub fn filter_locked_coinbase(
+        &mut self,
+        locked_coinbase: Option<&Vec<(String, u64)>>,
+    ) -> Option<u64> {
+        let mut out_points_locked = Vec::new();
+        if let Some(locked_coinbase) = locked_coinbase {
+            for (t_hash, _) in locked_coinbase {
+                out_points_locked = self
+                    .transactions
+                    .keys()
+                    .cloned()
+                    .filter(|out_p| out_p.t_hash == t_hash.clone())
+                    .collect::<Vec<OutPoint>>();
+
+                out_points_locked.iter().for_each(|out_p| {
+                    if let Some(asset_locked) = self.transactions.remove(out_p) {
+                        self.running_total.update_sub(&asset_locked)
+                    }
+                });
+            }
+        }
+        if out_points_locked.is_empty() {
+            None
+        } else {
+            Some(out_points_locked.len() as u64)
+        }
+    }
+
+    /// Returns a page (or nearest page) with tranasactions
     pub fn transaction_pages(&self, page: usize) -> &BTreeMap<OutPoint, Asset> {
         if let Some(page_ref) = self.transaction_pages.get(page) {
             return page_ref;
@@ -56,7 +91,7 @@ impl FundStore {
         self.transaction_pages.first().unwrap()
     }
 
-    //get the current number of pages
+    /// Get the current number of pages
     pub fn transaction_pages_len(&self) -> usize {
         self.transaction_pages.len()
     }
