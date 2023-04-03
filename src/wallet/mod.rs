@@ -155,6 +155,10 @@ impl WalletDb {
         })
     }
 
+    /// Set the UI feedback channel
+    ///
+    /// ## Arguments
+    /// * `tx` - The channel to send UI feedback messages to
     pub fn set_ui_feedback_tx(&mut self, tx: tokio::sync::mpsc::Sender<Rs2JsMsg>) {
         self.ui_feedback_tx = Some(tx);
     }
@@ -1052,10 +1056,16 @@ pub fn destroy_spent_transactions_and_keys(
     (remove_key_addresses, spent_txs)
 }
 
-/// Retrieve addresses from a subset that DO NOT contain assets from the wallet
-pub fn retrieve_empty_addresses(
+/// Retrieve addresses from a subset that may or may not contain assets
+///
+/// ## Arguments
+/// * `addresses` - The subset of addresses to filter
+/// * `db` - The database to use
+/// * `look_for_empty` - If true, return addresses that DO NOT contain assets
+pub fn retrieve_empty_or_non_empty_addresses(
     mut addresses: BTreeSet<String>,
     db: &SimpleDb,
+    look_for_empty: bool,
 ) -> BTreeSet<String> {
     let fund_store = get_fund_store(db);
     let fund_store_txs = fund_store.transactions();
@@ -1065,25 +1075,25 @@ pub fn retrieve_empty_addresses(
         .map(|out_p| get_transaction_store(db, out_p).key_address)
         .collect();
 
-    addresses.retain(|addr| !unspent_key_addresses.contains(addr));
+    if look_for_empty {
+        addresses.retain(|addr| !unspent_key_addresses.contains(addr));
+    } else {
+        addresses.retain(|addr| unspent_key_addresses.contains(addr));
+    }
     addresses
+}
+
+/// Retrieve addresses from a subset that DO NOT contain assets from the wallet
+pub fn retrieve_empty_addresses(addresses: BTreeSet<String>, db: &SimpleDb) -> BTreeSet<String> {
+    retrieve_empty_or_non_empty_addresses(addresses, db, true)
 }
 
 /// Retrieve addresses from a subset that contain assets from the wallet
 pub fn retrieve_non_empty_addresses(
-    mut addresses: BTreeSet<String>,
+    addresses: BTreeSet<String>,
     db: &SimpleDb,
 ) -> BTreeSet<String> {
-    let fund_store = get_fund_store(db);
-    let fund_store_txs = fund_store.transactions();
-
-    let unspent_key_addresses: BTreeSet<_> = fund_store_txs
-        .keys()
-        .map(|out_p| get_transaction_store(db, out_p).key_address)
-        .collect();
-
-    addresses.retain(|addr| unspent_key_addresses.contains(addr));
-    addresses
+    retrieve_empty_or_non_empty_addresses(addresses, db, false)
 }
 
 /// Make TxConstructor from stored TxOut
