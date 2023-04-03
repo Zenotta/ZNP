@@ -206,6 +206,7 @@ impl Node {
     /// * `config`     - socket address and tls config the node listener will use.
     /// * `peer_limit` - the maximum number of peers that this node will handle.
     /// * `node_type`  - the node type that will be broadcasted on the network.
+    /// * `disable_listening` - The node will only act as a client if this is enabled
     pub async fn new(
         config: &TcpTlsConfig,
         peer_limit: usize,
