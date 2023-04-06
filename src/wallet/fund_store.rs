@@ -3,7 +3,6 @@ use naom::primitives::transaction::OutPoint;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-
 /// A reference to fund stores, where `transactions` contains the hash
 /// of the transaction and its holding `AssetValue`
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]

@@ -21,7 +21,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::{error, fmt, io};
 use tokio::task;
-use tracing::warn;
 pub mod fund_store;
 pub use fund_store::FundStore;
 
@@ -39,7 +38,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 /// TODO: Determine the remaining functions that require the `Result` wrapper for error handling
 pub type Result<T> = std::result::Result<T, WalletDbError>;
 
-/// Wrapper for locked coinbase
+/// Wrapper for locked coinbase (tx_hash, locktime)
 pub type LockedCoinbaseWithMutex = Arc<Mutex<Option<Vec<(String, u64)>>>>;
 
 /// Enum for errors that occur during WalletDb operations
@@ -53,6 +52,7 @@ pub enum WalletDbError {
     InsufficientFundsError,
     MasterKeyRetrievalError,
     MasterKeyMissingError,
+    AttemptToSpendLockedCoinbase,
 }
 
 impl fmt::Display for WalletDbError {
@@ -66,6 +66,9 @@ impl fmt::Display for WalletDbError {
             Self::InsufficientFundsError => write!(f, "InsufficientFundsError"),
             Self::MasterKeyRetrievalError => write!(f, "MasterKeyRetrievalError"),
             Self::MasterKeyMissingError => write!(f, "MasterKeyMissingError"),
+            Self::AttemptToSpendLockedCoinbase => {
+                write!(f, "AttemptToSpendLockedCoinbase")
+            }
         }
     }
 }
@@ -81,6 +84,7 @@ impl error::Error for WalletDbError {
             Self::InsufficientFundsError => None,
             Self::MasterKeyRetrievalError => None,
             Self::MasterKeyMissingError => None,
+            Self::AttemptToSpendLockedCoinbase => None,
         }
     }
 }
@@ -954,8 +958,8 @@ pub fn fetch_inputs_for_payment_from_db(
     let mut tx_used = Vec::new();
     let mut fund_store = get_fund_store(db);
     // We need to filter here, because we are fetching inputs for a transaction
-    if let Some(count) = fund_store.filter_locked_coinbase(locked_coinbase) {
-        warn!("{count} locked coinbase transaction(s) filtered out");
+    if fund_store.filter_locked_coinbase(locked_coinbase).is_some() {
+        return Err(WalletDbError::AttemptToSpendLockedCoinbase);
     }
     let mut amount_made = Asset::default_of_type(&asset_required);
 
@@ -990,8 +994,8 @@ pub fn fetch_inputs_for_payment_from_supplied_input_addrs_db(
     let addresses_to_use = retrieve_non_empty_addresses(addresses, db);
     let mut fund_store = get_fund_store(db);
     // We need to filter here because we are fetching inputs for a transaction
-    if let Some(count) = fund_store.filter_locked_coinbase(locked_coinbase) {
-        warn!("{count} locked coinbase transaction(s) filtered out");
+    if fund_store.filter_locked_coinbase(locked_coinbase).is_some() {
+        return Err(WalletDbError::AttemptToSpendLockedCoinbase);
     }
     let fund_store_txs = fund_store.into_transactions();
     let mut txs_to_use = Vec::new();
