@@ -36,17 +36,14 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 };
 
 // A coordinated command sent through the RAFT to all peers
-#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum CoordinatedCommand {
-    PauseNodes { b_num: u64 },
+    PauseNodes {
+        b_num: u64,
+    },
+    #[default]
     ResumeNodes,
     ApplySharedConfig,
-}
-
-impl Default for CoordinatedCommand {
-    fn default() -> Self {
-        CoordinatedCommand::ResumeNodes
-    }
 }
 
 /// Item serialized into RaftData and process by Raft.
@@ -227,14 +224,14 @@ impl ComputeRaft {
         let use_raft = config.compute_raft != 0;
 
         if config.backup_restore.unwrap_or(false) {
-            db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC).unwrap();
+            db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC, None).unwrap();
         }
         let raft_active = ActiveRaft::new(
             config.compute_node_idx,
             &config.compute_nodes,
             use_raft,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
-            db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db),
+            db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db, None),
         );
 
         let propose_transactions_timeout_duration =
@@ -1188,9 +1185,9 @@ impl ComputeConsensused {
         block: &mut Block,
         block_tx: &mut BTreeMap<String, Transaction>,
     ) {
-        for hash in get_inputs_previous_out_point(txs.values()) {
+        for outpoint in get_inputs_previous_out_point(txs.values()) {
             // All previous hash in valid txs set are present and must be removed.
-            self.utxo_set.remove_tracked_utxo_entry(hash);
+            self.utxo_set.remove_tracked_utxo_entry(outpoint);
         }
         block.transactions.extend(txs.keys().cloned());
         block_tx.append(&mut txs);

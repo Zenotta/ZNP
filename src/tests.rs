@@ -22,7 +22,7 @@ use crate::tracked_utxo::TrackedUtxoBalance;
 use crate::transactor::Transactor;
 use crate::user::UserNode;
 use crate::utils::{
-    apply_mining_tx, calculate_reward, construct_valid_block_pow_hash,
+    apply_mining_tx, calculate_reward, construct_coinbase_tx, construct_valid_block_pow_hash,
     create_valid_create_transaction_with_ins_outs, create_valid_transaction_with_ins_outs,
     decode_pub_key, decode_secret_key, generate_pow_for_block, get_sanction_addresses,
     tracing_log_try_init, LocalEvent, StringError,
@@ -37,7 +37,7 @@ use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxOut};
 use naom::script::StackEntry;
 use naom::utils::transaction_utils::{
-    construct_address, construct_coinbase_tx, construct_receipt_create_tx, construct_tx_hash,
+    construct_address, construct_receipt_create_tx, construct_tx_hash,
     construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -215,15 +215,19 @@ async fn full_flow_multi_miners_no_raft() {
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
     test_step_start();
-
+    //
+    // Arrange
+    //
     let network_config = complete_network_config_with_n_compute_miner(11030, true, 1, 1);
-
     let mut network = Network::create_from_config(&network_config).await;
-
     let active_nodes = network.all_active_nodes().clone();
     let miner_addr = &active_nodes[&NodeType::Miner][0];
     let compute_addr = &active_nodes[&NodeType::Compute][0];
     let mut prev_mining_reward = TokenAmount(0);
+
+    //
+    // Act
+    //
 
     // Genesis block
     create_first_block_act(&mut network).await;
@@ -232,7 +236,7 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
 
     let mut handle_aggregation_tx: bool;
     // Create more blocks
-    for _ in 1..(NO_OF_ADDRESSES_FOR_AGGREGATION_TX * 5) {
+    for _ in 1..(NO_OF_ADDRESSES_FOR_AGGREGATION_TX * 5) + 1 {
         create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
         // Check if the miner is _about_ to send aggregation tx
@@ -262,23 +266,23 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
         .await;
 
         send_block_to_storage_act(&mut network, CfgNum::All).await;
-
-        // Assert that the miner has aggregated the winnings under a single address
-        {
-            if handle_aggregation_tx {
-                let miner_node = network.miner(miner_addr).unwrap();
-                let txs = miner_node
-                    .lock()
-                    .await
-                    .get_wallet_db()
-                    .get_fund_store()
-                    .transactions()
-                    .len();
-
-                assert_eq!(txs, 1);
-            }
-        }
     }
+
+    //
+    // Assert
+    //
+
+    // Assert that the miner has aggregated the winnings under a single address
+    let miner_node = network.miner(miner_addr).unwrap();
+    let txs = miner_node
+        .lock()
+        .await
+        .get_wallet_db()
+        .get_fund_store()
+        .transactions()
+        .len();
+
+    assert_eq!(txs, 1);
 
     test_step_complete(network).await;
 }
@@ -993,7 +997,7 @@ async fn create_block_with_seed() {
     // Assert
     //
     let expected_seed0 = Some("102382207707718734792748219972459444372508601011471438062299221139355828742917-4092482189202844858141461446747443254065713079405017303649880917821984131927979764736076459305831834761744847895656303682167530187457916798745160233343351193");
-    let expected_seed1 = Some("60615650383079966912142685083553754989278928317870105375630833988176113413620-3212338306518153913180488486456445424605922120193292479740565806825668083688230592272050897761185478426362203037991958038321363690859355756616018848392612924");
+    let expected_seed1 = Some("79517952505538256861151843445639717368411728498040253818577148745236066939200-608851237869384074028927848965267137933543514368566184368468310593042514786217666803052921017960590742912236121984406032569439142243677586678666897386789165");
     assert_eq!((seed0, seed1), (expected_seed0, expected_seed1));
 
     test_step_complete(network).await;
@@ -1111,7 +1115,6 @@ async fn proof_of_work_participation_act(network: &mut Network, cfg_num: CfgNum,
             let c_miners = &active_compute_to_miner_mapping.get(compute).unwrap();
             compute_flood_rand_and_block_to_partition(network, compute).await;
             miner_all_handle_event(network, c_miners, "Received random number successfully").await;
-
             for miner in c_miners.iter() {
                 miner_handle_event(network, miner, "Partition PoW complete").await;
                 miner_process_found_partition_pow(network, miner).await;
@@ -3190,18 +3193,16 @@ async fn reject_receipt_based_payment() {
     let mut network = Network::create_from_config(&network_config).await;
     create_first_block_act(&mut network).await;
     let mut create_receipt_asset_txs = BTreeMap::default();
-    let tx_hash = "ge595d639d53715591bd1df38fba2710";
-    create_receipt_asset_txs.insert(
-        tx_hash.to_owned(),
-        construct_receipt_create_tx(
-            0,
-            decode_pub_key(SOME_PUB_KEYS[1]).unwrap(),
-            &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
-            1,
-            DrsTxHashSpec::Create,
-            None,
-        ),
+    let tx = construct_receipt_create_tx(
+        0,
+        decode_pub_key(SOME_PUB_KEYS[1]).unwrap(),
+        &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
+        1,
+        DrsTxHashSpec::Create,
+        None,
     );
+    let tx_hash = construct_tx_hash(&tx);
+    create_receipt_asset_txs.insert(tx_hash.to_owned(), tx);
     add_transactions_act(&mut network, &create_receipt_asset_txs).await;
     proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;

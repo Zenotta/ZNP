@@ -1,7 +1,7 @@
 //! This module provides basic networking interfaces.
 
 mod error;
-mod node;
+pub mod node;
 mod stream_cancel;
 pub mod tcp_tls;
 #[cfg(test)]

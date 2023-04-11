@@ -6,11 +6,12 @@ use crate::api::utils::{
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::ComputeApi;
-use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
+use crate::miner::CurrentBlockWithMutex;
 use crate::threaded_call::ThreadedCallSender;
 use crate::utils::{ApiKeys, RoutesPoWInfo};
 use crate::wallet::WalletDb;
 use std::sync::{Arc, Mutex};
+
 use warp::{Filter, Rejection, Reply};
 
 //======= GET ROUTES =======//
@@ -173,7 +174,7 @@ pub fn debug_data(
 // GET current block being mined
 pub fn current_mining_block(
     dp: &mut DbgPaths,
-    current_block: Arc<Mutex<Option<BlockPoWReceived>>>,
+    current_block: CurrentBlockWithMutex,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,

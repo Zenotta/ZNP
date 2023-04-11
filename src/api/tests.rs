@@ -213,7 +213,7 @@ async fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
 async fn get_wallet_db(passphrase: &str) -> WalletDb {
     let simple_db = Some(get_db_with_block_no_mutex().await);
     let passphrase = Some(passphrase.to_owned());
-    WalletDb::new(DbMode::InMemory, simple_db, passphrase)
+    WalletDb::new(DbMode::InMemory, simple_db, passphrase, None).unwrap()
 }
 
 async fn get_db_with_block_no_mutex() -> SimpleDb {
@@ -254,7 +254,7 @@ async fn get_db_with_block_no_mutex() -> SimpleDb {
 
     let block_to_input = StoredSerializingBlock { block };
 
-    let mut db = new_db(DbMode::InMemory, &DB_SPEC, None);
+    let mut db = new_db(DbMode::InMemory, &DB_SPEC, None, None);
     let mut batch = db.batch_writer();
 
     // Handle block insert
@@ -370,7 +370,9 @@ async fn new_self_node_with_port(node_type: NodeType, port: u16) -> (Node, Socke
     bind_address.set_port(port);
 
     let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
-    let self_node = Node::new(&tcp_tls_config, 20, node_type).await.unwrap();
+    let self_node = Node::new(&tcp_tls_config, 20, node_type, false)
+        .await
+        .unwrap();
     socket_address.set_port(self_node.address().port());
     (self_node, socket_address)
 }
@@ -1715,7 +1717,7 @@ async fn test_post_fetch_pending() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Pending transactions successfully fetched\",\"route\":\"fetch_pending\",\"content\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g164f5ecc15d53437da5e750a613124d\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":4,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}},\"gee2591c1c5d9d0c137b1c2a0b42d1b9\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":4,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}}}]}}}}}}");
+        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Pending transactions successfully fetched\",\"route\":\"fetch_pending\",\"content\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g108cb8683f0f669686db8621a893f80\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":4,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}}}]}},\"g58c513f4120d172c5fa4faeb836435f\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":4,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}}}}}}");
 }
 
 /// Test POST update running total successful
@@ -1844,9 +1846,9 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     // Assert
     //
     let expected_response_body = match address_version {
-        Some(NETWORK_VERSION_V0) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"g3c986d587afc45a46959ab9e1da6b91\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"extra_info\":null}]}}",
-        Some(NETWORK_VERSION_TEMP) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"gda1c93379f6bce85b6cecbba5912986\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"extra_info\":null}]}}",
-        None => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"g2b7dbbcb30e6c1890cf66e10ce435b7\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"extra_info\":null}]}}",
+        Some(NETWORK_VERSION_V0) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"g13b6549a078915299a6081f54f0baa8\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"extra_info\":null}]}}",
+        Some(NETWORK_VERSION_TEMP) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"gf171a06123a55797394de71faa8bb47\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"extra_info\":null}]}}",
+        None => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"g52f00edbab20a75dc235ca1d68cf1bf\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"extra_info\":null}]}}",
         _ => Default::default()
     };
     assert_eq!(
@@ -2019,7 +2021,7 @@ async fn test_post_change_passphrase() {
     //
     // Arrange
     //
-    let db = get_wallet_db("old_passphrase").await;
+    let mut db = get_wallet_db("old_passphrase").await;
     let (payment_address, expected_address_store) = db.generate_payment_address().await;
 
     let json_body = ChangePassphraseData {

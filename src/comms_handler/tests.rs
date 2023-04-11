@@ -586,7 +586,7 @@ async fn create_config_compute_nodes(configs: Vec<TcpTlsConfig>, peer_limit: usi
     let mut nodes = Vec::new();
     for tcp_tls_config in configs {
         nodes.push(
-            Node::new(&tcp_tls_config, peer_limit, NodeType::Compute)
+            Node::new(&tcp_tls_config, peer_limit, NodeType::Compute, false)
                 .await
                 .unwrap(),
         );
@@ -604,9 +604,15 @@ async fn create_node_type_version(
     network_version: u32,
 ) -> Node {
     let tcp_tls_config = get_common_tls_config();
-    Node::new_with_version(&tcp_tls_config, peer_limit, node_type, network_version)
-        .await
-        .unwrap()
+    Node::new_with_version(
+        &tcp_tls_config,
+        peer_limit,
+        node_type,
+        network_version,
+        false,
+    )
+    .await
+    .unwrap()
 }
 
 async fn complete_compute_nodes(nodes: Vec<Node>) {

@@ -206,12 +206,21 @@ impl Node {
     /// * `config`     - socket address and tls config the node listener will use.
     /// * `peer_limit` - the maximum number of peers that this node will handle.
     /// * `node_type`  - the node type that will be broadcasted on the network.
+    /// * `disable_listening` - The node will only act as a client if this is enabled
     pub async fn new(
         config: &TcpTlsConfig,
         peer_limit: usize,
         node_type: NodeType,
+        disable_listening: bool,
     ) -> Result<Self> {
-        Self::new_with_version(config, peer_limit, node_type, NETWORK_VERSION).await
+        Self::new_with_version(
+            config,
+            peer_limit,
+            node_type,
+            NETWORK_VERSION,
+            disable_listening,
+        )
+        .await
     }
 
     /// Creates a new node.
@@ -221,11 +230,13 @@ impl Node {
     /// * `peer_limit`      - the maximum number of peers that this node will handle.
     /// * `node_type`       - the node type that will be broadcasted on the network.
     /// * `network_version` - The version of the network the node is running.
+    /// * `disable_listening` - The node will only act as a client if this is enabled
     pub async fn new_with_version(
         config: &TcpTlsConfig,
         peer_limit: usize,
         node_type: NodeType,
         network_version: u32,
+        disable_listening: bool,
     ) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
@@ -235,7 +246,7 @@ impl Node {
 
         let tcp_tls_connector = TcpTlsConnector::new(config)?;
 
-        Self {
+        let mut node = Self {
             network_version,
             listener_address,
             listener_stop_and_join_handles: Arc::new(Mutex::new(None)),
@@ -249,9 +260,12 @@ impl Node {
             event_rx: Arc::new(Mutex::new(event_rx)),
             seen_gossip_messages: Arc::new(RwLock::new(HashSet::new())),
             connect_to_handshake_contacts: false,
+        };
+
+        if !disable_listening {
+            node = node.listen(listener).await?;
         }
-        .listen(listener)
-        .await
+        Ok(node)
     }
 
     fn is_compatible(&self, node_type: NodeType, network_version: u32) -> bool {
@@ -878,13 +892,19 @@ impl Node {
         if let Some(peer_cert) = peer_cert {
             let connector = self.tcp_tls_connector.read().await;
             let peer_name = connector.socket_name_mapping(peer_in_addr);
-
-            verify_is_valid_for_dns_names(peer_cert, std::iter::once(peer_name.as_str()))?;
+            // We don't need strict DNS name validation for miner or user nodes
+            if peer_type != NodeType::Miner && peer_type != NodeType::User {
+                verify_is_valid_for_dns_names(peer_cert, std::iter::once(peer_name.as_str()))?;
+            }
         }
 
         peer.network_version = Some(network_version);
         peer.peer_type = Some(peer_type);
-        peer.public_address = Some(peer_in_addr);
+        // Derive public IP from peer_out_addr
+        let public_ip = peer_out_addr.ip();
+        // Use port from peer_in_addr
+        let public_port = peer_in_addr.port();
+        peer.public_address = Some(SocketAddr::new(public_ip, public_port));
 
         // Send handshake response which will contain contacts of all valid peers within our ring.
         let response = CommMessage::HandshakeResponse {
@@ -1231,6 +1251,7 @@ mod test {
             peer_limit,
             NodeType::Compute,
             network_version,
+            false,
         )
         .await
         .unwrap()

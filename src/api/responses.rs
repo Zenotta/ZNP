@@ -108,11 +108,12 @@ impl<'a> CallResponse<'a> {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Default, Debug, Serialize)]
 pub enum APIResponseStatus {
     Success,
     Error,
     InProgress,
+    #[default]
     Unknown,
 }
 
@@ -124,12 +125,6 @@ impl std::fmt::Display for APIResponseStatus {
             APIResponseStatus::InProgress => write!(f, "InProgress"),
             APIResponseStatus::Unknown => write!(f, "Unknown"),
         }
-    }
-}
-
-impl Default for APIResponseStatus {
-    fn default() -> Self {
-        APIResponseStatus::Unknown
     }
 }
 

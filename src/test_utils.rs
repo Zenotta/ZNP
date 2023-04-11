@@ -1374,7 +1374,7 @@ pub async fn get_bound_common_tls_configs(
         let name = &mapping[&address];
         let tls_spec = update_spec(name, tls_spec.make_tls_spec(&mapping));
         let config = TcpTlsConfig::from_tls_spec(address, &tls_spec).unwrap();
-        let config = config.with_listener(tcp_listener);
+        let config = config.with_listener(tcp_listener).await;
         configs.push(config);
     }
     configs

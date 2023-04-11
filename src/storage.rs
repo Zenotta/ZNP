@@ -165,16 +165,16 @@ impl StorageNode {
             .then(|| tcp_tls_config.clone_private_info());
         let api_keys = to_api_keys(config.api_keys.clone());
 
-        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage).await?;
+        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage, false).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
         let catchup_fetch = StorageFetch::new(&config, addr);
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
 
         if config.backup_restore.unwrap_or(false) {
-            db_utils::restore_file_backup(config.storage_db_mode, &DB_SPEC).unwrap();
+            db_utils::restore_file_backup(config.storage_db_mode, &DB_SPEC, None).unwrap();
         }
         let db = {
-            let raw_db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take());
+            let raw_db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take(), None);
             Arc::new(Mutex::new(raw_db))
         };
 

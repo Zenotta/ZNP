@@ -239,7 +239,7 @@ pub async fn get_export_keypairs(
 
 /// Gets a newly generated payment address
 pub async fn get_payment_address(
-    wallet_db: WalletDb,
+    mut wallet_db: WalletDb,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
@@ -309,7 +309,7 @@ pub async fn get_current_mining_block(
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
-    let data: Option<BlockPoWReceived> = current_block.lock().unwrap().clone();
+    let data: Option<BlockPoWReceived> = current_block.lock().await.clone();
     r.into_ok(
         "Current mining block successfully retrieved",
         json_serialize_embed(data),

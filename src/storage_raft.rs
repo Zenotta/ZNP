@@ -117,14 +117,14 @@ impl StorageRaft {
         let use_raft = config.storage_raft != 0;
 
         if config.backup_restore.unwrap_or(false) {
-            db_utils::restore_file_backup(config.storage_db_mode, &DB_SPEC).unwrap();
+            db_utils::restore_file_backup(config.storage_db_mode, &DB_SPEC, None).unwrap();
         }
         let raft_active = ActiveRaft::new(
             config.storage_node_idx,
             &config.storage_nodes,
             use_raft,
             Duration::from_millis(config.storage_raft_tick_timeout as u64),
-            db_utils::new_db(config.storage_db_mode, &DB_SPEC, raft_db),
+            db_utils::new_db(config.storage_db_mode, &DB_SPEC, raft_db, None),
         );
 
         let first_raft_peer = config.storage_node_idx == 0 || !raft_active.use_raft();

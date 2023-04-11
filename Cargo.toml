@@ -21,8 +21,8 @@ hex = "0.4.2"
 merkletree = "0.21.0"
 merkle-log = "0.0.3"
 moka = { version = "0.8.1", features = ["future"] }
-naom = { path = "../naom" }
-keccak_prime = { path = "../keccak-prime" }
+naom = { git = "https://github.com/zenotta/naom", branch="develop"}
+keccak_prime = { git = "https://github.com/zenotta/keccak-prime" }
 protobuf = "~2.0"
 raft = "0.5.0"
 rand = "0.7.3"

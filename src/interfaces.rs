@@ -13,7 +13,7 @@ use naom::primitives::transaction::{DrsTxHashSpec, TxIn};
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use rug::Integer;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
 
@@ -420,6 +420,23 @@ pub trait StorageInterface {
 
 ///============ MINER NODE ============///
 
+#[allow(clippy::enum_variant_names)]
+#[derive(Deserialize, Serialize, Clone)]
+pub enum MineApiRequest {
+    /// Get the connection status of this node
+    GetConnectionStatus,
+    /// Get mining status
+    GetMiningStatus,
+    /// Initiate pause mining
+    InitiatePauseMining,
+    /// Initiate resume mining
+    InitiateResumeMining,
+    /// Connect to to compute Node
+    ConnectToCompute,
+    // Disconnect from compute Node
+    DisconnectFromCompute,
+}
+
 /// Encapsulates miner requests
 #[derive(Serialize, Deserialize, Clone)]
 pub enum MineRequest {
@@ -429,6 +446,7 @@ pub enum MineRequest {
         win_coinbases: Vec<String>,
         reward: TokenAmount,
         block: Option<BlockHeader>,
+        b_num: u64,
     },
     SendBlockchainItem {
         key: String,
@@ -441,6 +459,8 @@ pub enum MineRequest {
     SendUtxoSet {
         utxo_set: UtxoSet,
     },
+    MinerRemovedAck,
+    MinerApi(MineApiRequest),
     Closing,
 }
 
@@ -454,6 +474,13 @@ impl fmt::Debug for MineRequest {
             SendTransactions { .. } => write!(f, "SendTransactions"),
             SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             Closing => write!(f, "Closing"),
+            MinerRemovedAck => write!(f, "MinerRemovedAck"),
+            MinerApi(MineApiRequest::GetConnectionStatus) => write!(f, "GetConnectionStatus"),
+            MinerApi(MineApiRequest::GetMiningStatus) => write!(f, "GetMiningStatus"),
+            MinerApi(MineApiRequest::InitiatePauseMining) => write!(f, "InitiatePauseMining"),
+            MinerApi(MineApiRequest::InitiateResumeMining) => write!(f, "InitiateResumeMining"),
+            MinerApi(MineApiRequest::ConnectToCompute) => write!(f, "ConnectToCompute"),
+            MinerApi(MineApiRequest::DisconnectFromCompute) => write!(f, "DisconnectFromCompute"),
         }
     }
 }
@@ -472,6 +499,23 @@ pub trait MinerInterface {
         key: String,
         item: BlockchainItem,
     ) -> Response;
+}
+
+/* ---------------- STRUCT TO ENCAPSULATE GENERAL UI FEEDBACK --------------- */
+// Note that this struct is primarly used with the desktop UI as well as
+// server-side events, and should not form part of the public API.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum Rs2JsMsg {
+    // Success message
+    Success { success: String },
+    // Error message
+    Error { error: String },
+    // Info message
+    Info { info: String },
+    // A JSON-serialized value
+    Value(serde_json::Value),
+    // Close the feedback loop
+    Exit,
 }
 
 ///============ COMPUTE NODE ============///
@@ -534,6 +578,7 @@ pub enum ComputeRequest {
     },
     CoordinatedResume,
     Closing,
+    RequestRemoveMiner,
     SendRaftCmd(RaftMessageWrapper),
 }
 
@@ -564,6 +609,7 @@ impl fmt::Debug for ComputeRequest {
             Closing => write!(f, "Closing"),
             CoordinatedPause { .. } => write!(f, "CoordinatedPause"),
             CoordinatedResume => write!(f, "CoordinatedResume"),
+            RequestRemoveMiner => write!(f, "RequestRemoveMiner"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
     }
@@ -667,6 +713,34 @@ pub enum UserApiRequest {
         address: String,
         amount: TokenAmount,
     },
+
+    /// Request to make a payment to a public key address with a given excess address
+    MakePaymentWithExcessAddress {
+        address: String,
+        amount: TokenAmount,
+        excess_address: String,
+    },
+
+    /// Request to generate a new address
+    GenerateNewAddress,
+
+    /// Get the connection status of this node
+    GetConnectionStatus,
+
+    /// Connect to compute node
+    ConnectToCompute,
+
+    /// Disconnect from compute
+    DisconnectFromCompute,
+
+    /// Delete addresses
+    DeleteAddresses { addresses: BTreeSet<String> },
+
+    /// Merge addresses to an excess address (if provided)
+    MergeAddresses {
+        addresses: BTreeSet<String>,
+        excess_address: Option<String>,
+    },
 }
 
 /// Encapsulates user requests
@@ -716,6 +790,15 @@ impl fmt::Debug for UserRequest {
             UserApi(MakeIpPayment { .. }) => write!(f, "MakeIpPayment"),
             UserApi(MakePayment { .. }) => write!(f, "MakePayment"),
             UserApi(SendCreateReceiptRequest { .. }) => write!(f, "SendCreateReceiptRequest"),
+            UserApi(MakePaymentWithExcessAddress { .. }) => {
+                write!(f, "MakePaymentWithExcessAddress")
+            }
+            UserApi(GenerateNewAddress) => write!(f, "GenerateNewAddress"),
+            UserApi(GetConnectionStatus) => write!(f, "GetConnectionStatus"),
+            UserApi(ConnectToCompute) => write!(f, "ConnectToCompute"),
+            UserApi(DisconnectFromCompute) => write!(f, "DisconnectFromCompute"),
+            UserApi(DeleteAddresses { .. }) => write!(f, "DeleteAddresses"),
+            UserApi(MergeAddresses { .. }) => write!(f, "MergeAddresses"),
 
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
