@@ -1519,7 +1519,7 @@ dependencies = [
 [[package]]
 name = "naom"
 version = "1.1.2"
-source = "git+https://github.com/zenotta/naom?branch=remove-coinbase#981396a146425f8baa564251f5084ec6b46e9ac8"
+source = "git+https://github.com/zenotta/naom?branch=develop#623f09d30dbe434a75a42ae2ac5ad783511ed78e"
 dependencies = [
  "actix-rt",
  "base64",
