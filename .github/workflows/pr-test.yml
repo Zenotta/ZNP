@@ -1,0 +1,28 @@
+name: Run integration tests
+
+on:
+  pull_request:
+    branches: ["*"]
+
+jobs:
+  integration-tests:
+    name: Integration tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install Rust
+        id: toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Run integration tests
+        timeout-minutes: 10
+        run: cargo test --release
