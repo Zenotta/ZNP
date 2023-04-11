@@ -15,17 +15,12 @@ use std::net::SocketAddr;
 use tracing::log::{debug, info};
 
 /// Different states of the mining pipeline
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MiningPipelineStatus {
+    #[default]
     Halted,
     ParticipantOnlyIntake,
     AllItemsIntake,
-}
-
-impl Default for MiningPipelineStatus {
-    fn default() -> Self {
-        MiningPipelineStatus::Halted
-    }
 }
 
 /// Change in phase.

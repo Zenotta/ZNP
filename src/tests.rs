@@ -997,7 +997,7 @@ async fn create_block_with_seed() {
     // Assert
     //
     let expected_seed0 = Some("102382207707718734792748219972459444372508601011471438062299221139355828742917-4092482189202844858141461446747443254065713079405017303649880917821984131927979764736076459305831834761744847895656303682167530187457916798745160233343351193");
-    let expected_seed1 = Some("69256442751106876616986522188814017874758533286395942024444238042799336429379-2179374393770054955342395523432039424372837652919688199655300718647698791741294521894398051740781449531814354368704027137707293454409451787859171682799280397");
+    let expected_seed1 = Some("79517952505538256861151843445639717368411728498040253818577148745236066939200-608851237869384074028927848965267137933543514368566184368468310593042514786217666803052921017960590742912236121984406032569439142243677586678666897386789165");
     assert_eq!((seed0, seed1), (expected_seed0, expected_seed1));
 
     test_step_complete(network).await;
@@ -3193,18 +3193,16 @@ async fn reject_receipt_based_payment() {
     let mut network = Network::create_from_config(&network_config).await;
     create_first_block_act(&mut network).await;
     let mut create_receipt_asset_txs = BTreeMap::default();
-    let tx_hash = "g1821fc644c65394863f1fb91d648aa4";
-    create_receipt_asset_txs.insert(
-        tx_hash.to_owned(),
-        construct_receipt_create_tx(
-            0,
-            decode_pub_key(SOME_PUB_KEYS[1]).unwrap(),
-            &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
-            1,
-            DrsTxHashSpec::Create,
-            None,
-        ),
+    let tx = construct_receipt_create_tx(
+        0,
+        decode_pub_key(SOME_PUB_KEYS[1]).unwrap(),
+        &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
+        1,
+        DrsTxHashSpec::Create,
+        None,
     );
+    let tx_hash = construct_tx_hash(&tx);
+    create_receipt_asset_txs.insert(tx_hash.to_owned(), tx);
     add_transactions_act(&mut network, &create_receipt_asset_txs).await;
     proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;

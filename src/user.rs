@@ -30,7 +30,7 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
-use tokio::sync::{mpsc};
+use tokio::sync::mpsc;
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;

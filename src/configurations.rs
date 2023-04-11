@@ -86,17 +86,12 @@ pub struct WalletTxSpec {
 }
 
 /// Configuration info for a database
-#[derive(Debug, Copy, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Default, Debug, Copy, Clone, Deserialize, PartialEq, Eq)]
 pub enum DbMode {
+    #[default]
     Live,
     Test(usize),
     InMemory,
-}
-
-impl Default for DbMode {
-    fn default() -> Self {
-        DbMode::Live
-    }
 }
 
 /// Configuration option for a compute node

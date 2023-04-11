@@ -36,17 +36,14 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 };
 
 // A coordinated command sent through the RAFT to all peers
-#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum CoordinatedCommand {
-    PauseNodes { b_num: u64 },
+    PauseNodes {
+        b_num: u64,
+    },
+    #[default]
     ResumeNodes,
     ApplySharedConfig,
-}
-
-impl Default for CoordinatedCommand {
-    fn default() -> Self {
-        CoordinatedCommand::ResumeNodes
-    }
 }
 
 /// Item serialized into RaftData and process by Raft.
