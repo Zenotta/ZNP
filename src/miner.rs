@@ -1205,14 +1205,13 @@ impl MinerNode {
             }
         };
         let is_paused = *self.pause_node.read().await;
-        if let (Err(e), false) = (
-            self.send_partition_pow(peer, p_info, partition_entry).await,
-            is_paused,
-        ) {
-            let error = format!("process_found_partition_pow PoW {:?}", e);
-            error!("{:?}", &error);
-            try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
-            return false;
+        if !is_paused {
+            if let Err(e) = self.send_partition_pow(peer, p_info, partition_entry).await {
+                let error = format!("process_found_partition_pow PoW {:?}", e);
+                error!("{:?}", &error);
+                try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
+                return false;
+            }
         }
 
         true
