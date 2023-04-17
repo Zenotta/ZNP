@@ -20,10 +20,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::{error, fmt, io};
+use tokio::sync::Mutex as TokioMutex;
 use tokio::task;
 use tracing::warn;
 pub mod fund_store;
 pub use fund_store::FundStore;
+
+/// Key for locked coinbase transactions
+pub const LOCKED_COINBASE_KEY: &str = "LockedCoinbaseKey";
 
 /// Storage key for a &[u8] of the word 'MasterKeyStore'
 pub const MASTER_KEY_STORE_KEY: &str = "MasterKeyStore";
@@ -40,7 +44,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 pub type Result<T> = std::result::Result<T, WalletDbError>;
 
 /// Wrapper for locked coinbase (tx_hash, locktime)
-pub type LockedCoinbaseWithMutex = Arc<Mutex<Option<Vec<(String, u64)>>>>;
+pub type LockedCoinbaseWithMutex = Arc<TokioMutex<Option<Vec<(String, u64)>>>>;
 
 /// Enum for errors that occur during WalletDb operations
 #[derive(Debug)]
@@ -135,6 +139,7 @@ pub struct WalletDb {
     ui_feedback_tx: Option<tokio::sync::mpsc::Sender<Rs2JsMsg>>,
     locked_coinbase: LockedCoinbaseWithMutex,
     last_generated_address: Option<String>,
+    last_locked_coinbase_filter_b_num: Option<u64>,
 }
 
 impl WalletDb {
@@ -154,10 +159,11 @@ impl WalletDb {
         db.write(batch).unwrap();
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
-            locked_coinbase: Arc::new(Mutex::new(None)),
+            locked_coinbase: Arc::new(TokioMutex::new(None)),
             encryption_key: masterkey,
             ui_feedback_tx: None,
             last_generated_address: None,
+            last_locked_coinbase_filter_b_num: None,
         })
     }
 
@@ -173,14 +179,20 @@ impl WalletDb {
     ///
     /// ## Arguments
     /// * `value` - The locked coinbase value
-    pub fn set_locked_coinbase(&mut self, value: Option<Vec<(String, u64)>>) {
-        let mut locked_coinbase = self.locked_coinbase.lock().unwrap();
+    pub async fn set_locked_coinbase(&mut self, value: Option<Vec<(String, u64)>>) {
+        let mut locked_coinbase = self.locked_coinbase.lock().await;
         *locked_coinbase = value;
     }
 
+    /// Get locked coinbase mutex
+    #[allow(clippy::type_complexity)]
+    pub fn get_locked_coinbase_mutex(&self) -> Arc<TokioMutex<Option<Vec<(String, u64)>>>> {
+        self.locked_coinbase.clone()
+    }
+
     /// Get locked coinbase value
-    pub fn get_locked_coinbase(&self) -> Option<Vec<(String, u64)>> {
-        self.locked_coinbase.lock().unwrap().clone()
+    pub async fn get_locked_coinbase(&self) -> Option<Vec<(String, u64)>> {
+        self.locked_coinbase.lock().await.clone()
     }
 
     /// Test old passphrase and then change to a new passphrase
@@ -571,7 +583,7 @@ impl WalletDb {
     ) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
         let db = self.db.clone();
         let encryption_key = self.encryption_key.clone();
-        let locked_coinbase = self.get_locked_coinbase();
+        let locked_coinbase = self.get_locked_coinbase().await;
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
             fetch_inputs_for_payment_from_db(
@@ -596,7 +608,7 @@ impl WalletDb {
         addresses: BTreeSet<String>,
     ) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
         let db = self.db.clone();
-        let locked_coinbase = self.get_locked_coinbase();
+        let locked_coinbase = self.get_locked_coinbase().await;
         let encryption_key = self.encryption_key.clone();
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
@@ -748,6 +760,47 @@ impl WalletDb {
     /// Get the wallet transaction address
     pub fn get_transaction_address(&self, out_p: &OutPoint) -> String {
         self.get_transaction_store(out_p).key_address
+    }
+
+    /// Load locked coinbase from wallet
+    pub async fn load_locked_coinbase(&mut self) -> Result<()> {
+        let mut cb = self.locked_coinbase.lock().await;
+        let locked_coinbase = self
+            .get_db_value(LOCKED_COINBASE_KEY)
+            .await
+            .map(|v| deserialize(&v))
+            .transpose()?;
+        *cb = locked_coinbase;
+        Ok(())
+    }
+
+    /// Add to locked coinbase transactions
+    pub async fn store_locked_coinbase(
+        &mut self,
+        locked_coinbase: Option<Vec<(String, u64)>>,
+    ) -> Option<Vec<(String, u64)>> {
+        if let Some(cb) = &locked_coinbase {
+            let ser_cb = serialize(cb).unwrap();
+            self.set_db_value(LOCKED_COINBASE_KEY, ser_cb).await;
+        } else {
+            self.delete_db_value(LOCKED_COINBASE_KEY).await;
+        }
+        locked_coinbase
+    }
+
+    /// Filter locked coinbase after receiving new block to mine
+    pub async fn filter_locked_coinbase(&mut self, b_num: u64) {
+        if b_num <= self.last_locked_coinbase_filter_b_num.unwrap_or_default() {
+            return; // We're not ready to filter again
+        }
+        // Remove all fields where current_block_num >= locktime
+        self.last_locked_coinbase_filter_b_num = Some(b_num);
+        let mut locked_coinbase = self.get_locked_coinbase().await;
+        if let Some(l_coinbase) = locked_coinbase.as_mut() {
+            l_coinbase.retain(|(_, locktime)| b_num < *locktime)
+        };
+        let value = self.store_locked_coinbase(locked_coinbase).await;
+        self.set_locked_coinbase(value).await;
     }
 }
 

@@ -512,6 +512,8 @@ pub enum Rs2JsMsg {
     Error { error: String },
     // Info message
     Info { info: String },
+    // Warning Message
+    Warning { warning: String },
     // A JSON-serialized value
     Value(serde_json::Value),
     // Close the feedback loop
