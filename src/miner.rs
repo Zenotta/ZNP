@@ -40,9 +40,6 @@ use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;
 
-/// Key for locked coinbase transactions
-pub const LOCKED_COINBASE_KEY: &str = "LockedCoinbaseKey";
-
 /// Key for last pow coinbase produced
 pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
 
@@ -717,6 +714,7 @@ impl MinerNode {
     pub async fn handle_receive_miner_removed_ack(&mut self, peer: SocketAddr) -> Response {
         if self.compute_address() == peer {
             *self.pause_node.write().await = true;
+            self.node.disconnect_all(Some(&[peer])).await;
             try_send_to_ui(
                 self.ui_feedback_tx.as_ref(),
                 Rs2JsMsg::Value(serde_json::json!({
@@ -979,7 +977,7 @@ impl MinerNode {
             false
         };
 
-        self.filter_locked_coinbase(b_num).await;
+        self.wallet_db.filter_locked_coinbase(b_num).await;
         // TODO: should we check even if coinbase was not committed?
         self.check_for_threshold_and_send_aggregation_tx().await;
 
@@ -1069,17 +1067,6 @@ impl MinerNode {
         true
     }
 
-    /// Filter locked coinbase after receiving new block to mine
-    pub async fn filter_locked_coinbase(&mut self, b_num: u64) {
-        // Remove all fields where current_block_num >= locktime
-        let mut locked_coinbase = self.get_locked_coinbase();
-        if let Some(l_coinbase) = locked_coinbase.as_mut() {
-            l_coinbase.retain(|(_, locktime)| b_num < *locktime)
-        };
-        let value = store_locked_coinbase(&self.wallet_db, locked_coinbase).await;
-        self.wallet_db.set_locked_coinbase(value);
-    }
-
     /// Verifies the block by checking the transactions using a merkle tree.
     ///
     /// ### Arguments
@@ -1155,18 +1142,22 @@ impl MinerNode {
             debug!("Found block in {}ms", elapsed.as_millis());
         }
 
-        if let Err(e) = self.send_pow(peer, b_num, nonce, coinbase.clone()).await {
-            let error = format!("process_found_block_pow PoW {:?}", e);
-            error!("{:?}", &error);
-            try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
-            return false;
-        }
+        let is_paused = *self.pause_node.read().await;
 
-        self.current_coinbase = store_last_coinbase(
-            &self.wallet_db,
-            Some((coinbase_hash.clone(), coinbase.clone())),
-        )
-        .await;
+        if !is_paused {
+            if let Err(e) = self.send_pow(peer, b_num, nonce, coinbase.clone()).await {
+                let error = format!("process_found_block_pow PoW {:?}", e);
+                error!("{:?}", &error);
+                try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
+                return false;
+            }
+
+            self.current_coinbase = store_last_coinbase(
+                &self.wallet_db,
+                Some((coinbase_hash.clone(), coinbase.clone())),
+            )
+            .await;
+        }
 
         true
     }
@@ -1213,12 +1204,14 @@ impl MinerNode {
                 return false;
             }
         };
-
-        if let Err(e) = self.send_partition_pow(peer, p_info, partition_entry).await {
-            let error = format!("process_found_partition_pow PoW {:?}", e);
-            error!("{:?}", &error);
-            try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
-            return false;
+        let is_paused = *self.pause_node.read().await;
+        if !is_paused {
+            if let Err(e) = self.send_partition_pow(peer, p_info, partition_entry).await {
+                let error = format!("process_found_partition_pow PoW {:?}", e);
+                error!("{:?}", &error);
+                try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
+                return false;
+            }
         }
 
         true
@@ -1294,7 +1287,7 @@ impl MinerNode {
             .unwrap_or_default();
 
         // Add the new coinbase to the locked coinbase
-        let mut locked_coinbase = self.get_locked_coinbase();
+        let mut locked_coinbase = self.get_locked_coinbase().await;
         let new_locked_coinbase = if let Some(l_coinbase) = locked_coinbase.as_mut() {
             l_coinbase.push((hash, coinbase_locktime));
             locked_coinbase
@@ -1304,8 +1297,11 @@ impl MinerNode {
         };
 
         // Store locked coinbase transactions
-        let value = store_locked_coinbase(&self.wallet_db, new_locked_coinbase).await;
-        self.wallet_db.set_locked_coinbase(value);
+        let value = self
+            .wallet_db
+            .store_locked_coinbase(new_locked_coinbase)
+            .await;
+        self.wallet_db.set_locked_coinbase(value).await;
 
         // Notify the end user that a winning PoW has been found
         try_send_to_ui(
@@ -1496,21 +1492,13 @@ impl MinerNode {
     }
 
     /// Get locked coinbase
-    pub fn get_locked_coinbase(&self) -> Option<Vec<(String, u64)>> {
-        self.wallet_db.get_locked_coinbase()
+    pub async fn get_locked_coinbase(&self) -> Option<Vec<(String, u64)>> {
+        self.wallet_db.get_locked_coinbase().await
     }
 
     /// Load and apply the local database to our state
     async fn load_local_db(mut self) -> Result<Self> {
-        let locked_coinbase = if let Some(cb) = load_locked_coinbase(&self.wallet_db).await? {
-            debug!("load_local_db: locked_coinbase {:?}", cb);
-            Some(cb)
-        } else {
-            None
-        };
-
-        self.wallet_db.set_locked_coinbase(locked_coinbase);
-
+        self.wallet_db.load_locked_coinbase().await?;
         self.current_coinbase = if let Some(cb) = load_last_coinbase(&self.wallet_db).await? {
             debug!("load_local_db: current_coinbase {:?}", cb);
             Some(cb)
@@ -1639,15 +1627,6 @@ async fn generate_mining_address(wallet_db: &mut WalletDb) -> String {
     addr
 }
 
-/// Load locked coinbase from wallet
-async fn load_locked_coinbase(wallet_db: &WalletDb) -> Result<Option<Vec<(String, u64)>>> {
-    Ok(wallet_db
-        .get_db_value(LOCKED_COINBASE_KEY)
-        .await
-        .map(|v| deserialize(&v))
-        .transpose()?)
-}
-
 /// Load last coinbase from wallet
 async fn load_last_coinbase(wallet_db: &WalletDb) -> Result<Option<(String, Transaction)>> {
     Ok(wallet_db
@@ -1669,20 +1648,6 @@ async fn store_last_coinbase(
         wallet_db.delete_db_value(LAST_COINBASE_KEY).await;
     }
     coinbase
-}
-
-/// Add to locked coinbase transactions
-async fn store_locked_coinbase(
-    wallet_db: &WalletDb,
-    locked_coinbase: Option<Vec<(String, u64)>>,
-) -> Option<Vec<(String, u64)>> {
-    if let Some(cb) = &locked_coinbase {
-        let ser_cb = serialize(cb).unwrap();
-        wallet_db.set_db_value(LOCKED_COINBASE_KEY, ser_cb).await;
-    } else {
-        wallet_db.delete_db_value(LOCKED_COINBASE_KEY).await;
-    }
-    locked_coinbase
 }
 
 /// Log the received blockchain item

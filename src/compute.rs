@@ -1438,8 +1438,16 @@ impl ComputeNode {
             b_num,
         };
 
-        let participants = self.node_raft.get_mining_participants();
-        let non_participants = self.request_list.difference(participants.lookup());
+        let miner_removal_list = self.miner_removal_list.clone();
+        let all_participants = self.node_raft.get_mining_participants();
+        let participants = all_participants
+            .iter()
+            .filter(|participant| !miner_removal_list.contains(participant))
+            .copied();
+        let non_participants = self
+            .request_list
+            .difference(all_participants.lookup())
+            .copied();
 
         let mut unsent_miners = vec![];
 
@@ -1454,7 +1462,7 @@ impl ComputeNode {
         if let Ok(unsent_nodes) = self
             .node
             .send_to_all(
-                participants.iter().copied(),
+                participants,
                 MineRequest::SendBlock {
                     pow_info,
                     rnum: rnum.clone(),
@@ -1472,7 +1480,7 @@ impl ComputeNode {
         if let Ok(unsent_nodes) = self
             .node
             .send_to_all(
-                non_participants.copied(),
+                non_participants,
                 MineRequest::SendBlock {
                     pow_info,
                     rnum,

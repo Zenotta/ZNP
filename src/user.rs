@@ -1197,6 +1197,9 @@ impl UserNode {
     /// * `block` - Block that is being mined and will be stored.
     pub async fn notified_block_mining(&mut self, peer: SocketAddr, block: Block) -> Response {
         if peer == self.compute_addr {
+            self.wallet_db
+                .filter_locked_coinbase(block.header.b_num)
+                .await;
             self.last_block_notified = block;
             // Send the block to the UI for realtime feedback
             try_send_to_ui(
