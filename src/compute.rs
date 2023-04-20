@@ -273,9 +273,14 @@ impl ComputeNode {
         self.node_raft.propose_apply_shared_config().await;
     }
 
+    /// Returns the compute node's local endpoint.
+    pub fn local_address(&self) -> SocketAddr {
+        self.node.local_address()
+    }
+
     /// Returns the compute node's public endpoint.
-    pub fn address(&self) -> SocketAddr {
-        self.node.address()
+    pub async fn public_address(&self) -> Option<SocketAddr> {
+        self.node.public_address().await
     }
 
     /// Get the node's mined block if any
@@ -817,8 +822,8 @@ impl ComputeNode {
                     match self.node.send(
                         addr,
                         ComputeRequest::SendRaftCmd(msg)).await {
-                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.address(), e),
-                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
+                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.local_address(), e),
+                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.local_address()),
                         };
                 }
                 _ = self.node_raft.timeout_propose_transactions(), if ready && !shutdown => {
@@ -1115,7 +1120,7 @@ impl ComputeNode {
     ) -> Option<Response> {
         use ComputeApiRequest::*;
 
-        if peer != self.address() {
+        if peer != self.local_address() {
             // Do not process if not internal request
             return None;
         }
@@ -1205,7 +1210,7 @@ impl ComputeNode {
     /// * `peer` - Sending peer's socket address
     async fn handle_coordinated_pause(&mut self, peer: SocketAddr, b_num: u64) -> Option<Response> {
         // We are initiation the coordinated pause
-        if self.address() == peer {
+        if self.local_address() == peer {
             let current_b_num = self.node_raft.get_current_block_num();
             let b_num_to_pause = current_b_num + b_num;
             info!("Initiating coordinated pause for b_num {}", b_num_to_pause);
@@ -1232,7 +1237,7 @@ impl ComputeNode {
     async fn handle_coordinated_resume(&mut self, peer: SocketAddr) -> Option<Response> {
         self.propose_resume_nodes().await;
         // We are initiating the coordinated resume
-        if self.address() == peer {
+        if self.local_address() == peer {
             info!("Initiating coordinated resume");
             self.initiate_resume_nodes().await.unwrap();
         }
@@ -1255,7 +1260,7 @@ impl ComputeNode {
     ) -> Option<Response> {
         self.propose_apply_shared_config().await;
         // We are initiating the shared config sending process
-        if self.address() == peer {
+        if self.local_address() == peer {
             info!("Initiating shared config");
             self.initiate_send_shared_config(shared_config)
                 .await
@@ -1495,9 +1500,11 @@ impl ComputeNode {
             unsent_miners.extend(unsent_nodes);
         }
 
-        if !unsent_miners.is_empty() {
-            self.miner_removal_list.clear();
+        if !unsent_miners.is_empty() || !self.miner_removal_list.is_empty() {
+            let miner_removal_list = self.miner_removal_list.clone();
+            unsent_miners.extend(miner_removal_list);
             self.flush_stale_miners(unsent_miners);
+            self.miner_removal_list.clear();
         }
 
         Ok(())
@@ -2081,7 +2088,10 @@ impl ComputeApi for ComputeNode {
 
     fn pause_nodes(&mut self, b_num: u64) -> Response {
         if self
-            .inject_next_event(self.address(), ComputeRequest::CoordinatedPause { b_num })
+            .inject_next_event(
+                self.local_address(),
+                ComputeRequest::CoordinatedPause { b_num },
+            )
             .is_err()
         {
             return Response {
@@ -2097,7 +2107,7 @@ impl ComputeApi for ComputeNode {
 
     fn resume_nodes(&mut self) -> Response {
         if self
-            .inject_next_event(self.address(), ComputeRequest::CoordinatedResume)
+            .inject_next_event(self.local_address(), ComputeRequest::CoordinatedResume)
             .is_err()
         {
             return Response {
@@ -2117,7 +2127,7 @@ impl ComputeApi for ComputeNode {
     ) -> Response {
         if self
             .inject_next_event(
-                self.address(),
+                self.local_address(),
                 ComputeRequest::SendSharedConfig { shared_config },
             )
             .is_err()

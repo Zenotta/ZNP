@@ -106,7 +106,7 @@ use tokio::{
 };
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::codec::{length_delimited, FramedRead, FramedWrite, LengthDelimitedCodec};
-use tracing::{error, info_span, trace, warn, Span};
+use tracing::{error, info, info_span, trace, warn, Span};
 use tracing_futures::Instrument;
 
 extern crate serde_json;
@@ -132,8 +132,10 @@ type CloseListener = Option<(oneshot::Sender<()>, JoinHandle<()>)>;
 pub struct Node {
     /// Node network version.
     network_version: u32,
-    /// This node's listener address.
-    listener_address: SocketAddr,
+    /// This node's local listener address.
+    local_listener_address: SocketAddr,
+    // This node's public listener address.
+    public_listener_address: Arc<RwLock<Option<SocketAddr>>>,
     /// Stop channel tx and joining handle for this node listener loop.
     listener_stop_and_join_handles: Arc<Mutex<CloseListener>>,
     /// Pause accepting and starting connections.
@@ -241,14 +243,15 @@ impl Node {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         let listener = TcpTlsListner::new(config).await?;
-        let listener_address = listener.listener_address();
-        let span = info_span!("node", ?listener_address);
+        let local_listener_address = listener.listener_address();
+        let span = info_span!("node", ?local_listener_address);
 
         let tcp_tls_connector = TcpTlsConnector::new(config)?;
 
         let mut node = Self {
             network_version,
-            listener_address,
+            local_listener_address,
+            public_listener_address: Arc::new(RwLock::new(None)), // Will get filled on handshake success
             listener_stop_and_join_handles: Arc::new(Mutex::new(None)),
             listener_and_connect_paused: Arc::new(RwLock::new(false)),
             tcp_tls_connector: Arc::new(RwLock::new(tcp_tls_connector)),
@@ -465,7 +468,7 @@ impl Node {
 
     /// Stop accepting new connections
     pub async fn stop_listening(&mut self) -> Vec<JoinHandle<()>> {
-        trace!("stop_listening {:?}", self.listener_address);
+        trace!("stop_listening {:?}", self.local_listener_address);
         if let Some((stop_tx, handle)) = self.listener_stop_and_join_handles.lock().await.take() {
             stop_tx.send(()).unwrap();
             vec![handle]
@@ -665,7 +668,7 @@ impl Node {
             CommMessage::HandshakeRequest {
                 network_version: self.network_version,
                 node_type: self.node_type,
-                public_address: self.listener_address,
+                public_address: self.local_listener_address,
             },
         )
         .await
@@ -688,9 +691,15 @@ impl Node {
         })?)
     }
 
-    /// Returns this node's listener address.
-    pub fn address(&self) -> SocketAddr {
-        self.listener_address
+    /// Returns this node's local listener address.
+    pub fn local_address(&self) -> SocketAddr {
+        self.local_listener_address
+    }
+
+    /// Returns this node's public listener address.
+    pub async fn public_address(&self) -> Option<SocketAddr> {
+        let public_listener_address = self.public_listener_address.read().await;
+        *public_listener_address
     }
 
     /// Handles incoming messages from a peer waiting for an handshake.
@@ -700,7 +709,7 @@ impl Node {
     /// * `send_tx`      - a queue to send messages to the peer.
     /// * `messages`     - stream of incoming messages.
     async fn handle_peer_recv_handshake(
-        &self,
+        &mut self,
         peer_addr: SocketAddr,
         peer_cert: Option<TlsCertificate>,
         send_tx: ResultBytesSender,
@@ -726,10 +735,10 @@ impl Node {
                         )
                         .await
                     {
-                        Ok(()) => return Ok(public_address),
+                        Ok(addr) => return Ok(addr),
                         Err(e) => {
                             // Drop peer since we don't expect handshake to succeed.
-                            warn!(?public_address, "handle_handshake_request: {}", e);
+                            warn!(?peer_addr, "handle_handshake_request: {}", e);
                             return Err(e);
                         }
                     }
@@ -738,9 +747,16 @@ impl Node {
                     network_version,
                     node_type,
                     contacts,
+                    public_address,
                 } => {
                     match self
-                        .handle_handshake_response(peer_addr, network_version, node_type, contacts)
+                        .handle_handshake_response(
+                            peer_addr,
+                            network_version,
+                            node_type,
+                            contacts,
+                            public_address,
+                        )
                         .await
                     {
                         Ok(()) => return Ok(peer_addr),
@@ -858,15 +874,30 @@ impl Node {
 
     /// Handles an incoming handshake request.
     /// Sends a handshake response with a list of peers we know within our ring.
+    ///
+    /// ## Arguments
+    /// * `peer_out_addr`   - address of a remote peer resolved from the connection.
+    /// * `peer_in_addr`    - address of a remote peer's listener; provided by peer.
+    /// * `peer_cert`       - peer's certificate.
+    /// * `send_tx`         - channel to send messages to the peer.
+    /// * `network_version` - network version of the peer.
+    /// * `peer_type`       - type of the peer.
     async fn handle_handshake_request(
         &self,
         peer_out_addr: SocketAddr,
-        peer_in_addr: SocketAddr,
+        mut peer_in_addr: SocketAddr,
         peer_cert: &Option<TlsCertificate>,
         mut send_tx: ResultBytesSender,
         network_version: u32,
         peer_type: NodeType,
-    ) -> Result<()> {
+    ) -> Result<SocketAddr> {
+        info!(
+            "peer_out_addr: {:?}, peer_in_addr: {:?}",
+            peer_out_addr, peer_in_addr
+        );
+        // Derive IP from peer_out_addr; resolved through connection
+        // Use port from peer_in_addr; resolved through handshake data
+        peer_in_addr = SocketAddr::new(peer_out_addr.ip(), peer_in_addr.port());
         if !self.is_compatible(peer_type, network_version) {
             return Err(CommsError::PeerIncompatible(PeerInfo {
                 node_type: Some(peer_type),
@@ -889,44 +920,45 @@ impl Node {
                 address: Some(peer_out_addr),
             }))?;
 
-        if let Some(peer_cert) = peer_cert {
-            let connector = self.tcp_tls_connector.read().await;
-            let peer_name = connector.socket_name_mapping(peer_in_addr);
-            // We don't need strict DNS name validation for miner or user nodes
-            if peer_type != NodeType::Miner && peer_type != NodeType::User {
-                verify_is_valid_for_dns_names(peer_cert, std::iter::once(peer_name.as_str()))?;
+        // We only do DNS validation on compute and storage nodes
+        if self.node_type == NodeType::Compute || self.node_type == NodeType::Storage {
+            if let Some(peer_cert) = peer_cert {
+                let connector = self.tcp_tls_connector.read().await;
+                let peer_name = connector.socket_name_mapping(peer_in_addr);
+                // We don't need strict DNS name validation for miner or user nodes
+                if peer_type != NodeType::Miner && peer_type != NodeType::User {
+                    verify_is_valid_for_dns_names(peer_cert, std::iter::once(peer_name.as_str()))?;
+                }
             }
         }
 
         peer.network_version = Some(network_version);
         peer.peer_type = Some(peer_type);
-        // Derive public IP from peer_out_addr
-        let public_ip = peer_out_addr.ip();
-        // Use port from peer_in_addr
-        let public_port = peer_in_addr.port();
-        peer.public_address = Some(SocketAddr::new(public_ip, public_port));
+        peer.public_address = Some(peer_in_addr);
 
         // Send handshake response which will contain contacts of all valid peers within our ring.
         let response = CommMessage::HandshakeResponse {
             network_version: self.network_version,
             node_type: self.node_type,
             contacts: self.ring_peers(&all_peers).collect(),
+            public_address: peer_in_addr,
         };
         let message = Bytes::from(serialize(&response)?);
         self.send_bytes(peer_out_addr, &mut send_tx, message)
             .await?;
 
-        Ok(())
+        Ok(peer_in_addr)
     }
 
     /// Handles a handshake response.
     /// Connects to all nodes that we receive in the contact list.
     async fn handle_handshake_response(
-        &self,
+        &mut self,
         peer_addr: SocketAddr,
         network_version: u32,
         peer_type: NodeType,
         contacts: Vec<SocketAddr>,
+        public_address: SocketAddr,
     ) -> Result<()> {
         if !self.is_compatible(peer_type, network_version) {
             return Err(CommsError::PeerIncompatible(PeerInfo {
@@ -982,6 +1014,9 @@ impl Node {
             }
         }
 
+        // Assign public listener address here
+        let mut public_listener_address = self.public_listener_address.write().await;
+        *public_listener_address = Some(public_address);
         Ok(())
     }
 
@@ -1036,7 +1071,7 @@ impl Node {
         // and manage the peer state transitions.
         let (messages, close_receiver_tx) = get_messages_stream(sock_in);
         let sock_in_h = tokio::spawn({
-            let node = self.clone();
+            let mut node = self.clone();
             let send_tx = send_tx.clone().into();
             let peers = self.peers.clone();
             async move {
@@ -1192,32 +1227,34 @@ mod test {
         //
         let mut n1 = create_compute_node_version(2, 0).await;
         let mut n2 = create_compute_node_version(2, 0).await;
-        let conn_address_1 = vec![n2.address()];
-        let conn_address_2 = vec![n1.address()];
+        let conn_address_1 = vec![n2.local_address()];
+        let conn_address_2 = vec![n1.local_address()];
 
         //
         // Act
         //
 
         // No handshake
-        n1.connect_to_peer(n2.address()).await.unwrap();
+        n1.connect_to_peer(n2.local_address()).await.unwrap();
         let n2_n1_addres = {
             while n2.sample_peers(1).await.is_empty() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             n2.sample_peers(1).await.into_iter().next().unwrap()
         };
-        n1.send(n2.address(), "HelloDropped2").await.unwrap();
+        n1.send(n2.local_address(), "HelloDropped2").await.unwrap();
         n2.send(n2_n1_addres, "HelloDropped1").await.unwrap();
 
         let no_handshake_unconn_1 = n1.unconnected_peers(&conn_address_1).await;
         let no_handshake_unconn_2 = n2.unconnected_peers(&conn_address_2).await;
 
         // Send handshake
-        n1.send_handshake(n2.address()).await.unwrap();
-        n1.wait_handshake_response(n2.address()).await.unwrap();
-        n1.send(n2.address(), "Hello2").await.unwrap();
-        n2.send(n1.address(), "Hello1").await.unwrap();
+        n1.send_handshake(n2.local_address()).await.unwrap();
+        n1.wait_handshake_response(n2.local_address())
+            .await
+            .unwrap();
+        n1.send(n2.local_address(), "Hello2").await.unwrap();
+        n2.send(n1.local_address(), "Hello1").await.unwrap();
         let handshake_unconn_1 = n1.unconnected_peers(&conn_address_1).await;
         let handshake_unconn_2 = n2.unconnected_peers(&conn_address_2).await;
 

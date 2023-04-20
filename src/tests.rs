@@ -573,7 +573,8 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
 
                     let compute_nodes = network.all_active_nodes()[&NodeType::Compute].clone();
                     for c in compute_nodes {
-                        if network.compute(&c).unwrap().lock().await.address() == compute_addr {
+                        if network.compute(&c).unwrap().lock().await.local_address() == compute_addr
+                        {
                             compute_handle_event(
                                 network,
                                 &c,
@@ -2271,7 +2272,7 @@ async fn request_blockchain_item_act(
         .clone()
         .lock()
         .await
-        .address();
+        .local_address();
     miner_request_blockchain_item(network, miner_from, block_key, storage_node_addr).await;
     storage_handle_event(network, storage_to, "Blockchain item fetched from storage").await;
     storage_send_blockchain_item(network, storage_to).await;
@@ -3707,7 +3708,7 @@ async fn compute_handle_event_for_node<E: Future<Output = &'static str> + Unpin>
     reason_val: &[&str],
     exit: &mut E,
 ) {
-    let addr = c.address();
+    let addr = c.local_address();
     match c.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason_val.contains(&reason) =>
@@ -4224,7 +4225,7 @@ async fn storage_handle_event_for_node<E: Future<Output = &'static str> + Unpin>
     reason_val: &str,
     exit: &mut E,
 ) {
-    let addr = s.address();
+    let addr = s.local_address();
     match s.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>
@@ -4287,7 +4288,7 @@ async fn user_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     reason_val: &str,
     exit: &mut E,
 ) {
-    let addr = u.address();
+    let addr = u.local_address();
     match u.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>
@@ -4414,7 +4415,7 @@ async fn user_trigger_update_wallet_from_utxo_set(
     let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
     u.api_inputs()
         .1
-        .inject_next_event(u.address(), request)
+        .inject_next_event(u.local_address(), request)
         .unwrap();
 }
 
@@ -4536,7 +4537,7 @@ async fn miner_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     reason_val: &str,
     exit: &mut E,
 ) {
-    let addr = m.address();
+    let addr = m.local_address();
     match m.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>

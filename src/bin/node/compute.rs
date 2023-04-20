@@ -19,7 +19,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     let api_inputs = node.api_inputs();
 
     println!("API Inputs: {api_inputs:?}");
-    println!("Started node at {}", node.address());
+    println!("Started node at {}", node.local_address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let local_event_tx = node.local_event_tx().clone();

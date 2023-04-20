@@ -896,7 +896,7 @@ pub fn loops_re_connect_disconnect(
 /// * `node_conn`   - Node to use for connections
 /// * `paused`      - Current paused state
 async fn pause_and_disconnect_on_path(node_conn: &mut Node, paused: bool) -> bool {
-    let disconnect = format!("disconnect_{}", node_conn.address().port());
+    let disconnect = format!("disconnect_{}", node_conn.local_address().port());
     let path = std::path::Path::new(&disconnect);
     match (paused, path.exists()) {
         (false, true) => {
@@ -908,7 +908,7 @@ async fn pause_and_disconnect_on_path(node_conn: &mut Node, paused: bool) -> boo
 
             warn!(
                 "disconnect from {:?} all {:?}",
-                node_conn.address(),
+                node_conn.local_address(),
                 diconnect_addrs
             );
             node_conn.set_pause_listening(true).await;
@@ -940,9 +940,9 @@ async fn shutdown_on_path(
     local_events_tx: &mut LocalEventSender,
     shutdown_num: Option<(u64, bool)>,
 ) -> Option<(u64, bool)> {
-    let shutdown_now_one = format!("shutdown_now_{}", node_conn.address().port());
+    let shutdown_now_one = format!("shutdown_now_{}", node_conn.local_address().port());
     let shutdown_now_all = "shutdown_now".to_owned();
-    let shutdown_coord_one = format!("shutdown_coordinated_{}", node_conn.address().port());
+    let shutdown_coord_one = format!("shutdown_coordinated_{}", node_conn.local_address().port());
     let shutdown_coord_all = "shutdown_coordinated".to_owned();
 
     let now = true;
@@ -963,7 +963,7 @@ async fn shutdown_on_path(
         if shutdown_num != result {
             warn!(
                 "shutdown from {:?} at block {:?} now={}",
-                node_conn.address(),
+                node_conn.local_address(),
                 block_num,
                 is_now
             );

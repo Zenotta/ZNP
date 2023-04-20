@@ -452,7 +452,7 @@ pub async fn post_make_payment(
         }
     };
 
-    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+    if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:make_payment error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
@@ -496,7 +496,7 @@ pub async fn post_make_ip_payment(
         }
     };
 
-    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+    if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:make_payment error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
@@ -524,7 +524,7 @@ pub async fn post_request_donation(
 
     let request = UserRequest::UserApi(UserApiRequest::RequestDonation { paying_peer });
 
-    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+    if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:request_donation error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
@@ -544,7 +544,7 @@ pub async fn post_update_running_total(
     });
     let r = CallResponse::new(route, &call_id);
 
-    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+    if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:update_running_total error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
@@ -627,7 +627,7 @@ pub async fn post_create_receipt_asset_user(
     });
     let r = CallResponse::new(route, &call_id);
 
-    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+    if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:create_receipt_asset error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }

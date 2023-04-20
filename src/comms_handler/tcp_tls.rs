@@ -14,7 +14,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio_rustls::rustls::internal::pemfile::{certs, pkcs8_private_keys};
 use tokio_rustls::rustls::{
-    AllowAnyAuthenticatedClient, Certificate, ClientConfig, NoClientAuth, PrivateKey,
+    AllowAnyAnonymousOrAuthenticatedClient, Certificate, ClientConfig, NoClientAuth, PrivateKey,
     RootCertStore, ServerConfig, Session,
 };
 use tokio_rustls::webpki::{DNSNameRef, EndEntityCert};
@@ -267,7 +267,7 @@ fn new_server_config(config: &TcpTlsConfig) -> Result<ServerConfig> {
     let certs = load_certs(&config.pem_certs)?;
     let mut keys = load_keys(&config.pem_pkcs8_private_keys)?;
     let _client_auth = NoClientAuth::new();
-    let client_auth = AllowAnyAuthenticatedClient::new(root_store);
+    let client_auth = AllowAnyAnonymousOrAuthenticatedClient::new(root_store);
 
     let mut server_config = ServerConfig::new(client_auth);
     server_config.set_single_cert(certs, keys.remove(0))?;

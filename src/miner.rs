@@ -265,9 +265,14 @@ impl MinerNode {
         Ok(self.node.inject_next_event(from_peer_addr, data)?)
     }
 
+    /// Returns the node's local endpoint.
+    pub fn local_address(&self) -> SocketAddr {
+        self.node.local_address()
+    }
+
     /// Returns the node's public endpoint.
-    pub fn address(&self) -> SocketAddr {
-        self.node.address()
+    pub async fn public_address(&self) -> Option<SocketAddr> {
+        self.node.public_address().await
     }
 
     /// Returns the node's compute endpoint.
@@ -689,7 +694,7 @@ impl MinerNode {
         peer: SocketAddr,
         api_request: MineApiRequest,
     ) -> Option<Response> {
-        if self.address() != peer {
+        if self.local_address() != peer {
             return None; // Only Process internal requests
         }
         match api_request {
@@ -714,7 +719,6 @@ impl MinerNode {
     pub async fn handle_receive_miner_removed_ack(&mut self, peer: SocketAddr) -> Response {
         if self.compute_address() == peer {
             *self.pause_node.write().await = true;
-            self.node.disconnect_all(Some(&[peer])).await;
             try_send_to_ui(
                 self.ui_feedback_tx.as_ref(),
                 Rs2JsMsg::Value(serde_json::json!({
@@ -1102,8 +1106,8 @@ impl MinerNode {
 
     /// Util function to get a socket address for PID table checks
     fn get_comparison_addr(&self) -> SocketAddr {
-        let comparison_port = self.address().port() + 1;
-        let mut comparison_addr = self.address();
+        let comparison_port = self.local_address().port() + 1;
+        let mut comparison_addr = self.local_address();
 
         comparison_addr.set_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
         comparison_addr.set_port(comparison_port);
@@ -1469,7 +1473,22 @@ impl MinerNode {
         pow_info: PowInfo,
         rand_num: Vec<u8>,
     ) {
-        let address_proof = format_parition_pow_address(self.address());
+        // Here we need to generate a proof-of-work based on the public address
+        // resolved by the compute node.
+        let address_proof = if let Some(public_addr) = self.public_address().await {
+            format_parition_pow_address(public_addr)
+        } else {
+            let msg: &str = "No public address found for partition PoW";
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Error {
+                    error: msg.to_string(),
+                },
+            )
+            .await;
+            error!("{}", msg);
+            return;
+        };
 
         self.wait_partition_task = true;
         self.mining_partition_task = RunningTaskOrResult::Running(utils::generate_pow_for_address(
