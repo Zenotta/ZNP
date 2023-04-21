@@ -15,7 +15,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     let (config, user_config) = configuration(load_settings(matches));
     println!("Start node with config {:?}", config);
     let node = MinerNode::new(config, Default::default()).await.unwrap();
-    println!("Started node at {}", node.address());
+    println!("Started node at {}", node.local_address());
 
     let miner_api_inputs = node.api_inputs();
     let shared_wallet_db = Some(node.get_wallet_db().clone());
@@ -67,7 +67,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
             println!("Start user node with config {config:?}");
             let user_node = UserNode::new(config, shared_members).await.unwrap();
             let api_inputs = (user_node.api_inputs(), miner_api_inputs);
-            println!("Started user node at {}", user_node.address());
+            println!("Started user node at {}", user_node.local_address());
 
             let (user_node_conn, user_addrs_to_connect, user_expected_connected_addrs) =
                 user_node.connect_info_peers();

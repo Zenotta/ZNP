@@ -25,9 +25,9 @@ async fn direct_messages() {
     let (n1, tail) = nodes.split_first_mut().unwrap();
     let (n2, _) = tail.split_first_mut().unwrap();
 
-    n2.connect_to(n1.address()).await.unwrap();
-    n2.send(n1.address(), "Hello1").await.unwrap();
-    n1.send(n2.address(), "Hello2").await.unwrap();
+    n2.connect_to(n1.local_address()).await.unwrap();
+    n2.send(n1.local_address(), "Hello1").await.unwrap();
+    n1.send(n2.local_address(), "Hello2").await.unwrap();
 
     if let Some(Event::NewFrame { peer: _, frame }) = n1.next_event().await {
         let recv_frame: &str = deserialize(&frame).unwrap();
@@ -53,9 +53,9 @@ async fn direct_prelaunch_messages() {
     let (n1, tail) = nodes.split_first_mut().unwrap();
     let (n2, _) = tail.split_first_mut().unwrap();
 
-    n2.connect_to(n1.address()).await.unwrap();
-    n2.send(n1.address(), "Hello1").await.unwrap();
-    n1.send(n2.address(), "Hello2").await.unwrap();
+    n2.connect_to(n1.local_address()).await.unwrap();
+    n2.send(n1.local_address(), "Hello1").await.unwrap();
+    n1.send(n2.local_address(), "Hello2").await.unwrap();
 
     if let Some(Event::NewFrame { peer: _, frame }) = n1.next_event().await {
         let recv_frame: &str = deserialize(&frame).unwrap();
@@ -85,7 +85,7 @@ async fn multicast() {
         .for_each(|n| n.set_connect_to_handshake_contacts(true));
 
     // Connect everyone in a ring.
-    let first_node = nodes[0].address();
+    let first_node = nodes[0].local_address();
     let mut conn_handles = Vec::new();
 
     for (i, node) in nodes.iter().enumerate().skip(1) {
@@ -145,8 +145,8 @@ async fn disconnect_connection(subset: bool) {
     let (n1, tail) = nodes.split_first_mut().unwrap();
     let (n2, tail) = tail.split_first_mut().unwrap();
     let (n3, _) = tail.split_first_mut().unwrap();
-    n2.connect_to(n1.address()).await.unwrap();
-    n3.connect_to(n1.address()).await.unwrap();
+    n2.connect_to(n1.local_address()).await.unwrap();
+    n3.connect_to(n1.local_address()).await.unwrap();
 
     //
     // Act
@@ -154,19 +154,19 @@ async fn disconnect_connection(subset: bool) {
     let (actual2, actual3) = {
         let mut joins = Vec::new();
         let subset = if subset {
-            Some(vec![n3.address()])
+            Some(vec![n3.local_address()])
         } else {
-            joins.append(&mut n2.take_join_handle(n1.address()).await);
+            joins.append(&mut n2.take_join_handle(n1.local_address()).await);
             None
         };
-        joins.append(&mut n3.take_join_handle(n1.address()).await);
+        joins.append(&mut n3.take_join_handle(n1.local_address()).await);
         joins.append(&mut n1.disconnect_all(subset.as_deref()).await);
         join_all(joins.into_iter()).await;
 
-        let actual2_1 = n2.send(n1.address(), "Hello1_2").await;
-        let actual1_2 = n1.send(n2.address(), "Hello2_1").await;
-        let actual3_1 = n3.send(n1.address(), "Hello1_3").await;
-        let actual1_3 = n1.send(n3.address(), "Hello3_1").await;
+        let actual2_1 = n2.send(n1.local_address(), "Hello1_2").await;
+        let actual1_2 = n1.send(n2.local_address(), "Hello2_1").await;
+        let actual3_1 = n3.send(n1.local_address(), "Hello1_3").await;
+        let actual1_3 = n1.send(n3.local_address(), "Hello3_1").await;
 
         ((actual2_1, actual1_2), (actual3_1, actual1_3))
     };
@@ -214,13 +214,13 @@ async fn listen_paused_resumed_stopped() {
     // Act
     //
     n1.set_pause_listening(true).await;
-    let actual_paused_to = n2.connect_to(n1.address()).await;
-    let actual_paused_from = n1.connect_to(n2.address()).await;
+    let actual_paused_to = n2.connect_to(n1.local_address()).await;
+    let actual_paused_from = n1.connect_to(n2.local_address()).await;
     n1.set_pause_listening(false).await;
-    let actual_resumed = n2.connect_to(n1.address()).await;
+    let actual_resumed = n2.connect_to(n1.local_address()).await;
 
     join_all(n1.stop_listening().await).await;
-    let actual_stopped = n3.connect_to(n1.address()).await;
+    let actual_stopped = n3.connect_to(n1.local_address()).await;
 
     //
     // Assert
@@ -274,22 +274,22 @@ async fn connect_full(from_full: bool) {
     // Act
     //
     let conn_error = if from_full {
-        n1.connect_to(n2.address()).await.unwrap();
-        let err = n1.connect_to(n3.address()).await;
+        n1.connect_to(n2.local_address()).await.unwrap();
+        let err = n1.connect_to(n3.local_address()).await;
         let is_expected = matches!(err, Err(CommsError::PeerListFull));
         (err, is_expected)
     } else {
-        n2.connect_to(n1.address()).await.unwrap();
-        let err = n3.connect_to(n1.address()).await;
+        n2.connect_to(n1.local_address()).await.unwrap();
+        let err = n3.connect_to(n1.local_address()).await;
         let is_expected = matches!(err, Err(CommsError::PeerNotFound(_)));
         (err, is_expected)
     };
 
-    let actual3_1 = n3.send(n1.address(), "Hello3_1").await;
-    let actual1_3 = n1.send(n3.address(), "Hello1_3").await;
+    let actual3_1 = n3.send(n1.local_address(), "Hello3_1").await;
+    let actual1_3 = n1.send(n3.local_address(), "Hello1_3").await;
 
-    let actual2_1 = n2.send(n1.address(), "Hello2_1").await;
-    let actual1_2 = n1.send(n2.address(), "Hello1_2").await;
+    let actual2_1 = n2.send(n1.local_address(), "Hello2_1").await;
+    let actual1_2 = n1.send(n2.local_address(), "Hello1_2").await;
 
     //
     // Assert
@@ -331,14 +331,14 @@ async fn nodes_incompatible() {
     //
     // Act
     //
-    let actual_c1_2 = n1.connect_to(n2.address()).await;
-    let actual_c2_1 = n2.connect_to(n1.address()).await;
-    let actual_c1_3 = n1.connect_to(n3.address()).await;
-    let actual_c3_1 = n3.connect_to(n1.address()).await;
-    let actual_s1_2 = n1.send(n2.address(), "Hello2").await;
-    let actual_s2_1 = n2.send(n1.address(), "Hello1").await;
-    let actual_s1_3 = n1.send(n3.address(), "Hello4").await;
-    let actual_s3_1 = n3.send(n1.address(), "Hello3").await;
+    let actual_c1_2 = n1.connect_to(n2.local_address()).await;
+    let actual_c2_1 = n2.connect_to(n1.local_address()).await;
+    let actual_c1_3 = n1.connect_to(n3.local_address()).await;
+    let actual_c3_1 = n3.connect_to(n1.local_address()).await;
+    let actual_s1_2 = n1.send(n2.local_address(), "Hello2").await;
+    let actual_s2_1 = n2.send(n1.local_address(), "Hello1").await;
+    let actual_s1_3 = n1.send(n3.local_address(), "Hello4").await;
+    let actual_s3_1 = n3.send(n1.local_address(), "Hello3").await;
 
     //
     // Assert
@@ -399,12 +399,12 @@ async fn nodes_tls_mismatch() {
     //
     // Act
     //
-    let actual_c1_2 = n1.connect_to(n2.address()).await;
-    let actual_c2_1 = n2.connect_to(n1.address()).await;
-    let actual_c2_3 = n2.connect_to(n3.address()).await;
-    let actual_s1_2 = n1.send(n2.address(), "Hello2").await;
-    let actual_s2_1 = n2.send(n1.address(), "Hello1").await;
-    let actual_s2_3 = n2.send(n3.address(), "Hello4").await;
+    let actual_c1_2 = n1.connect_to(n2.local_address()).await;
+    let actual_c2_1 = n2.connect_to(n1.local_address()).await;
+    let actual_c2_3 = n2.connect_to(n3.local_address()).await;
+    let actual_s1_2 = n1.send(n2.local_address(), "Hello2").await;
+    let actual_s2_1 = n2.send(n1.local_address(), "Hello1").await;
+    let actual_s2_3 = n2.send(n3.local_address(), "Hello4").await;
 
     //
     // Assert
@@ -467,14 +467,14 @@ async fn nodes_tls_ca_mismatch() {
     //
     // Act
     //
-    let actual_c1_3 = n1.connect_to(n3.address()).await;
-    let actual_c3_1 = n3.connect_to(n1.address()).await;
-    let actual_c2_3 = n2.connect_to(n3.address()).await;
-    let actual_c3_2 = n3.connect_to(n2.address()).await;
-    let actual_s1_3 = n1.send(n3.address(), "Hello2").await;
-    let actual_s3_1 = n3.send(n1.address(), "Hello1").await;
-    let actual_s2_3 = n2.send(n3.address(), "Hello4").await;
-    let actual_s3_2 = n3.send(n2.address(), "Hello3").await;
+    let actual_c1_3 = n1.connect_to(n3.local_address()).await;
+    let actual_c3_1 = n3.connect_to(n1.local_address()).await;
+    let actual_c2_3 = n2.connect_to(n3.local_address()).await;
+    let actual_c3_2 = n3.connect_to(n2.local_address()).await;
+    let actual_s1_3 = n1.send(n3.local_address(), "Hello2").await;
+    let actual_s3_1 = n3.send(n1.local_address(), "Hello1").await;
+    let actual_s2_3 = n2.send(n3.local_address(), "Hello4").await;
+    let actual_s3_2 = n3.send(n2.local_address(), "Hello3").await;
 
     //
     // Assert
@@ -539,14 +539,14 @@ async fn nodes_tls_ca_unmapped_mismatch() {
     //
     // Act
     //
-    let actual_c1_3 = n1.connect_to(n3.address()).await;
-    let actual_c3_1 = n3.connect_to(n1.address()).await;
-    let actual_c2_3 = n2.connect_to(n3.address()).await;
-    let actual_c3_2 = n3.connect_to(n2.address()).await;
-    let actual_s1_3 = n1.send(n3.address(), "Hello2").await;
-    let actual_s3_1 = n3.send(n1.address(), "Hello1").await;
-    let actual_s2_3 = n2.send(n3.address(), "Hello4").await;
-    let actual_s3_2 = n3.send(n2.address(), "Hello3").await;
+    let actual_c1_3 = n1.connect_to(n3.local_address()).await;
+    let actual_c3_1 = n3.connect_to(n1.local_address()).await;
+    let actual_c2_3 = n2.connect_to(n3.local_address()).await;
+    let actual_c3_2 = n3.connect_to(n2.local_address()).await;
+    let actual_s1_3 = n1.send(n3.local_address(), "Hello2").await;
+    let actual_s3_1 = n3.send(n1.local_address(), "Hello1").await;
+    let actual_s2_3 = n2.send(n3.local_address(), "Hello4").await;
+    let actual_s3_2 = n3.send(n2.local_address(), "Hello3").await;
 
     //
     // Assert

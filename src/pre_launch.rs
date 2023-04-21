@@ -180,9 +180,14 @@ impl PreLaunchNode {
         })
     }
 
+    /// Returns the node's local endpoint.
+    pub fn local_address(&self) -> SocketAddr {
+        self.node.local_address()
+    }
+
     /// Returns the node's public endpoint.
-    pub fn address(&self) -> SocketAddr {
-        self.node.address()
+    pub async fn public_address(&self) -> Option<SocketAddr> {
+        self.node.public_address().await
     }
 
     /// Connect to a peer on the network.
@@ -464,7 +469,7 @@ impl PreLaunchNode {
 
     /// Floods the closing event to everyone
     pub async fn flood_closing_events(&mut self) -> Result<bool> {
-        self.shutdown_group.remove(&self.address());
+        self.shutdown_group.remove(&self.local_address());
         self.node
             .send_to_all(
                 self.pre_launch_nodes.iter().copied(),

@@ -373,7 +373,7 @@ async fn new_self_node_with_port(node_type: NodeType, port: u16) -> (Node, Socke
     let self_node = Node::new(&tcp_tls_config, 20, node_type, false)
         .await
         .unwrap();
-    socket_address.set_port(self_node.address().port());
+    socket_address.set_port(self_node.local_address().port());
     (self_node, socket_address)
 }
 

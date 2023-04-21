@@ -609,11 +609,11 @@ impl ArcNode {
 ///Dispatch to address
 async fn address(node: &ArcNode) -> SocketAddr {
     match node {
-        ArcNode::Miner(v) => v.lock().await.address(),
-        ArcNode::Compute(v) => v.lock().await.address(),
-        ArcNode::Storage(v) => v.lock().await.address(),
-        ArcNode::User(v) => v.lock().await.address(),
-        ArcNode::PreLaunch(v) => v.lock().await.address(),
+        ArcNode::Miner(v) => v.lock().await.local_address(),
+        ArcNode::Compute(v) => v.lock().await.local_address(),
+        ArcNode::Storage(v) => v.lock().await.local_address(),
+        ArcNode::User(v) => v.lock().await.local_address(),
+        ArcNode::PreLaunch(v) => v.lock().await.local_address(),
     }
 }
 
@@ -667,7 +667,7 @@ async fn raft_loop(node: &ArcNode) -> Option<(String, SocketAddr, impl Future<Ou
             let node = n.lock().await;
             Some((
                 "compute_node".to_owned(),
-                node.address(),
+                node.local_address(),
                 node.raft_loop().left_future(),
             ))
         }
@@ -675,7 +675,7 @@ async fn raft_loop(node: &ArcNode) -> Option<(String, SocketAddr, impl Future<Ou
             let node = n.lock().await;
             Some((
                 "storage_node".to_owned(),
-                node.address(),
+                node.local_address(),
                 node.raft_loop().right_future(),
             ))
         }

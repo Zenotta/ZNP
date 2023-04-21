@@ -307,6 +307,8 @@ pub enum CommMessage {
         node_type: NodeType,
         /// contacts of ring members.
         contacts: Vec<SocketAddr>,
+        /// Publicly resolved IP address of the node who made the handshake request
+        public_address: SocketAddr,
     },
     /// Gossip message, multicast to all peers within the same ring.
     Gossip {

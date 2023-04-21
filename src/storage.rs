@@ -199,9 +199,14 @@ impl StorageNode {
         .load_local_db()
     }
 
+    /// Returns the storage node's local endpoint.
+    pub fn local_address(&self) -> SocketAddr {
+        self.node.local_address()
+    }
+
     /// Returns the storage node's public endpoint.
-    pub fn address(&self) -> SocketAddr {
-        self.node.address()
+    pub async fn public_address(&self) -> Option<SocketAddr> {
+        self.node.public_address().await
     }
 
     /// Returns the storage node's API info
@@ -431,8 +436,8 @@ impl StorageNode {
                     match self.node.send(
                         addr,
                         StorageRequest::SendRaftCmd(msg)).await {
-                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.address(), e),
-                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
+                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.local_address(), e),
+                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.local_address()),
                         };
 
                 }

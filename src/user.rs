@@ -217,9 +217,14 @@ impl UserNode {
         Ok(self.node.inject_next_event(from_peer_addr, data)?)
     }
 
-    /// Returns the node's public endpoint.
-    pub fn address(&self) -> SocketAddr {
-        self.node.address()
+    /// Returns the user node's local endpoint.
+    pub fn local_address(&self) -> SocketAddr {
+        self.node.local_address()
+    }
+
+    /// Returns the user node's public endpoint.
+    pub async fn public_address(&self) -> Option<SocketAddr> {
+        self.node.public_address().await
     }
 
     /// Returns the node's compute endpoint.
@@ -667,7 +672,7 @@ impl UserNode {
     ) -> Option<Response> {
         use UserApiRequest::*;
 
-        if peer != self.address() {
+        if peer != self.local_address() {
             // Do not process if not internal request
             return None;
         }

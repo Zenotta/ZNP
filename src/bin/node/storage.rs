@@ -15,7 +15,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     println!("Start node with config {config:?}");
     let node = StorageNode::new(config, Default::default()).await.unwrap();
 
-    println!("Started node at {}", node.address());
+    println!("Started node at {}", node.local_address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let api_inputs = node.api_inputs();
