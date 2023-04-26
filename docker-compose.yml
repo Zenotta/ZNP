@@ -1,0 +1,35 @@
+version: '3'
+services:
+
+  zenotta-mempool-node: &node-default
+    image: zenotta-node
+    environment:
+      RUST_LOG: warp
+    init: true
+    ports: 
+      - '12300:12300'
+    command: node compute --config=/etc/zenotta.toml --tls_config=/etc/tls_certificates.json --initial_block_config=/etc/initial_block.json --api_config=/etc/api_config.json
+  
+  zenotta-storage-node:
+    <<: *node-default
+    ports:
+      - '12330:12330'
+    command: node storage --config=/etc/zenotta.toml --tls_config=/etc/tls_certificates.json --api_config=/etc/api_config.json
+
+  zenotta-miner-node:
+    <<: *node-default
+    ports:
+      - '12340:12340'
+    command: node miner --config=/etc/zenotta.toml --tls_config=/etc/tls_certificates.json --initial_block_config=/etc/initial_block.json --api_config=/etc/api_config.json
+
+  zenotta-alice-node:
+    <<: *node-default
+    ports:
+      - '12360:12360'
+    command: node user --config=/etc/zenotta.toml --tls_config=/etc/tls_certificates.json --initial_block_config=/etc/initial_block.json --api_config=/etc/api_config.json
+
+  zenotta-bob-node:
+    <<: *node-default
+    ports:
+      - '12361:12361'
+    command: node user --config=/etc/zenotta.toml --tls_config=/etc/tls_certificates.json --initial_block_config=/etc/initial_block.json --api_config=/etc/api_config.json
