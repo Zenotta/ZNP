@@ -289,6 +289,7 @@ impl MiningPipelineInfo {
         self.proposed_keys = Default::default();
     }
 
+    /// Cleanup all inactive participants from pipeline
     pub fn cleanup_participant_intake(&mut self, inactive_miners: &[SocketAddr]) {
         for (_, participants) in self.participants_intake.iter_mut() {
             participants
@@ -300,6 +301,7 @@ impl MiningPipelineInfo {
         }
     }
 
+    /// Cleanup all inactive mining participants from pipeline
     pub fn cleanup_participants_mining(&mut self, inactive_miners: &[SocketAddr]) {
         for (_, participants) in self.participants_mining.iter_mut() {
             participants
@@ -431,13 +433,10 @@ impl MiningPipelineInfo {
             if ps.unsorted.len() <= partition_full_size {
                 continue;
             }
-            for i in 0..partition_full_size {
-                self.swap_first_with_unicorn_item(MINER_PARTICIPATION_UN, &mut ps.unsorted[i..]);
-            }
+            self.swap_with_unicorn(MINER_PARTICIPATION_UN, &mut ps.unsorted);
             ps.unsorted.truncate(partition_full_size);
             ps.lookup = ps.unsorted.iter().copied().collect();
         }
-
         self.participants_mining = participants;
     }
 
@@ -538,19 +537,19 @@ impl MiningPipelineInfo {
         Some(&items[selection])
     }
 
-    /// Swap item at index with item at index + UNICORN-generated pseudo random number
+    /// Swap an array's items with UNICORN
     ///
     /// ### Arguments
     ///
     /// * `usage_number` - Usage number for the CSPRNG
-    pub fn swap_first_with_unicorn_item<T>(&self, usage_number: u128, items: &mut [T]) {
-        if items.len() < 2 {
-            return;
+    /// * `items` - Items to be swapped
+    pub fn swap_with_unicorn<T>(&self, usage_number: u128, items: &mut [T]) {
+        for i in 0..items.len() {
+            let prn = self.get_unicorn_prn(usage_number);
+            // let prn = self.get_unicorn_prn(usage_number + i as u128);
+            let selection = i + prn as usize % (items.len() - i);
+            items.swap(i, selection);
         }
-
-        let prn = self.get_unicorn_prn(usage_number);
-        let selection = 1 + prn as usize % (items.len() - 1);
-        items.swap(0, selection);
     }
 
     /// Create ComputeConsensused from imported data in upgrade
