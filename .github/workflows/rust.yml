@@ -11,12 +11,20 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v3
     - name: Build
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+    - name: archive artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: znp-build
+        path: |
+          target/release/node
+          target/release/upgrade
+          src/bin/*.toml 
+          src/bin/*.json 
+          src/bin/*.sh 
