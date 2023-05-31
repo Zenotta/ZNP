@@ -59,6 +59,10 @@ impl Participants {
         self.unsorted.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.unsorted.is_empty()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &'_ SocketAddr> + '_ {
         self.unsorted.iter()
     }
