@@ -154,6 +154,7 @@ pub struct ComputeNode {
     request_list_first_flood: Option<usize>,
     miner_removal_list: Arc<RwLock<BTreeSet<SocketAddr>>>,
     miner_received_api_keys: Arc<RwLock<BTreeMap<SocketAddr, String>>>,
+    minimum_coinbase_locktime: Option<usize>,
     storage_addr: SocketAddr,
     sanction_list: Vec<String>,
     user_notification_list: BTreeSet<SocketAddr>,
@@ -238,6 +239,7 @@ impl ComputeNode {
             miner_received_api_keys: Default::default(),
             request_list: Default::default(),
             sanction_list: config.sanction_list,
+            minimum_coinbase_locktime: config.minimum_coinbase_locktime,
             jurisdiction: config.jurisdiction,
             request_list_first_flood: Some(config.compute_minimum_miner_pool_len),
             partition_full_size: config.compute_partition_full_size,
@@ -528,7 +530,24 @@ impl ComputeNode {
                 );
             }
 
-            !tx.is_coinbase()
+            let tx_is_coinbase = tx.is_coinbase();
+
+            if tx_is_coinbase {
+                if let Some(min_cb_locktime) = self.minimum_coinbase_locktime {
+                    for op in tx.outputs.iter() {
+                        // Early return since coinbase locktime is lesser
+                        // manually set minimum coinbase locktime
+                        if op.locktime as usize <= min_cb_locktime {
+                            info!("Coinbase TX is invalid");
+                            info!("OP locktime {:?}", op.locktime);
+                            info!("MIN locktime {:?}", min_cb_locktime);
+                            return false
+                        }
+                    }
+                }
+            }
+
+            !tx_is_coinbase
                 && tx_is_valid(tx, |v| {
                     utxo_set
                         .get(v)

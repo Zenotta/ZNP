@@ -5,7 +5,7 @@ echo "//-----------------------------//"
 echo "Building nodes"
 echo "//-----------------------------//"
 echo " "
-cargo build --bins --release
+#cargo build --bins --release
 if [ "$?" != "0" ]
 then
     exit 1
@@ -34,10 +34,10 @@ then
     MINER_LOG=$4
     USER_LOG=$5
 else
-    STORAGE_LOG=debug
-    COMPUTE_LOG=warn
-    MINER_LOG=warn
-    USER_LOG=debug
+    STORAGE_LOG=trace
+    COMPUTE_LOG=trace
+    MINER_LOG=trace
+    USER_LOG=trace
 fi
 
 if [ "$2" = "ca_nodes" ]

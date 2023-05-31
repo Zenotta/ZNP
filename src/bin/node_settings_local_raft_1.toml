@@ -13,6 +13,7 @@ compute_minimum_miner_pool_len = 1
 jurisdiction = "US"
 backup_block_modulo = 4
 peer_limit = 1000
+minimum_coinbase_locktime = 100
 #backup_restore = true
 
 [compute_unicorn_fixed_param]

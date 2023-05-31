@@ -99,6 +99,7 @@ pub struct NetworkConfig {
     pub mining_api_key: Option<String>,
     pub compute_miner_whitelist: MinerWhitelist,
     pub peer_limit: usize,
+    pub minimum_coinbase_locktime: Option<usize>,
 }
 
 /// Node info to create node
@@ -1146,6 +1147,7 @@ async fn init_compute(
         enable_trigger_messages_pipeline_reset: config.enable_pipeline_reset,
         compute_miner_whitelist: config.compute_miner_whitelist.clone(),
         peer_limit: config.peer_limit,
+        minimum_coinbase_locktime: config.minimum_coinbase_locktime,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Compute {}", info);

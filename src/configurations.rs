@@ -152,6 +152,8 @@ pub struct ComputeNodeConfig {
     pub compute_miner_whitelist: MinerWhitelist,
     /// Limit for the number of peers this node can have
     pub peer_limit: usize,
+    /// A check for a minimum coinbase timelock that can be an optional
+    pub minimum_coinbase_locktime: Option<usize>,
 }
 
 /// Configuration option for a compute node that can be shared across peers
