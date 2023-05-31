@@ -1445,7 +1445,7 @@ impl MinerNode {
             match self.aggregation_status.clone() {
                 AggregationStatus::Idle => {
                     trace!(
-                    "Checking if we are holding more than {address_aggregation_limit:?} addresses to trigger aggregation tx"
+                    "Checking if we are holding more than {address_aggregation_limit:?} unlocked addresses to trigger aggregation tx"
                 );
 
                     // All last known addresses
