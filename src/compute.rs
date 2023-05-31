@@ -1255,7 +1255,7 @@ impl ComputeNode {
                         .get(&peer)
                         .cloned();
 
-                    if !self.check_miner_whitelisted(peer, mining_api_key) {
+                    if !self.check_miner_whitelisted(peer, mining_api_key).await {
                         debug!("Removing unauthorized miner: {peer:?}");
                         if let Err(e) = self.node.send(peer, MineRequest::MinerNotAuthorized).await
                         {
@@ -1376,7 +1376,7 @@ impl ComputeNode {
     ///
     /// * `miner_address` - Address of the miner
     /// * `miner_api_key` - API key of the miner
-    pub fn check_miner_whitelisted(
+    pub async fn check_miner_whitelisted(
         &self,
         miner_address: SocketAddr,
         miner_api_key: Option<String>,
@@ -1385,17 +1385,27 @@ impl ComputeNode {
             // No whitelisting active, all miners are allowed
             return true;
         }
-        self.node_raft
+        let whitelisted = self
+            .node_raft
             .get_compute_miner_whitelist_api_keys()
             .unwrap_or_default()
-            .contains(&miner_api_key.unwrap_or_default())
+            .contains(&miner_api_key.clone().unwrap_or_default())
             || self
                 .node_raft
                 .get_compute_miner_whitelist_addresses()
                 .unwrap_or_default()
                 .iter()
                 // Only check IP address, since we do not know ephemeral port beforehand
-                .any(|addr| addr.ip() == miner_address.ip())
+                .any(|addr| addr.ip() == miner_address.ip());
+
+        let api_key_already_present = self
+            .miner_received_api_keys
+            .read()
+            .await
+            .iter()
+            .any(|(_, v)| Some(v) == miner_api_key.as_ref());
+
+        whitelisted && !api_key_already_present
     }
 
     /// Receive a partition request from a miner node
@@ -1411,14 +1421,11 @@ impl ComputeNode {
     ) -> Response {
         trace!("Received partition request from {peer:?}");
         // TODO: Change structure to be more efficient
-        if !self.check_miner_whitelisted(peer, mining_api_key.clone())
-            || self
-                .miner_received_api_keys
-                .read()
-                .await
-                .iter()
-                .any(|(_, v)| Some(v) == mining_api_key.as_ref())
-        {
+        let miner_whitelisted = self
+            .check_miner_whitelisted(peer, mining_api_key.clone())
+            .await;
+
+        if !miner_whitelisted {
             debug!("Removing unauthorized miner: {peer:?}");
             if let Err(e) = self.node.send(peer, MineRequest::MinerNotAuthorized).await {
                 error!("Error sending request to {peer:?}: {e}");
