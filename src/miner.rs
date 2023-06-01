@@ -1448,15 +1448,35 @@ impl MinerNode {
                     "Checking if we are holding more than {address_aggregation_limit:?} unlocked addresses to trigger aggregation tx"
                 );
 
-                    // All last known addresses
-                    let known_addresses = self.wallet_db.get_known_addresses();
+                    let mut unlocked_addrs = BTreeSet::new();
+                    let locked_cb = self.wallet_db.get_locked_coinbase().await;
+
+                    if let Some(locked_txs_bnum) = locked_cb {
+                        let locked_tx: Vec<&String> =
+                            locked_txs_bnum.iter().map(|(addr, _)| addr).collect();
+                        let fund_store = self.wallet_db.get_fund_store();
+
+                        // All known txs
+                        let fund_store_txs = fund_store.transactions();
+                        for out_p in fund_store_txs
+                            .keys()
+                            .filter(|op| !locked_tx.contains(&&op.t_hash))
+                        {
+                            let address = self
+                                .wallet_db
+                                .get_transaction_store(out_p)
+                                .key_address
+                                .clone();
+                            unlocked_addrs.insert(address);
+                        }
+                    }
 
                     // Check if we have a reached the threshold of addresses stored
-                    if known_addresses.len() >= address_aggregation_limit {
+                    if unlocked_addrs.len() >= address_aggregation_limit {
                         trace!("Winnings aggregation triggered");
 
                         // Slice known addresses up to address_aggregation_limit
-                        let addresses_to_aggregate = known_addresses
+                        let addresses_to_aggregate = unlocked_addrs
                             .iter()
                             .take(address_aggregation_limit)
                             .cloned()
