@@ -1,4 +1,5 @@
 use crate::compute::ComputeError;
+use crate::compute_raft::ComputeConsensusedRuntimeData;
 use crate::configurations::ComputeNodeSharedConfig;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
@@ -598,6 +599,10 @@ pub enum ComputeRequest {
     CoordinatedResume,
     Closing,
     RequestRemoveMiner,
+    RequestRuntimeData,
+    SendRuntimeData {
+        runtime_data: ComputeConsensusedRuntimeData,
+    },
     SendRaftCmd(RaftMessageWrapper),
 }
 
@@ -629,6 +634,8 @@ impl fmt::Debug for ComputeRequest {
             CoordinatedPause { .. } => write!(f, "CoordinatedPause"),
             CoordinatedResume => write!(f, "CoordinatedResume"),
             RequestRemoveMiner => write!(f, "RequestRemoveMiner"),
+            RequestRuntimeData => write!(f, "RequestRuntimeData"),
+            SendRuntimeData { .. } => write!(f, "SendRuntimeData"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
     }

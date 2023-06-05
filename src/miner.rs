@@ -263,6 +263,16 @@ impl MinerNode {
         )
     }
 
+    /// Get mining API key
+    pub fn get_mining_api_key(&self) -> Option<String> {
+        self.mining_api_key.clone()
+    }
+
+    /// Set mining API key
+    pub fn set_mining_api_key(&mut self, api_key: Option<String>) {
+        self.mining_api_key = api_key;
+    }
+
     /// Only used during initialization
     pub async fn force_set_paused(&mut self, paused: bool) {
         *self.pause_node.write().await = paused;
