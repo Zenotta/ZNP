@@ -297,7 +297,6 @@ impl Node {
 
                 let peers: Vec<SocketAddr> = node
                     .peers
-                    .clone()
                     .read()
                     .await
                     .iter()
@@ -727,6 +726,14 @@ impl Node {
             .write()
             .await
             .retain(|addr, _| !stale_peers.contains(addr))
+    }
+
+    pub fn abort_heartbeat_handle(&mut self) {
+        if let Some(handle) = self.heartbeat_handle.as_mut() {
+            handle.abort()
+        }
+
+        self.heartbeat_handle = None;
     }
 
     /// Prepares and sends a handshake message to a given peer.
