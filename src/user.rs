@@ -166,6 +166,7 @@ impl UserNode {
             config.peer_limit,
             NodeType::User,
             disable_tcp_listener,
+            false,
         )
         .await?;
 

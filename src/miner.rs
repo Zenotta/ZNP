@@ -205,6 +205,7 @@ impl MinerNode {
             config.peer_limit,
             NodeType::Miner,
             disable_tcp_listener,
+            false,
         )
         .await?;
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());

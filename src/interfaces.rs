@@ -326,6 +326,7 @@ pub enum CommMessage {
         /// Unique message ID. Can be used for correspondence between requests and responses.
         id: Token,
     },
+    HeartBeatProbe(Token),
 }
 
 ///============ STORAGE NODE ============///

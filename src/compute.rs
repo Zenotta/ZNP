@@ -191,7 +191,14 @@ impl ComputeNode {
             .compute_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
 
-        let node = Node::new(&tcp_tls_config, config.peer_limit, NodeType::Compute, false).await?;
+        let node = Node::new(
+            &tcp_tls_config,
+            config.peer_limit,
+            NodeType::Compute,
+            false,
+            true,
+        )
+        .await?;
         let node_raft = ComputeRaft::new(&config, extra.raft_db.take()).await;
 
         if config.backup_restore.unwrap_or(false) {
