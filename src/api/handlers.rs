@@ -55,6 +55,11 @@ pub struct Addresses {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WalletInfo {
     running_total: f64,
+    running_total_tokens: u64,
+    locked_total: f64,
+    locked_total_tokens: u64,
+    available_total: f64,
+    available_total_tokens: u64,
     receipt_total: BTreeMap<String, u64>, /* DRS tx hash - amount */
     addresses: AddressesWithOutPoints,
 }
@@ -171,7 +176,7 @@ pub async fn get_wallet_info(
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
 
-    let fund_store = match wallet_db.get_fund_store_err() {
+    let mut fund_store = match wallet_db.get_fund_store_err() {
         Ok(fund) => fund,
         Err(_) => return r.into_err_internal(ApiErrorType::CannotAccessWallet),
     };
@@ -199,15 +204,20 @@ pub async fn get_wallet_info(
             .or_insert_with(Vec::new)
             .push(OutPointData::new(out_point.clone(), asset.clone()));
     }
-
-    let total = fund_store.running_total();
-    let (running_total, receipt_total) = (
-        total.tokens.0 as f64 / D_DISPLAY_PLACES,
-        total.receipts.clone(),
-    );
+    let locked_coinbase = wallet_db.get_locked_coinbase().await;
+    let total = fund_store.running_total().clone();
+    let available = {
+        fund_store.filter_locked_coinbase(locked_coinbase.as_ref());
+        fund_store.running_total()
+    };
     let send_val = WalletInfo {
-        running_total,
-        receipt_total,
+        running_total: total.tokens.0 as f64 / D_DISPLAY_PLACES,
+        running_total_tokens: total.tokens.0,
+        locked_total: (total.tokens.0 - available.tokens.0) as f64 / D_DISPLAY_PLACES,
+        locked_total_tokens: (total.tokens.0 - available.tokens.0),
+        available_total: available.tokens.0 as f64 / D_DISPLAY_PLACES,
+        available_total_tokens: available.tokens.0,
+        receipt_total: total.receipts,
         addresses,
     };
 
