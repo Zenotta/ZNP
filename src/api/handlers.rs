@@ -57,7 +57,7 @@ struct WalletInfo {
     running_total: f64,
     running_total_tokens: u64,
     locked_total: f64,
-    locket_total_tokens: u64,
+    locked_total_tokens: u64,
     available_total: f64,
     available_total_tokens: u64,
     receipt_total: BTreeMap<String, u64>, /* DRS tx hash - amount */
@@ -214,7 +214,7 @@ pub async fn get_wallet_info(
         running_total: total.tokens.0 as f64 / D_DISPLAY_PLACES,
         running_total_tokens: total.tokens.0,
         locked_total: (total.tokens.0 - available.tokens.0) as f64 / D_DISPLAY_PLACES,
-        locket_total_tokens: (total.tokens.0 - available.tokens.0),
+        locked_total_tokens: (total.tokens.0 - available.tokens.0),
         available_total: available.tokens.0 as f64 / D_DISPLAY_PLACES,
         available_total_tokens: available.tokens.0,
         receipt_total: total.receipts,
