@@ -170,7 +170,14 @@ impl StorageNode {
             .then(|| tcp_tls_config.clone_private_info());
         let api_keys = to_api_keys(config.api_keys.clone());
 
-        let node = Node::new(&tcp_tls_config, config.peer_limit, NodeType::Storage, false).await?;
+        let node = Node::new(
+            &tcp_tls_config,
+            config.peer_limit,
+            NodeType::Storage,
+            false,
+            false,
+        )
+        .await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
         let catchup_fetch = StorageFetch::new(&config, addr);
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());

@@ -98,15 +98,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::{fmt, io};
-use tokio::time::{timeout, Duration};
+use tokio::time::{interval, timeout, Duration};
 use tokio::{
-    self,
+    self, spawn,
     sync::{mpsc, oneshot, Mutex, RwLock},
     task::JoinHandle,
 };
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::codec::{length_delimited, FramedRead, FramedWrite, LengthDelimitedCodec};
-use tracing::{error, info, info_span, trace, warn, Span};
+use tracing::{debug, error, info, info_span, trace, warn, Span};
 use tracing_futures::Instrument;
 
 extern crate serde_json;
@@ -118,6 +118,9 @@ const FANOUT: usize = 8;
 
 /// Max. number of gossip message retransmissions.
 const GOSSIP_MAX_TTL: u8 = 4;
+
+/// Generic Heartbeat interval in seconds
+const HEART_BEAT_INTERVAL: u64 = 3; // seconds
 
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5); // 5 seconds is just a wild guess. Tweak if necessary.
 
@@ -160,6 +163,8 @@ pub struct Node {
     seen_gossip_messages: Arc<RwLock<HashSet<Token>>>,
     /// Connect to all unknown contacts in HandshakeResponse
     connect_to_handshake_contacts: bool,
+    /// Threadhandle for an HeartBeat Prober
+    heartbeat_handle: Option<Arc<JoinHandle<()>>>,
 }
 
 pub(crate) struct Peer {
@@ -214,6 +219,7 @@ impl Node {
         peer_limit: usize,
         node_type: NodeType,
         disable_listening: bool,
+        send_heartbeat_messages: bool,
     ) -> Result<Self> {
         Self::new_with_version(
             config,
@@ -221,6 +227,7 @@ impl Node {
             node_type,
             NETWORK_VERSION,
             disable_listening,
+            send_heartbeat_messages,
         )
         .await
     }
@@ -239,6 +246,7 @@ impl Node {
         node_type: NodeType,
         network_version: u32,
         disable_listening: bool,
+        send_heartbeat_messages: bool,
     ) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
@@ -263,12 +271,51 @@ impl Node {
             event_rx: Arc::new(Mutex::new(event_rx)),
             seen_gossip_messages: Arc::new(RwLock::new(HashSet::new())),
             connect_to_handshake_contacts: false,
+            heartbeat_handle: None,
         };
 
         if !disable_listening {
             node = node.listen(listener).await?;
         }
+
+        if send_heartbeat_messages {
+            let handle = node.begin_sending_heartbeat_messages().await;
+            node.heartbeat_handle = Some(Arc::new(handle));
+        }
+
         Ok(node)
+    }
+
+    // Periodically sends out an heartbeat message to all connected peers to identify
+    // and disconnect from stale peers.
+    async fn begin_sending_heartbeat_messages(&self) -> JoinHandle<()> {
+        let mut node = self.clone();
+        spawn(async move {
+            let mut interval = interval(Duration::from_secs(HEART_BEAT_INTERVAL));
+            loop {
+                interval.tick().await;
+
+                let peers: Vec<SocketAddr> = node
+                    .peers
+                    .read()
+                    .await
+                    .iter()
+                    .map(|(addr, _)| addr)
+                    .cloned()
+                    .collect();
+                debug!("Peers to send HB {:?}", peers);
+
+                match node.send_heartbeat_message(peers.into_iter()).await {
+                    Ok(unsent_peers) => {
+                        if !unsent_peers.is_empty() {
+                            warn!("Following peers failed to receive HB probe: {unsent_peers:?}");
+                            node.flush_stale_peers(unsent_peers).await;
+                        }
+                    }
+                    Err(e) => error!("Error sending Heartbeat {e:?}"),
+                }
+            }
+        })
     }
 
     fn is_compatible(&self, node_type: NodeType, network_version: u32) -> bool {
@@ -284,7 +331,7 @@ impl Node {
     async fn listen(self, listener: TcpTlsListner) -> Result<Self> {
         let node = self.clone();
         let (close_tx, close_rx) = oneshot::channel();
-        let handle = tokio::spawn(
+        let handle = spawn(
             async move {
                 trace!("listen");
 
@@ -545,7 +592,7 @@ impl Node {
                 let msg = msg.clone();
                 let unsent_list = unsent_nodes.clone();
 
-                tokio::spawn(async move {
+                spawn(async move {
                     if let Err(error) = node.send_message(peer, msg).await {
                         warn!(?error, "send_multicast");
                         if let CommsError::PeerNotFound(_) = error {
@@ -659,6 +706,34 @@ impl Node {
             .send_multicast(peers, CommMessage::Direct { payload, id })
             .await;
         Ok(unsent_nodes)
+    }
+
+    // Sends a HeartBeat message to given peers.
+    async fn send_heartbeat_message(
+        &mut self,
+        peers: impl Iterator<Item = SocketAddr>,
+    ) -> Result<Vec<SocketAddr>> {
+        let id = rand::thread_rng().gen();
+        let unsent_nodes = self
+            .send_multicast(peers, CommMessage::HeartBeatProbe(id))
+            .await;
+        Ok(unsent_nodes)
+    }
+
+    async fn flush_stale_peers(&self, stale_peers: Vec<SocketAddr>) {
+        debug!("Flushing stale peers {stale_peers:?}");
+        self.peers
+            .write()
+            .await
+            .retain(|addr, _| !stale_peers.contains(addr))
+    }
+
+    pub fn abort_heartbeat_handle(&mut self) {
+        if let Some(handle) = self.heartbeat_handle.as_mut() {
+            handle.abort()
+        }
+
+        self.heartbeat_handle = None;
     }
 
     /// Prepares and sends a handshake message to a given peer.
@@ -804,6 +879,9 @@ impl Node {
                         warn!(?error, "handle_gossip");
                     }
                 }
+                CommMessage::HeartBeatProbe(id) => {
+                    debug!("HeartBeat message from {peer_addr:?} with ID: {id:?}");
+                }
                 other => {
                     warn!(?other, "Received unexpected message; ignoring");
                 }
@@ -856,7 +934,7 @@ impl Node {
         let node = self.clone();
         let payload = payload.clone();
 
-        tokio::spawn(async move {
+        spawn(async move {
             let _ = node
                 .send_multicast(
                     peers.into_iter(),
@@ -1001,7 +1079,7 @@ impl Node {
             // Connect to all previously unknown peers (in the background - i.e. we don't wait for these connections to succeed).
             for &peer in unknown_peers {
                 let mut node = self.clone();
-                tokio::spawn(
+                spawn(
                     async move {
                         if let Err(error) = node.connect_to(peer).await {
                             warn!(?error, "connect_to failed");
@@ -1050,7 +1128,7 @@ impl Node {
 
         // Spawn the sender task.
         // Redirect messages from the mpsc channel into the TCP socket
-        let sock_out_h = tokio::spawn(
+        let sock_out_h = spawn(
             async move {
                 let send_rx = async_stream::stream! {
                     while let Some(item) = send_rx.recv().await {
@@ -1070,7 +1148,7 @@ impl Node {
         // Spawn the receiver task which will redirect the incoming messages into the MPSC channel
         // and manage the peer state transitions.
         let (messages, close_receiver_tx) = get_messages_stream(sock_in);
-        let sock_in_h = tokio::spawn({
+        let sock_in_h = spawn({
             let mut node = self.clone();
             let send_tx = send_tx.clone().into();
             let peers = self.peers.clone();
@@ -1299,6 +1377,7 @@ mod test {
             peer_limit,
             NodeType::Compute,
             network_version,
+            false,
             false,
         )
         .await

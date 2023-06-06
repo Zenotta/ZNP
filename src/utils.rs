@@ -836,6 +836,7 @@ pub fn decode_signature(sig: &str) -> Result<Signature, StringError> {
 ///
 /// * `node_conn` - Node to use for connections
 pub async fn shutdown_connections(node_conn: &mut Node) {
+    node_conn.abort_heartbeat_handle();
     join_all(node_conn.stop_listening().await).await;
     join_all(node_conn.disconnect_all(None).await).await;
 }
