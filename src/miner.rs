@@ -13,7 +13,7 @@ use crate::utils::{
     LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
     RunningTaskOrResult,
 };
-use crate::wallet::{WalletDb, WalletDbError, DB_SPEC};
+use crate::wallet::{LockedCoinbase, WalletDb, WalletDbError, DB_SPEC};
 use crate::{db_utils, Node};
 use async_trait::async_trait;
 use bincode::{deserialize, serialize};
@@ -1386,35 +1386,18 @@ impl MinerNode {
 
         let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
 
-        self.wallet_db
-            .save_usable_payments_to_wallet(payments)
+        let b_num = self
+            .current_block
+            .lock()
             .await
-            .unwrap();
-
-        // Add coinbase transaction to locked coinbase transactions
-        let coinbase_locktime = transaction
-            .outputs
-            .iter()
-            .map(|tx_out| tx_out.locktime)
-            .max()
+            .as_ref()
+            .map(|c| c.block.b_num)
             .unwrap_or_default();
 
-        // Add the new coinbase to the locked coinbase
-        let mut locked_coinbase = self.get_locked_coinbase().await;
-        let new_locked_coinbase = if let Some(l_coinbase) = locked_coinbase.as_mut() {
-            l_coinbase.push((hash, coinbase_locktime));
-            locked_coinbase
-        } else {
-            // Locked coinbase struct is empty, so we create it
-            Some(vec![(hash, coinbase_locktime)])
-        };
-
-        // Store locked coinbase transactions
-        let value = self
-            .wallet_db
-            .store_locked_coinbase(new_locked_coinbase)
-            .await;
-        self.wallet_db.set_locked_coinbase(value).await;
+        self.wallet_db
+            .save_usable_payments_to_wallet(payments, b_num)
+            .await
+            .unwrap();
 
         // Backup wallet after committing the coinbase
         self.wallet_db.backup_persistent_store().await.unwrap();
@@ -1496,8 +1479,16 @@ impl MinerNode {
 
                     // TODO: Should we update the wallet DB here, or only once we've got confirmation
                     // from compute node through received UTXO set?
+                    let b_num = self
+                        .current_block
+                        .lock()
+                        .await
+                        .as_ref()
+                        .map(|c| c.block.b_num)
+                        .unwrap_or_default();
+
                     self.wallet_db
-                        .store_payment_transaction(aggregating_tx)
+                        .store_payment_transaction(aggregating_tx, b_num)
                         .await;
 
                     trace!("Pruning the wallet of old keys after aggregation");
@@ -1623,13 +1614,19 @@ impl MinerNode {
     }
 
     /// Get locked coinbase
-    pub async fn get_locked_coinbase(&self) -> Option<Vec<(String, u64)>> {
+    pub async fn get_locked_coinbase(&self) -> LockedCoinbase {
         self.wallet_db.get_locked_coinbase().await
     }
 
     /// Load and apply the local database to our state
     async fn load_local_db(mut self) -> Result<Self> {
-        self.wallet_db.load_locked_coinbase().await?;
+        if let Err(e) = self.wallet_db.load_locked_coinbase().await {
+            error!("load_local_db: load_locked_coinbase {:?}", e);
+            warn!("load_local_db: generating new locked coinbase from UTXO set");
+            // Existing locked coinbase failed to deserialize, so we need to
+            // generate a new one using a UTXO subset from the compute node
+            self.update_running_total().await;
+        }
         self.current_coinbase = if let Some(cb) = load_last_coinbase(&self.wallet_db).await? {
             debug!("load_local_db: current_coinbase {:?}", cb);
             Some(cb)
@@ -1740,9 +1737,15 @@ impl Transactor for MinerNode {
     async fn update_running_total(&mut self) {
         let utxo_set = self.received_utxo_set.take();
         let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
-
+        let b_num = self
+            .current_block
+            .lock()
+            .await
+            .as_ref()
+            .map(|c| c.block.b_num)
+            .unwrap();
         self.wallet_db
-            .save_usable_payments_to_wallet(payments)
+            .save_usable_payments_to_wallet(payments, b_num)
             .await
             .unwrap();
     }

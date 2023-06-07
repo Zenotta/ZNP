@@ -207,7 +207,7 @@ pub async fn get_wallet_info(
     let locked_coinbase = wallet_db.get_locked_coinbase().await;
     let total = fund_store.running_total().clone();
     let available = {
-        fund_store.filter_locked_coinbase(locked_coinbase.as_ref());
+        fund_store.filter_locked_coinbase(&locked_coinbase);
         fund_store.running_total()
     };
     let send_val = WalletInfo {
@@ -410,6 +410,7 @@ pub async fn post_block_by_num(
 
 /// Post to import new keypairs to the connected wallet
 pub async fn post_import_keypairs(
+    peer: Node,
     db: WalletDb,
     keypairs: Addresses,
     route: &'static str,
@@ -418,7 +419,7 @@ pub async fn post_import_keypairs(
     let response_keys: Vec<String> = keypairs.addresses.keys().cloned().collect();
     let response_data = json_serialize_embed(response_keys);
     let r = CallResponse::new(route, &call_id);
-
+    let addresses: Vec<String> = keypairs.addresses.keys().cloned().collect();
     let mut key_pairs_converted = BTreeMap::new();
     for (address, address_store_hex) in keypairs.addresses.into_iter() {
         match AddressStore::try_from_hex_store(address_store_hex) {
@@ -446,6 +447,17 @@ pub async fn post_import_keypairs(
                 );
             }
         }
+    }
+
+    // Update running total from compute node
+    if let Err(e) = peer.inject_next_event(
+        peer.local_address(),
+        UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
+            address_list: UtxoFetchType::AnyOf(addresses),
+        }),
+    ) {
+        error!("route:update_running_total error: {:?}", e);
+        return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
 
     r.into_ok("Key-pairs successfully imported", response_data)
