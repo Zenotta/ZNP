@@ -817,6 +817,21 @@ impl WalletDb {
     /// Load locked coinbase from wallet
     pub async fn load_locked_coinbase(&mut self) -> Result<()> {
         let mut cb = self.locked_coinbase.lock().await;
+        let serialized_value = self.get_db_value(LOCKED_COINBASE_KEY).await;
+        if let Some(serialized_value) = serialized_value {
+            let deserialize_old = deserialize::<Vec<(String, u64)>>(&serialized_value);
+            let deserialize_new = deserialize::<BTreeMap<String, u64>>(&serialized_value);
+            // TODO: Remove this after next release
+            if let Ok(locked_coinbase) = deserialize_old {
+                *cb = Some(locked_coinbase.into_iter().collect());
+            } else if let Ok(locked_coinbase) = deserialize_new {
+                *cb = Some(locked_coinbase);
+            } else {
+                return Err(WalletDbError::Serialization(Box::new(
+                    bincode::ErrorKind::Custom("Unable to deserialize locked coinbase".to_string()),
+                )));
+            }
+        }
         let locked_coinbase = self
             .get_db_value(LOCKED_COINBASE_KEY)
             .await
