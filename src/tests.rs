@@ -55,9 +55,6 @@ use tracing_futures::Instrument;
 
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
-#[cfg(test)]
-use crate::miner::NO_OF_ADDRESSES_FOR_AGGREGATION_TX;
-
 #[cfg(not(debug_assertions))] // Release
 const TEST_DURATION_DIVIDER: usize = 10;
 #[cfg(debug_assertions)] // Debug
@@ -234,6 +231,7 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
     let miner_addr = &active_nodes[&NodeType::Miner][0];
     let compute_addr = &active_nodes[&NodeType::Compute][0];
     let mut prev_mining_reward = TokenAmount(0);
+    let address_aggregation_limit = network_config.address_aggregation_limit.unwrap_or_default();
 
     //
     // Act
@@ -246,7 +244,7 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
 
     let mut handle_aggregation_tx: bool;
     // Create more blocks
-    for _ in 1..(NO_OF_ADDRESSES_FOR_AGGREGATION_TX * 5) + 1 {
+    for _ in 1..(address_aggregation_limit * 5) + 1 {
         create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
         // Check if the miner is _about_ to send aggregation tx
@@ -259,7 +257,7 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
                 .get_wallet_db()
                 .get_known_addresses()
                 .len();
-            handle_aggregation_tx = addrs % (NO_OF_ADDRESSES_FOR_AGGREGATION_TX - 1) == 0;
+            handle_aggregation_tx = addrs % (address_aggregation_limit - 1) == 0;
         }
 
         if handle_aggregation_tx {
@@ -1256,8 +1254,7 @@ async fn proof_of_work_block_act(
                     }
 
                     // Miner handles the UTXO set and updates its balance
-                    miner_handle_event(network, miner, "Received UTXO set for aggregating tx")
-                        .await;
+                    miner_handle_event(network, miner, "Received UTXO set").await;
 
                     {
                         let miner_node = network.miner(miner).unwrap();
@@ -5262,6 +5259,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         compute_miner_whitelist: Default::default(),
         mining_api_key: Default::default(),
         peer_limit: 1000,
+        address_aggregation_limit: Some(5),
     }
 }
 

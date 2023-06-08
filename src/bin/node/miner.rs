@@ -267,6 +267,12 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("address_aggregation_limit")
+                .long("address_aggregation_limit")
+                .help("Limit the amount of addresses that can be kept before aggregation is triggered")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("index")
                 .short("i")
                 .long("index")
@@ -482,6 +488,12 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
 
     if let Some(mining_api_key) = matches.value_of("mining_api_key") {
         settings.set("mining_api_key", mining_api_key).unwrap();
+    }
+
+    if let Some(address_aggregation_limit) = matches.value_of("address_aggregation_limit") {
+        settings
+            .set("address_aggregation_limit", address_aggregation_limit)
+            .unwrap();
     }
 
     if let Some(certificate) = matches.value_of("tls_certificate_override") {

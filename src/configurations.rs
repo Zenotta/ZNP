@@ -233,6 +233,8 @@ pub struct MinerNodeConfig {
     pub mining_api_key: Option<String>,
     /// Limit for the number of peers this node can have
     pub peer_limit: usize,
+    /// Aggregation limit
+    pub address_aggregation_limit: Option<usize>,
 }
 
 /// Configuration option for a user node
