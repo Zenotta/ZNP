@@ -724,6 +724,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         mining_api_key: Default::default(),
         compute_miner_whitelist: Default::default(),
         peer_limit: 1000,
+        address_aggregation_limit: Some(5),
     }
     .with_groups(1, 1)
 }

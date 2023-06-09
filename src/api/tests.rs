@@ -1583,7 +1583,7 @@ async fn test_post_request_donation() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_import_keypairs_success() {
     let _ = tracing_log_try_init();
-
+    let (self_node, _self_socket) = new_self_node(NodeType::User).await;
     let db = get_wallet_db("").await;
     let mut addresses: BTreeMap<String, AddressStoreHex> = BTreeMap::new();
     addresses.insert(
@@ -1598,8 +1598,15 @@ async fn test_post_import_keypairs_success() {
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter = routes::import_keypairs(&mut dp(), db.clone(), Default::default(), ks, cache)
-        .recover(handle_rejection);
+    let filter = routes::import_keypairs(
+        &mut dp(),
+        db.clone(),
+        self_node,
+        Default::default(),
+        ks,
+        cache,
+    )
+    .recover(handle_rejection);
     let wallet_addresses_before = db.get_known_addresses();
 
     let res = warp::test::request()
