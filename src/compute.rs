@@ -729,6 +729,10 @@ impl ComputeNode {
                     "Block and participants ready to mine: {:?}",
                     self.get_mining_block()
                 );
+                info!(
+                    "No. of connected miners: {:?}",
+                    self.get_connected_miners().await.len()
+                );
                 self.flood_rand_and_block_to_partition().await.unwrap();
             }
             Ok(Response {
