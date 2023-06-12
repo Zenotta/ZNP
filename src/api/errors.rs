@@ -16,6 +16,7 @@ pub enum ApiErrorType {
     CannotParseAddress,
     CannotAccessWallet,
     CannotAccessUserNode,
+    CannotAccessMinerNode,
     CannotAccessComputeNode,
     CannotAccessPeerUserNode,
     CannotSaveAddressesToWallet,
@@ -57,6 +58,7 @@ impl std::fmt::Display for ApiErrorType {
             ApiErrorType::CannotParseAddress => write!(f, "Cannot parse address"),
             ApiErrorType::CannotAccessWallet => write!(f, "Cannot access wallet"),
             ApiErrorType::CannotAccessUserNode => write!(f, "Cannot access user node"),
+            ApiErrorType::CannotAccessMinerNode => write!(f, "Cannot access miner node"),
             ApiErrorType::CannotAccessComputeNode => write!(f, "Cannot access compute node"),
             ApiErrorType::CannotAccessPeerUserNode => write!(f, "Cannot access peer user node"),
             ApiErrorType::CannotSaveAddressesToWallet => {
