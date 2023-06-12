@@ -542,6 +542,12 @@ impl MinerNode {
                 reason: "Received miner removed ack from non-compute peer",
             }) => {}
             Ok(Response {
+                success: true,
+                reason: "Sent UTXO Request",
+            }) => {
+                debug!("Sent UTXO Request for wallet update")
+            }
+            Ok(Response {
                 success: false,
                 reason: "Received miner unauthorized notification from non-compute peer",
             }) => {}
@@ -757,6 +763,14 @@ impl MinerNode {
             MineApiRequest::DisconnectFromCompute => {
                 Some(self.handle_disconnect_from_compute().await)
             }
+            MineApiRequest::RequestUTXOSet(addrs) => self
+                .send_request_utxo_set(addrs, self.compute_address(), NodeType::Miner)
+                .await
+                .ok()
+                .map(|_| Response {
+                    success: true,
+                    reason: "Sent UTXO Request",
+                }),
             MineApiRequest::SetStaticMinerAddress { address } => {
                 Some(self.handle_set_static_miner_address(address).await)
             }

@@ -11,8 +11,8 @@ use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
     node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
-    BlockchainItemType, ComputeApi, DebugData, DruidPool, OutPointData, StoredSerializingBlock,
-    UserApiRequest, UserRequest, UtxoFetchType,
+    BlockchainItemType, ComputeApi, DebugData, DruidPool, MineApiRequest, MineRequest,
+    OutPointData, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_stored_value_from_db, indexed_block_hash_key};
@@ -452,9 +452,9 @@ pub async fn post_import_keypairs(
     // Update running total from compute node
     if let Err(e) = peer.inject_next_event(
         peer.local_address(),
-        UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
-            address_list: UtxoFetchType::AnyOf(addresses),
-        }),
+        MineRequest::MinerApi(MineApiRequest::RequestUTXOSet(UtxoFetchType::AnyOf(
+            addresses,
+        ))),
     ) {
         error!("route:update_running_total error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
