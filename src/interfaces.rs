@@ -439,6 +439,8 @@ pub enum MineApiRequest {
     ConnectToCompute,
     // Disconnect from compute Node
     DisconnectFromCompute,
+    // Request UTXO set for wallet update
+    RequestUTXOSet(UtxoFetchType),
     // Set static miner address
     SetStaticMinerAddress {
         address: Option<String>,
@@ -493,6 +495,7 @@ impl fmt::Debug for MineRequest {
             MinerApi(MineApiRequest::InitiateResumeMining) => write!(f, "InitiateResumeMining"),
             MinerApi(MineApiRequest::ConnectToCompute) => write!(f, "ConnectToCompute"),
             MinerApi(MineApiRequest::DisconnectFromCompute) => write!(f, "DisconnectFromCompute"),
+            MinerApi(MineApiRequest::RequestUTXOSet(_)) => write!(f, "RequestUTXOSet"),
             MinerApi(MineApiRequest::SetStaticMinerAddress { .. }) => {
                 write!(f, "SetStaticMinerAddress")
             }

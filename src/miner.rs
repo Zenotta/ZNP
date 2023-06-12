@@ -18,7 +18,7 @@ use crate::{db_utils, Node};
 use async_trait::async_trait;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::primitives::asset::TokenAmount;
+use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::{self, BlockHeader};
 use naom::primitives::transaction::Transaction;
 use naom::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
@@ -542,6 +542,12 @@ impl MinerNode {
                 reason: "Received miner removed ack from non-compute peer",
             }) => {}
             Ok(Response {
+                success: true,
+                reason: "Sent UTXO Request",
+            }) => {
+                debug!("Sent UTXO Request for wallet update")
+            }
+            Ok(Response {
                 success: false,
                 reason: "Received miner unauthorized notification from non-compute peer",
             }) => {}
@@ -757,6 +763,14 @@ impl MinerNode {
             MineApiRequest::DisconnectFromCompute => {
                 Some(self.handle_disconnect_from_compute().await)
             }
+            MineApiRequest::RequestUTXOSet(addrs) => self
+                .send_request_utxo_set(addrs, self.compute_address(), NodeType::Miner)
+                .await
+                .ok()
+                .map(|_| Response {
+                    success: true,
+                    reason: "Sent UTXO Request",
+                }),
             MineApiRequest::SetStaticMinerAddress { address } => {
                 Some(self.handle_set_static_miner_address(address).await)
             }
@@ -1386,6 +1400,12 @@ impl MinerNode {
 
         let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
 
+        let mut assets_won = Asset::Token(TokenAmount(0));
+
+        for (_, asset, _, _) in &payments {
+            assets_won.add_assign(asset);
+        }
+
         let b_num = self
             .current_block
             .lock()
@@ -1393,6 +1413,12 @@ impl MinerNode {
             .as_ref()
             .map(|c| c.block.b_num)
             .unwrap_or_default();
+
+        debug!(
+            "WON {:?} TOKENS FOR MINING ROUND {:?}",
+            assets_won,
+            b_num - 1
+        );
 
         self.wallet_db
             .save_usable_payments_to_wallet(payments, b_num)
