@@ -11,8 +11,8 @@ use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
     node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
-    BlockchainItemType, ComputeApi, DebugData, DruidPool, OutPointData, StoredSerializingBlock,
-    UserApiRequest, UserRequest, UtxoFetchType,
+    BlockchainItemType, ComputeApi, DebugData, DruidPool, MineApiRequest, MineRequest, NodeType,
+    OutPointData, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_stored_value_from_db, indexed_block_hash_key};
@@ -55,6 +55,11 @@ pub struct Addresses {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WalletInfo {
     running_total: f64,
+    running_total_tokens: u64,
+    locked_total: f64,
+    locked_total_tokens: u64,
+    available_total: f64,
+    available_total_tokens: u64,
     receipt_total: BTreeMap<String, u64>, /* DRS tx hash - amount */
     addresses: AddressesWithOutPoints,
 }
@@ -171,7 +176,7 @@ pub async fn get_wallet_info(
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
 
-    let fund_store = match wallet_db.get_fund_store_err() {
+    let mut fund_store = match wallet_db.get_fund_store_err() {
         Ok(fund) => fund,
         Err(_) => return r.into_err_internal(ApiErrorType::CannotAccessWallet),
     };
@@ -199,15 +204,20 @@ pub async fn get_wallet_info(
             .or_insert_with(Vec::new)
             .push(OutPointData::new(out_point.clone(), asset.clone()));
     }
-
-    let total = fund_store.running_total();
-    let (running_total, receipt_total) = (
-        total.tokens.0 as f64 / D_DISPLAY_PLACES,
-        total.receipts.clone(),
-    );
+    let locked_coinbase = wallet_db.get_locked_coinbase().await;
+    let total = fund_store.running_total().clone();
+    let available = {
+        fund_store.filter_locked_coinbase(&locked_coinbase);
+        fund_store.running_total()
+    };
     let send_val = WalletInfo {
-        running_total,
-        receipt_total,
+        running_total: total.tokens.0 as f64 / D_DISPLAY_PLACES,
+        running_total_tokens: total.tokens.0,
+        locked_total: (total.tokens.0 - available.tokens.0) as f64 / D_DISPLAY_PLACES,
+        locked_total_tokens: (total.tokens.0 - available.tokens.0),
+        available_total: available.tokens.0 as f64 / D_DISPLAY_PLACES,
+        available_total_tokens: available.tokens.0,
+        receipt_total: total.receipts,
         addresses,
     };
 
@@ -400,6 +410,7 @@ pub async fn post_block_by_num(
 
 /// Post to import new keypairs to the connected wallet
 pub async fn post_import_keypairs(
+    peer: Node,
     db: WalletDb,
     keypairs: Addresses,
     route: &'static str,
@@ -408,7 +419,7 @@ pub async fn post_import_keypairs(
     let response_keys: Vec<String> = keypairs.addresses.keys().cloned().collect();
     let response_data = json_serialize_embed(response_keys);
     let r = CallResponse::new(route, &call_id);
-
+    let addresses: Vec<String> = keypairs.addresses.keys().cloned().collect();
     let mut key_pairs_converted = BTreeMap::new();
     for (address, address_store_hex) in keypairs.addresses.into_iter() {
         match AddressStore::try_from_hex_store(address_store_hex) {
@@ -436,6 +447,34 @@ pub async fn post_import_keypairs(
                 );
             }
         }
+    }
+
+    match peer.get_node_type() {
+        NodeType::Miner => {
+            // Update running total from compute node
+            if let Err(e) = peer.inject_next_event(
+                peer.local_address(),
+                MineRequest::MinerApi(MineApiRequest::RequestUTXOSet(UtxoFetchType::AnyOf(
+                    addresses,
+                ))),
+            ) {
+                error!("route:update_running_total error: {:?}", e);
+                return r.into_err_internal(ApiErrorType::CannotAccessMinerNode);
+            }
+        }
+        NodeType::User => {
+            // Update running total from compute node
+            if let Err(e) = peer.inject_next_event(
+                peer.local_address(),
+                UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
+                    address_list: UtxoFetchType::AnyOf(addresses),
+                }),
+            ) {
+                error!("route:update_running_total error: {:?}", e);
+                return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
+            }
+        }
+        _ => return r.into_err_internal(ApiErrorType::InternalError),
     }
 
     r.into_ok("Key-pairs successfully imported", response_data)

@@ -44,8 +44,9 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 /// TODO: Determine the remaining functions that require the `Result` wrapper for error handling
 pub type Result<T> = std::result::Result<T, WalletDbError>;
 
-/// Wrapper for locked coinbase (tx_hash, locktime)
-pub type LockedCoinbaseWithMutex = Arc<TokioMutex<Option<Vec<(String, u64)>>>>;
+/// Wrapper for a locked coinbase (tx_hash, locktime)
+pub type LockedCoinbase = Option<BTreeMap<String, u64>>;
+pub type LockedCoinbaseWithMutex = Arc<TokioMutex<LockedCoinbase>>;
 
 /// Enum for errors that occur during WalletDb operations
 #[derive(Debug)]
@@ -220,19 +221,19 @@ impl WalletDb {
     ///
     /// ## Arguments
     /// * `value` - The locked coinbase value
-    pub async fn set_locked_coinbase(&mut self, value: Option<Vec<(String, u64)>>) {
+    pub async fn set_locked_coinbase(&mut self, value: LockedCoinbase) {
         let mut locked_coinbase = self.locked_coinbase.lock().await;
         *locked_coinbase = value;
     }
 
     /// Get locked coinbase mutex
     #[allow(clippy::type_complexity)]
-    pub fn get_locked_coinbase_mutex(&self) -> Arc<TokioMutex<Option<Vec<(String, u64)>>>> {
+    pub fn get_locked_coinbase_mutex(&self) -> Arc<TokioMutex<LockedCoinbase>> {
         self.locked_coinbase.clone()
     }
 
     /// Get locked coinbase value
-    pub async fn get_locked_coinbase(&self) -> Option<Vec<(String, u64)>> {
+    pub async fn get_locked_coinbase(&self) -> LockedCoinbase {
         self.locked_coinbase.lock().await.clone()
     }
 
@@ -334,8 +335,10 @@ impl WalletDb {
         for seed in seeds {
             let (tx_out_p, pk, sk, amount, v) = make_wallet_tx_info(&seed);
             let (address, _) = self.store_payment_address(pk, sk, v).await;
-            let payments = vec![(tx_out_p, Asset::Token(amount), address)];
-            self.save_usable_payments_to_wallet(payments).await.unwrap();
+            let payments = vec![(tx_out_p, Asset::Token(amount), address, 0)];
+            self.save_usable_payments_to_wallet(payments, 0)
+                .await
+                .unwrap();
         }
         self
     }
@@ -469,37 +472,47 @@ impl WalletDb {
     /// ### Arguments
     ///
     /// * `payments` - Payments OutPoint, amount and receiver key address
+    /// * `b_num`    - Current block number
     pub async fn save_usable_payments_to_wallet(
-        &self,
-        payments: Vec<(OutPoint, Asset, String)>,
-    ) -> Result<Vec<(OutPoint, Asset, String)>> {
+        &mut self,
+        payments: Vec<(OutPoint, Asset, String, u64)>,
+        current_b_num: u64,
+    ) -> Result<Vec<(OutPoint, Asset, String, u64)>> {
         let db = self.db.clone();
-        Ok(task::spawn_blocking(move || {
+        let locked_coinbase = self.get_locked_coinbase().await.unwrap_or_default();
+        let (result, locked_db) = task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
             let mut batch = db.batch_writer();
             let mut fund_store = get_fund_store(&db);
+            let mut locked_coinbase = locked_coinbase.clone();
             let addresses = get_known_key_address(&db);
 
             let usable_payments: Vec<_> = payments
                 .into_iter()
-                .filter(|(_, _, a)| addresses.contains(a))
+                .filter(|(_, _, a, _)| addresses.contains(a))
                 .collect();
 
-            for (out_p, asset, key_address) in &usable_payments {
+            for (out_p, asset, key_address, locktime) in &usable_payments {
                 let key_address = key_address.clone();
                 let store = TransactionStore { key_address };
                 let asset_to_store = asset.clone().with_fixed_hash(out_p);
                 fund_store.store_tx(out_p.clone(), asset_to_store);
                 save_transaction_to_wallet(&mut batch, out_p, &store);
+                if *locktime > current_b_num {
+                    locked_coinbase.insert(out_p.t_hash.clone(), *locktime);
+                }
             }
 
             set_fund_store(&mut batch, fund_store);
 
             let batch = batch.done();
             db.write(batch).unwrap();
-            usable_payments
+            (usable_payments, locked_coinbase)
         })
-        .await?)
+        .await?;
+        let locked_coinbase = self.store_locked_coinbase(Some(locked_db)).await;
+        self.set_locked_coinbase(locked_coinbase).await;
+        Ok(result)
     }
 
     /// Get `Vec<TxIn>` and `Vec<TxOut>` values for a transaction
@@ -559,8 +572,7 @@ impl WalletDb {
     ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
         let (tx_cons, total_amount, tx_used) = self
             .fetch_inputs_for_payment(asset_required.clone())
-            .await
-            .unwrap();
+            .await?;
 
         if let Some(excess) = total_amount.get_excess(&asset_required) {
             let excess_address = match excess_address {
@@ -602,10 +614,14 @@ impl WalletDb {
     /// ### Arguments
     ///
     /// * `transaction` - Transaction to be received and saved to wallet
-    pub async fn store_payment_transaction(&mut self, transaction: Transaction) {
+    /// * `b_num` - Block number
+    pub async fn store_payment_transaction(&mut self, transaction: Transaction, b_num: u64) {
         let hash = construct_tx_hash(&transaction);
         let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
-        let our_payments = self.save_usable_payments_to_wallet(payments).await.unwrap();
+        let our_payments = self
+            .save_usable_payments_to_wallet(payments, b_num)
+            .await
+            .unwrap();
         tracing::debug!("store_payment_transactions: {:?}", our_payments);
     }
 
@@ -627,12 +643,7 @@ impl WalletDb {
         let locked_coinbase = self.get_locked_coinbase().await;
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
-            fetch_inputs_for_payment_from_db(
-                &db,
-                asset_required,
-                &encryption_key,
-                locked_coinbase.as_ref(),
-            )
+            fetch_inputs_for_payment_from_db(&db, asset_required, &encryption_key, &locked_coinbase)
         })
         .await?
     }
@@ -657,7 +668,7 @@ impl WalletDb {
                 &db,
                 addresses,
                 &encryption_key,
-                locked_coinbase.as_ref(),
+                &locked_coinbase,
             )
         })
         .await?
@@ -806,6 +817,21 @@ impl WalletDb {
     /// Load locked coinbase from wallet
     pub async fn load_locked_coinbase(&mut self) -> Result<()> {
         let mut cb = self.locked_coinbase.lock().await;
+        let serialized_value = self.get_db_value(LOCKED_COINBASE_KEY).await;
+        if let Some(serialized_value) = serialized_value {
+            let deserialize_old = deserialize::<Vec<(String, u64)>>(&serialized_value);
+            let deserialize_new = deserialize::<BTreeMap<String, u64>>(&serialized_value);
+            // TODO: Remove this after next release
+            if let Ok(locked_coinbase) = deserialize_old {
+                *cb = Some(locked_coinbase.into_iter().collect());
+            } else if let Ok(locked_coinbase) = deserialize_new {
+                *cb = Some(locked_coinbase);
+            } else {
+                return Err(WalletDbError::Serialization(Box::new(
+                    bincode::ErrorKind::Custom("Unable to deserialize locked coinbase".to_string()),
+                )));
+            }
+        }
         let locked_coinbase = self
             .get_db_value(LOCKED_COINBASE_KEY)
             .await
@@ -818,8 +844,8 @@ impl WalletDb {
     /// Add to locked coinbase transactions
     pub async fn store_locked_coinbase(
         &mut self,
-        locked_coinbase: Option<Vec<(String, u64)>>,
-    ) -> Option<Vec<(String, u64)>> {
+        locked_coinbase: LockedCoinbase,
+    ) -> LockedCoinbase {
         if let Some(cb) = &locked_coinbase {
             let ser_cb = serialize(cb).unwrap();
             self.set_db_value(LOCKED_COINBASE_KEY, ser_cb).await;
@@ -838,7 +864,7 @@ impl WalletDb {
         self.last_locked_coinbase_filter_b_num = Some(b_num);
         let mut locked_coinbase = self.get_locked_coinbase().await;
         if let Some(l_coinbase) = locked_coinbase.as_mut() {
-            l_coinbase.retain(|(_, locktime)| b_num < *locktime)
+            l_coinbase.retain(|_, locktime| b_num < *locktime)
         };
         let value = self.store_locked_coinbase(locked_coinbase).await;
         self.set_locked_coinbase(value).await;
@@ -1042,7 +1068,7 @@ pub fn fetch_inputs_for_payment_from_db(
     db: &SimpleDb,
     asset_required: Asset,
     encryption_key: &secretbox::Key,
-    locked_coinbase: Option<&Vec<(String, u64)>>,
+    locked_coinbase: &LockedCoinbase,
 ) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
     let mut tx_cons = Vec::new();
     let mut tx_used = Vec::new();
@@ -1078,7 +1104,7 @@ pub fn fetch_inputs_for_payment_from_supplied_input_addrs_db(
     db: &SimpleDb,
     addresses: BTreeSet<String>,
     encryption_key: &secretbox::Key,
-    locked_coinbase: Option<&Vec<(String, u64)>>,
+    locked_coinbase: &LockedCoinbase,
 ) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
     // Only use addresses that actually contain assets
     let addresses_to_use = retrieve_non_empty_addresses(addresses, db);
@@ -1344,12 +1370,15 @@ mod tests {
         let (key_addr1, _) = wallet.generate_payment_address().await;
         let (key_addr2, _) = wallet.generate_payment_address().await;
         let stored_usable = wallet
-            .save_usable_payments_to_wallet(vec![
-                (out_p1.clone(), amount1.clone(), key_addr1.clone()),
-                (out_p2.clone(), amount1.clone(), key_addr2.clone()),
-                (out_p3, amount3, key_addr2),
-                (out_p4, amount4, key_addr_non_existent),
-            ])
+            .save_usable_payments_to_wallet(
+                vec![
+                    (out_p1.clone(), amount1.clone(), key_addr1.clone(), 0),
+                    (out_p2.clone(), amount1.clone(), key_addr2.clone(), 0),
+                    (out_p3, amount3, key_addr2, 0),
+                    (out_p4, amount4, key_addr_non_existent, 0),
+                ],
+                Default::default(),
+            )
             .await
             .unwrap();
 

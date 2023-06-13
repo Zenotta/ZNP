@@ -1,6 +1,9 @@
 use crate::block_pipeline::{MiningPipelineItem, MiningPipelineStatus, Participants};
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
-use crate::compute_raft::{CommittedItem, ComputeRaft, CoordinatedCommand};
+use crate::compute_raft::{
+    CommittedItem, ComputeConsensusedRuntimeData, ComputeRaft, ComputeRuntimeItem,
+    CoordinatedCommand,
+};
 use crate::configurations::{
     ComputeNodeConfig, ComputeNodeSharedConfig, ExtraNodeParams, TlsPrivateInfo,
 };
@@ -31,7 +34,7 @@ use naom::utils::druid_utils::druid_expectations_are_met;
 use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::{
     error::Error,
@@ -134,6 +137,7 @@ impl From<StringError> for ComputeError {
 pub struct ComputeNode {
     shared_config: ComputeNodeSharedConfig,
     received_shared_config: Option<ComputeNodeSharedConfig>,
+    received_runtime_data: Option<ComputeConsensusedRuntimeData>,
     node: Node,
     node_raft: ComputeRaft,
     db: SimpleDb,
@@ -153,7 +157,6 @@ pub struct ComputeNode {
     request_list: BTreeSet<SocketAddr>,
     request_list_first_flood: Option<usize>,
     miner_removal_list: Arc<RwLock<BTreeSet<SocketAddr>>>,
-    miner_received_api_keys: Arc<RwLock<BTreeMap<SocketAddr, String>>>,
     storage_addr: SocketAddr,
     sanction_list: Vec<String>,
     user_notification_list: BTreeSet<SocketAddr>,
@@ -191,7 +194,14 @@ impl ComputeNode {
             .compute_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
 
-        let node = Node::new(&tcp_tls_config, config.peer_limit, NodeType::Compute, false).await?;
+        let node = Node::new(
+            &tcp_tls_config,
+            config.peer_limit,
+            NodeType::Compute,
+            false,
+            true,
+        )
+        .await?;
         let node_raft = ComputeRaft::new(&config, extra.raft_db.take()).await;
 
         if config.backup_restore.unwrap_or(false) {
@@ -223,6 +233,7 @@ impl ComputeNode {
             db,
             shared_config,
             received_shared_config: Default::default(),
+            received_runtime_data: Default::default(),
             local_events: Default::default(),
             pause_node: Default::default(),
             b_num_to_pause: Default::default(),
@@ -235,7 +246,6 @@ impl ComputeNode {
             previous_random_num: Default::default(),
             current_random_num: Default::default(),
             miner_removal_list: Default::default(),
-            miner_received_api_keys: Default::default(),
             request_list: Default::default(),
             sanction_list: config.sanction_list,
             jurisdiction: config.jurisdiction,
@@ -249,6 +259,22 @@ impl ComputeNode {
             fetched_utxo_set: None,
         }
         .load_local_db()
+    }
+
+    /// Get all connected miners
+    pub async fn get_connected_miners(&self) -> Vec<SocketAddr> {
+        self.node
+            .get_peers()
+            .await
+            .into_iter()
+            .filter_map(|(address, node_type)| {
+                if node_type == Some(NodeType::Miner) {
+                    Some(address)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Determine whether or not this compute node's trigger messages are disabled
@@ -313,8 +339,16 @@ impl ComputeNode {
     }
 
     /// Send initial requests:
-    /// - None
+    /// - Fetch runtime data from peers
     pub async fn send_startup_requests(&mut self) -> Result<()> {
+        let compute_peers = self.node_raft.raft_peer_addrs().copied();
+        if let Err(e) = self
+            .node
+            .send_to_all(compute_peers, ComputeRequest::RequestRuntimeData)
+            .await
+        {
+            error!("Failed to send RequestRuntimeData to compute peers: {}", e);
+        }
         Ok(())
     }
 
@@ -695,6 +729,10 @@ impl ComputeNode {
                     "Block and participants ready to mine: {:?}",
                     self.get_mining_block()
                 );
+                info!(
+                    "No. of connected miners: {:?}",
+                    self.get_connected_miners().await.len()
+                );
                 self.flood_rand_and_block_to_partition().await.unwrap();
             }
             Ok(Response {
@@ -716,6 +754,32 @@ impl ComputeNode {
                     self.node_raft.get_mining_pipeline_status()
                 );
             }
+            Ok(Response {
+                success: true,
+                reason: "Sent runtime data to peer",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Failed to send runtime data to peer",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Received runtime data from peer",
+            }) => {
+                debug!("Received runtime data from peer");
+                if let Some(runtime_data) = self.received_runtime_data.take() {
+                    let mining_api_keys = runtime_data.mining_api_keys.into_iter().collect();
+                    self.node_raft
+                        .propose_runtime_item(ComputeRuntimeItem::AddMiningApiKeys(mining_api_keys))
+                        .await;
+                } else {
+                    warn!("Runtime data received from peer is empty");
+                }
+            }
+            Ok(Response {
+                success: false,
+                reason: "Received runtime data from unknown peer",
+            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Transactions added to tx pool",
@@ -1078,11 +1142,57 @@ impl ComputeNode {
             CoordinatedPause { b_num } => self.handle_coordinated_pause(peer, b_num).await,
             CoordinatedResume => self.handle_coordinated_resume(peer).await,
             RequestRemoveMiner => self.handle_request_remove_miner(peer).await,
+            RequestRuntimeData => self.handle_receive_request_runtime_data(peer).await,
+            SendRuntimeData { runtime_data } => {
+                self.handle_receive_runtime_data(peer, runtime_data).await
+            }
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
                 None
             }
         }
+    }
+
+    async fn handle_receive_runtime_data(
+        &mut self,
+        peer: SocketAddr,
+        runtime_data: ComputeConsensusedRuntimeData,
+    ) -> Option<Response> {
+        if !self
+            .node_raft
+            .raft_peer_addrs()
+            .collect::<Vec<_>>()
+            .contains(&&peer)
+        {
+            return Some(Response {
+                success: false,
+                reason: "Received runtime data from unknown peer",
+            });
+        }
+
+        self.received_runtime_data = Some(runtime_data);
+        Some(Response {
+            success: true,
+            reason: "Received runtime data from peer",
+        })
+    }
+
+    /// Handles a request to send current runtime data
+    async fn handle_receive_request_runtime_data(&mut self, peer: SocketAddr) -> Option<Response> {
+        let runtime_data = self.node_raft.get_runtime_data();
+        let response = ComputeRequest::SendRuntimeData { runtime_data };
+        if let Err(e) = self.node.send(peer, response).await {
+            error!("Failed to send runtime data to peer: {}", e);
+            return Some(Response {
+                success: false,
+                reason: "Failed to send runtime data to peer",
+            });
+        }
+
+        Some(Response {
+            success: true,
+            reason: "Sent runtime data to peer",
+        })
     }
 
     /// Handles a request to remove a miner
@@ -1243,35 +1353,10 @@ impl ComputeNode {
         self.node_raft
             .update_compute_miner_whitelist_addresses(compute_miner_whitelist.miner_addresses);
 
-        // Whitelisting is active, remove all miner nodes not whitelisted
-        if compute_miner_whitelist.active {
-            let mut miners_to_remove: Vec<SocketAddr> = Vec::new();
-            for (peer, node_type) in self.node.get_peers().await.into_iter() {
-                if node_type == Some(NodeType::Miner) {
-                    let mining_api_key = self
-                        .miner_received_api_keys
-                        .read()
-                        .await
-                        .get(&peer)
-                        .cloned();
-
-                    if !self.check_miner_whitelisted(peer, mining_api_key) {
-                        debug!("Removing unauthorized miner: {peer:?}");
-                        if let Err(e) = self.node.send(peer, MineRequest::MinerNotAuthorized).await
-                        {
-                            error!("Error sending request to {peer:?}: {e}");
-                        }
-                        self.miner_received_api_keys.write().await.remove(&peer);
-                        miners_to_remove.push(peer);
-                    }
-                }
-            }
-            let disconnect_handles = self.node.disconnect_all(Some(&miners_to_remove)).await;
-            for handle in disconnect_handles {
-                if let Err(e) = handle.await {
-                    error!("Error disconnecting from peer: {:?}", e);
-                }
-            }
+        if let Some(unauthorized) = self.flush_unauthorized_miners().await {
+            self.node_raft
+                .propose_runtime_item(ComputeRuntimeItem::RemoveMiningApiKeys(unauthorized))
+                .await;
         }
 
         self.shared_config = received_shared_config;
@@ -1381,14 +1466,12 @@ impl ComputeNode {
         miner_address: SocketAddr,
         miner_api_key: Option<String>,
     ) -> bool {
-        if !self.node_raft.get_compute_whitelisting_active() {
-            // No whitelisting active, all miners are allowed
-            return true;
-        }
+        // Contains valid API key
         self.node_raft
             .get_compute_miner_whitelist_api_keys()
             .unwrap_or_default()
             .contains(&miner_api_key.unwrap_or_default())
+            // Or contains whitelisted address
             || self
                 .node_raft
                 .get_compute_miner_whitelist_addresses()
@@ -1410,15 +1493,9 @@ impl ComputeNode {
         mining_api_key: Option<String>,
     ) -> Response {
         trace!("Received partition request from {peer:?}");
-        // TODO: Change structure to be more efficient
-        if !self.check_miner_whitelisted(peer, mining_api_key.clone())
-            || self
-                .miner_received_api_keys
-                .read()
-                .await
-                .iter()
-                .any(|(_, v)| Some(v) == mining_api_key.as_ref())
-        {
+        let white_listing_active = self.node_raft.get_compute_whitelisting_active();
+        // Only check whitelist if activated
+        if white_listing_active && !self.check_miner_whitelisted(peer, mining_api_key.clone()) {
             debug!("Removing unauthorized miner: {peer:?}");
             if let Err(e) = self.node.send(peer, MineRequest::MinerNotAuthorized).await {
                 error!("Error sending request to {peer:?}: {e}");
@@ -1437,10 +1514,9 @@ impl ComputeNode {
 
         // If the miner node provided an API key, store in memory
         if let Some(api_key) = mining_api_key.clone() {
-            self.miner_received_api_keys
-                .write()
-                .await
-                .insert(peer, api_key);
+            self.node_raft
+                .propose_runtime_item(ComputeRuntimeItem::AddMiningApiKeys(vec![(peer, api_key)]))
+                .await;
         }
 
         self.request_list.insert(peer);
@@ -1578,24 +1654,21 @@ impl ComputeNode {
 
         let header = block.header.clone();
         let b_num = header.b_num;
-        let reward = self.node_raft.get_current_reward();
+        let reward = *self.node_raft.get_current_reward();
         let pow_info = PowInfo {
             participant_only,
             b_num,
         };
 
         let miner_removal_list = self.miner_removal_list.read().await.clone();
-        let all_participants = self.node_raft.get_mining_participants();
+        let all_participants = self.node_raft.get_mining_participants().clone();
         let participants = all_participants
             .iter()
             .filter(|participant| !miner_removal_list.contains(participant))
             .copied();
-        let non_participants = self
-            .request_list
-            .difference(all_participants.lookup())
-            .copied();
-
-        let mut unsent_miners = vec![];
+        let request_list = self.request_list.clone();
+        let non_participants = request_list.difference(all_participants.lookup()).copied();
+        let mut unsent_miners = self.flush_unauthorized_miners().await.unwrap_or_default();
 
         let _ = self
             .node
@@ -1614,7 +1687,7 @@ impl ComputeNode {
                     rnum: rnum.clone(),
                     win_coinbases: win_coinbases.clone(),
                     block: Some(header.clone()),
-                    reward: *reward,
+                    reward,
                     b_num: header.b_num,
                 },
             )
@@ -1632,7 +1705,7 @@ impl ComputeNode {
                     rnum,
                     win_coinbases,
                     block: None,
-                    reward: *reward,
+                    reward,
                     b_num: header.b_num,
                 },
             )
@@ -1641,29 +1714,49 @@ impl ComputeNode {
             unsent_miners.extend(unsent_nodes);
         }
 
-        // Get all connected peers
-        let connected_miners = self
-            .node
-            .get_peers()
-            .await
-            .into_keys()
-            .collect::<HashSet<SocketAddr>>();
-
-        // Remove disconnected peers' API keys
-        self.miner_received_api_keys
-            .write()
-            .await
-            .retain(|addr, _| {
-                connected_miners.contains(addr) && !miner_removal_list.contains(addr)
-            });
-
         if !unsent_miners.is_empty() || !miner_removal_list.is_empty() {
             unsent_miners.extend(miner_removal_list);
-            self.flush_stale_miners(unsent_miners);
+            self.flush_stale_miners(unsent_miners.clone());
             self.miner_removal_list.write().await.clear();
+            self.node_raft
+                .propose_runtime_item(ComputeRuntimeItem::RemoveMiningApiKeys(unsent_miners))
+                .await;
         }
 
         Ok(())
+    }
+
+    /// If whitelisting is active, this function will remove all miners that are not whitelisted
+    pub async fn flush_unauthorized_miners(&mut self) -> Option<Vec<SocketAddr>> {
+        // Determine if whitelisting is active
+        let whitelisting_active = self.node_raft.get_compute_whitelisting_active();
+
+        if !whitelisting_active {
+            // Return empty array
+            return None;
+        }
+
+        // Whitelisting is active, remove all miner nodes not whitelisted
+        let mut miners_to_remove: Vec<SocketAddr> = Vec::new();
+        let connected_miners: Vec<SocketAddr> = self.get_connected_miners().await;
+        for peer in connected_miners {
+            let mining_api_key = self.node_raft.get_mining_api_key_entry(peer);
+            if whitelisting_active && !self.check_miner_whitelisted(peer, mining_api_key) {
+                debug!("Removing unauthorized miner: {peer:?}");
+                if let Err(e) = self.node.send(peer, MineRequest::MinerNotAuthorized).await {
+                    error!("Error sending request to {peer:?}: {e}");
+                }
+                miners_to_remove.push(peer);
+            }
+        }
+
+        for handle in self.node.disconnect_all(Some(&miners_to_remove)).await {
+            if let Err(e) = handle.await {
+                error!("Error disconnecting from peer: {:?}", e);
+            }
+        }
+
+        Some(miners_to_remove)
     }
 
     pub fn flush_stale_miners(&mut self, stale_miners: Vec<SocketAddr>) {

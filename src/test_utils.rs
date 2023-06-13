@@ -99,6 +99,7 @@ pub struct NetworkConfig {
     pub mining_api_key: Option<String>,
     pub compute_miner_whitelist: MinerWhitelist,
     pub peer_limit: usize,
+    pub address_aggregation_limit: Option<usize>,
 }
 
 /// Node info to create node
@@ -1052,6 +1053,7 @@ async fn init_miner(
         static_miner_address: config.static_miner_address.clone(),
         mining_api_key: config.mining_api_key.clone(),
         peer_limit: config.peer_limit,
+        address_aggregation_limit: config.address_aggregation_limit,
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);

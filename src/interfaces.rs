@@ -1,4 +1,5 @@
 use crate::compute::ComputeError;
+use crate::compute_raft::ComputeConsensusedRuntimeData;
 use crate::configurations::ComputeNodeSharedConfig;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
@@ -326,6 +327,7 @@ pub enum CommMessage {
         /// Unique message ID. Can be used for correspondence between requests and responses.
         id: Token,
     },
+    HeartBeatProbe(Token),
 }
 
 ///============ STORAGE NODE ============///
@@ -437,6 +439,8 @@ pub enum MineApiRequest {
     ConnectToCompute,
     // Disconnect from compute Node
     DisconnectFromCompute,
+    // Request UTXO set for wallet update
+    RequestUTXOSet(UtxoFetchType),
     // Set static miner address
     SetStaticMinerAddress {
         address: Option<String>,
@@ -491,6 +495,7 @@ impl fmt::Debug for MineRequest {
             MinerApi(MineApiRequest::InitiateResumeMining) => write!(f, "InitiateResumeMining"),
             MinerApi(MineApiRequest::ConnectToCompute) => write!(f, "ConnectToCompute"),
             MinerApi(MineApiRequest::DisconnectFromCompute) => write!(f, "DisconnectFromCompute"),
+            MinerApi(MineApiRequest::RequestUTXOSet(_)) => write!(f, "RequestUTXOSet"),
             MinerApi(MineApiRequest::SetStaticMinerAddress { .. }) => {
                 write!(f, "SetStaticMinerAddress")
             }
@@ -597,6 +602,10 @@ pub enum ComputeRequest {
     CoordinatedResume,
     Closing,
     RequestRemoveMiner,
+    RequestRuntimeData,
+    SendRuntimeData {
+        runtime_data: ComputeConsensusedRuntimeData,
+    },
     SendRaftCmd(RaftMessageWrapper),
 }
 
@@ -628,6 +637,8 @@ impl fmt::Debug for ComputeRequest {
             CoordinatedPause { .. } => write!(f, "CoordinatedPause"),
             CoordinatedResume => write!(f, "CoordinatedResume"),
             RequestRemoveMiner => write!(f, "RequestRemoveMiner"),
+            RequestRuntimeData => write!(f, "RequestRuntimeData"),
+            SendRuntimeData { .. } => write!(f, "SendRuntimeData"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
     }

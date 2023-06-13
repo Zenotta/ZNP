@@ -64,6 +64,14 @@ pub enum ComputeRaftItem {
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
     PipelineItem(MiningPipelineItem, u64),
     CoordinatedCmd(CoordinatedCommand),
+    RuntimeData(ComputeRuntimeItem),
+}
+
+/// Compute RAFT runtime item; will not get stored to disk
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ComputeRuntimeItem {
+    AddMiningApiKeys(Vec<(SocketAddr, String)>),
+    RemoveMiningApiKeys(Vec<SocketAddr>),
 }
 
 /// Commited item to process.
@@ -122,6 +130,12 @@ pub enum InitialProposal {
     },
 }
 
+/// Runtime data that is shared amongst compute peers, but will not persist to disk
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ComputeConsensusedRuntimeData {
+    pub mining_api_keys: BTreeMap<SocketAddr, String>,
+}
+
 /// All fields that are consensused between the RAFT group.
 /// These fields need to be written and read from a committed log event.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -161,6 +175,9 @@ pub struct ComputeConsensused {
     special_handling: Option<SpecialHandling>,
     /// Whitelisted miner nodes.
     miner_whitelist: MinerWhitelist,
+    /// Runtime data that does not get stored to disk
+    #[serde(skip)]
+    runtime_data: ComputeConsensusedRuntimeData,
 }
 
 /// Consensused info to apply on start up after upgrade.
@@ -294,6 +311,26 @@ impl ComputeRaft {
             backup_check,
             utxo_re_align_check,
         }
+    }
+
+    /// Get runtime data
+    pub fn get_runtime_data(&self) -> ComputeConsensusedRuntimeData {
+        self.consensused.get_runtime_data()
+    }
+
+    /// Set runtime data
+    pub fn set_runtime_data(&mut self, runtime_data: ComputeConsensusedRuntimeData) {
+        self.consensused.set_runtime_data(runtime_data);
+    }
+
+    /// Get mining API keys from runtime data
+    pub fn get_mining_api_keys(&self) -> BTreeMap<SocketAddr, String> {
+        self.consensused.get_mining_api_keys()
+    }
+
+    /// Get a mining API key entry if it exists
+    pub fn get_mining_api_key_entry(&self, address: SocketAddr) -> Option<String> {
+        self.consensused.get_mining_api_key_entry(address)
     }
 
     /// Determine whether the compute node has whitelisting active.
@@ -584,6 +621,9 @@ impl ComputeRaft {
                     return Some(CommittedItem::CoordinatedCmd(coordinated_command));
                 }
             }
+            ComputeRaftItem::RuntimeData(runtime_item) => {
+                self.consensused.handle_runtime_item(runtime_item);
+            }
         }
         None
     }
@@ -705,6 +745,11 @@ impl ComputeRaft {
         } else {
             false
         }
+    }
+
+    /// Propose a new runtime item
+    pub async fn propose_runtime_item(&mut self, item: ComputeRuntimeItem) {
+        self.propose_item(&ComputeRaftItem::RuntimeData(item)).await;
     }
 
     /// Clear block pipeline proposed keys
@@ -1044,6 +1089,16 @@ impl ComputeRaft {
 }
 
 impl ComputeConsensused {
+    /// Get runtime data
+    pub fn get_runtime_data(&self) -> ComputeConsensusedRuntimeData {
+        self.runtime_data.clone()
+    }
+
+    /// Set runtime data
+    pub fn set_runtime_data(&mut self, runtime_data: ComputeConsensusedRuntimeData) {
+        self.runtime_data = runtime_data;
+    }
+
     /// Re-align tracked UTXO set with base UTXO set
     pub fn re_align_utxo_set(&mut self) {
         self.utxo_set.re_align();
@@ -1142,6 +1197,7 @@ impl ComputeConsensused {
             current_circulation,
             block_pipeline: MiningPipelineInfo::from_import(block_pipeline),
             last_mining_transaction_hashes: Default::default(),
+            runtime_data: Default::default(),
             special_handling,
             miner_whitelist,
         }
@@ -1187,6 +1243,16 @@ impl ComputeConsensused {
         self.utxo_set.extend_tracked_utxo_set(&block_tx);
         self.block_pipeline
             .set_committed_mining_block(block, block_tx);
+    }
+
+    /// Get mining API keys from runtime data
+    pub fn get_mining_api_keys(&self) -> BTreeMap<SocketAddr, String> {
+        self.runtime_data.mining_api_keys.clone()
+    }
+
+    /// Get mining API key entry from runtime data; if it exists
+    pub fn get_mining_api_key_entry(&self, address: SocketAddr) -> Option<String> {
+        self.runtime_data.mining_api_keys.get(&address).cloned()
     }
 
     /// Get the participating miners for the current mining round
@@ -1421,6 +1487,43 @@ impl ComputeConsensused {
             .map(|v| v.1.len())
             .max()
             .unwrap_or(0)
+    }
+
+    /// Handle compute runtime data item
+    pub fn handle_runtime_item(&mut self, runtime_item: ComputeRuntimeItem) {
+        match runtime_item {
+            ComputeRuntimeItem::AddMiningApiKeys(keys) => {
+                for (address, mining_api_key) in keys {
+                    if !self
+                        .runtime_data
+                        .mining_api_keys
+                        .values()
+                        .any(|k| k == &mining_api_key)
+                    {
+                        trace!(
+                            "Add mining api key {} for address: {}",
+                            &mining_api_key,
+                            address
+                        );
+                        self.runtime_data
+                            .mining_api_keys
+                            .insert(address, mining_api_key);
+                    } else {
+                        trace!(
+                            "Ignore duplicate mining api key {} from address: {}",
+                            &mining_api_key,
+                            address
+                        );
+                    }
+                }
+            }
+            ComputeRuntimeItem::RemoveMiningApiKeys(addresses) => {
+                trace!("Removing mining api key for addresses: {:?}", addresses);
+                for address in addresses {
+                    self.runtime_data.mining_api_keys.remove(&address);
+                }
+            }
+        }
     }
 
     /// Append a vote for first block info

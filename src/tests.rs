@@ -55,9 +55,6 @@ use tracing_futures::Instrument;
 
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
-#[cfg(test)]
-use crate::miner::NO_OF_ADDRESSES_FOR_AGGREGATION_TX;
-
 #[cfg(not(debug_assertions))] // Release
 const TEST_DURATION_DIVIDER: usize = 10;
 #[cfg(debug_assertions)] // Debug
@@ -79,6 +76,15 @@ const VALID_TXS_OUT: &[&str] = &[
     "00000000000000000000000000000103",
 ];
 const DEFAULT_SEED_AMOUNT: TokenAmount = TokenAmount(3);
+
+const VALID_MINING_API_KEYS: &[&str] = &[
+    "tH6Iyx3LL1hnqB4sqLBVC4J1NJyvypm8",
+    "LUNJ4jhhdNar2zmAh9FjKIOvrW35rEmO",
+    "h0pGlFRk6ul1MyiWg45dpvUCb6jIWLt8",
+    "wE3XzLZj2gCeK3lPQ8q9xWu7rwVKPd1W",
+    "l90YU9nEr0pzx4Y7lr3QoQ0YvwcPrwiA",
+    "4pMVXGp8WMnWhPsU0zuJVBDYFjvNH91y",
+];
 
 const BLOCK_RECEIVED: &str = "Block received to be added";
 const BLOCK_STORED: &str = "Block complete stored";
@@ -225,6 +231,7 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
     let miner_addr = &active_nodes[&NodeType::Miner][0];
     let compute_addr = &active_nodes[&NodeType::Compute][0];
     let mut prev_mining_reward = TokenAmount(0);
+    let address_aggregation_limit = network_config.address_aggregation_limit.unwrap_or_default();
 
     //
     // Act
@@ -237,7 +244,7 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
 
     let mut handle_aggregation_tx: bool;
     // Create more blocks
-    for _ in 1..(NO_OF_ADDRESSES_FOR_AGGREGATION_TX * 5) + 1 {
+    for _ in 1..(address_aggregation_limit * 5) + 1 {
         create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
         // Check if the miner is _about_ to send aggregation tx
@@ -250,7 +257,7 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
                 .get_wallet_db()
                 .get_known_addresses()
                 .len();
-            handle_aggregation_tx = addrs % (NO_OF_ADDRESSES_FOR_AGGREGATION_TX - 1) == 0;
+            handle_aggregation_tx = addrs % (address_aggregation_limit - 1) == 0;
         }
 
         if handle_aggregation_tx {
@@ -406,6 +413,10 @@ async fn full_flow_raft_kill_compute_node_3_nodes() {
             "After create block 1",
             CfgModif::HandleEvents(&[
                 ("compute2", "Snapshot applied"),
+                ("compute1", "Sent runtime data to peer"),
+                ("compute3", "Sent runtime data to peer"),
+                ("compute2", "Received runtime data from peer"),
+                ("compute2", "Received runtime data from peer"),
                 ("compute2", "Winning PoW intake open"),
                 ("compute2", "Pipeline halted"),
                 ("compute2", "Transactions committed"),
@@ -451,6 +462,10 @@ async fn full_flow_raft_dis_and_re_connect_compute_node_3_nodes() {
         (
             "After create block 1",
             CfgModif::HandleEvents(&[
+                ("compute1", "Sent runtime data to peer"),
+                ("compute3", "Sent runtime data to peer"),
+                ("compute2", "Received runtime data from peer"),
+                ("compute2", "Received runtime data from peer"),
                 ("compute2", "Winning PoW intake open"),
                 ("compute2", "Pipeline halted"),
                 ("compute2", "Transactions committed"),
@@ -1239,8 +1254,7 @@ async fn proof_of_work_block_act(
                     }
 
                     // Miner handles the UTXO set and updates its balance
-                    miner_handle_event(network, miner, "Received UTXO set for aggregating tx")
-                        .await;
+                    miner_handle_event(network, miner, "Received UTXO set").await;
 
                     {
                         let miner_node = network.miner(miner).unwrap();
@@ -3348,17 +3362,8 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     // This is the configuration we want applied to all compute nodes during runtime
     let shared_config_to_send = ComputeNodeSharedConfig {
         compute_partition_full_size: 5,
-        compute_mining_event_timeout: 10000,
-        compute_miner_whitelist: MinerWhitelist {
-            active: true, // This will enable whitelisting
-            miner_api_keys: Some(
-                // Filter based on API keys
-                vec!["key1".to_string(), "key2".to_string()]
-                    .into_iter()
-                    .collect(),
-            ),
-            miner_addresses: None,
-        },
+        compute_mining_event_timeout: 10000, // Changed mining event timeout
+        compute_miner_whitelist: Default::default(), // No whitelisting
     };
 
     let compute_ring = &[
@@ -3396,9 +3401,6 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     )
     .await;
 
-    // The miner should now get disconnected, since whitelisting has been applied
-    miner_handle_event_failure(&mut network, "miner1", "Miner not authorized").await;
-
     // All shared config values should now be the same
     let all_nodes_same_config = all_nodes_same_config(&mut network, compute_ring).await;
 
@@ -3415,6 +3417,125 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     assert!(all_nodes_paused_after_block_create);
     assert!(all_nodes_same_config);
     assert!(all_nodes_resumed_after_coordinated_resume);
+    assert!(initial_network_config != shared_config_to_send);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn compute_activate_miner_api_key_whitelisting_raft_3_nodes() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let network_config = complete_network_config_with_n_compute_miner(11750, true, 3, 6); // 6 miners
+
+    // Initial network config as loaded
+    let initial_network_config = ComputeNodeSharedConfig {
+        compute_partition_full_size: network_config.compute_partition_full_size,
+        compute_mining_event_timeout: 500,
+        compute_miner_whitelist: Default::default(), // No whitelisting
+    };
+
+    // This is the configuration we want applied to all compute nodes during runtime
+    let shared_config_to_send = ComputeNodeSharedConfig {
+        compute_partition_full_size: 6,
+        compute_mining_event_timeout: 500,
+        compute_miner_whitelist: MinerWhitelist {
+            active: true, // This will enable whitelisting
+            miner_api_keys: Some(
+                // Filter based on API keys
+                VALID_MINING_API_KEYS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
+            miner_addresses: None,
+        },
+    };
+
+    let compute_ring = &[
+        "compute1".to_string(),
+        "compute2".to_string(),
+        "compute3".to_string(),
+    ];
+
+    let miner_ring = &[
+        "miner1".to_string(),
+        "miner2".to_string(),
+        "miner3".to_string(),
+        "miner4".to_string(),
+        "miner5".to_string(),
+        "miner6".to_string(),
+    ];
+
+    // 6 API keys for the 6 miners
+    let miner_api_keys = &[
+        // Valid keys
+        Some(VALID_MINING_API_KEYS[0].to_string()),
+        Some(VALID_MINING_API_KEYS[1].to_string()),
+        Some(VALID_MINING_API_KEYS[2].to_string()),
+        // Miner 4 has duplicate API key (same as Miner 1)
+        Some(VALID_MINING_API_KEYS[0].to_string()),
+        // Miner 5 has an invalid API key
+        Some("invalid_api_key".to_string()),
+        // Miner 6 has no API key
+        None,
+    ];
+
+    let expected_miners_unauthorised = ["miner4", "miner5", "miner6"];
+
+    let mut network = Network::create_from_config(&network_config).await;
+
+    // Set API keys
+    for (idx, miner) in miner_ring.iter().enumerate() {
+        miner_set_mining_api_key(&mut network, miner, miner_api_keys[idx].clone()).await;
+    }
+
+    // Complete very first mining round
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    //
+    // Act
+    //
+
+    // create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+    compute_initiate_send_shared_config_act(
+        shared_config_to_send.clone(),
+        "compute1",
+        compute_ring,
+        &mut network,
+    )
+    .await;
+
+    // The miner should now get disconnected, since whitelisting has been applied
+    for miner_expected_unauthorised in expected_miners_unauthorised.iter() {
+        miner_handle_event_failure(
+            &mut network,
+            miner_expected_unauthorised.to_owned(),
+            "Miner not authorized",
+        )
+        .await;
+    }
+
+    // Get all miners currently connected
+    let connected_miners =
+        compute_all_get_connected_miners(&mut network, compute_ring, miner_ring).await;
+
+    // Confirm disconnected miner nodes
+    let all_expected_miners_disconnected = connected_miners
+        .iter()
+        .all(|v| !expected_miners_unauthorised.contains(&v.as_str()));
+
+    // All shared config values should now be the same
+    let all_nodes_same_config = all_nodes_same_config(&mut network, compute_ring).await;
+
+    //
+    // Assert
+    //
+    assert!(all_nodes_same_config);
+    assert!(all_expected_miners_disconnected);
     assert!(initial_network_config != shared_config_to_send);
 }
 
@@ -4146,6 +4267,36 @@ async fn compute_all_skip_mining(
     }
 }
 
+async fn compute_all_get_connected_miners(
+    network: &mut Network,
+    compute_ring: &[String],
+    mining_group: &[String],
+) -> Vec<String> {
+    let mut miners = Vec::new();
+    for compute in compute_ring {
+        miners.append(&mut compute_get_connected_miners(network, compute, mining_group).await);
+    }
+    miners
+}
+
+async fn compute_get_connected_miners(
+    network: &mut Network,
+    compute: &str,
+    mining_group: &[String],
+) -> Vec<String> {
+    let c = network.compute(compute).unwrap().lock().await;
+    let connected_miners_socket_addresses = c.get_connected_miners().await;
+
+    let mut miners = Vec::new();
+    for miner in mining_group {
+        let socket = network.get_address(miner.as_str()).await.unwrap();
+        if connected_miners_socket_addresses.contains(&socket) {
+            miners.push(miner.clone());
+        }
+    }
+    miners
+}
+
 async fn compute_get_filtered_participants(
     network: &mut Network,
     compute: &str,
@@ -4763,6 +4914,11 @@ async fn miner_set_static_miner_address(network: &mut Network, miner: &str, stat
     m.set_static_miner_address(Some(static_addr)).await;
 }
 
+async fn miner_set_mining_api_key(network: &mut Network, miner: &str, api_key: Option<String>) {
+    let mut m = network.miner(miner).unwrap().lock().await;
+    m.set_mining_api_key(api_key);
+}
+
 //
 // Test helpers
 //
@@ -5103,6 +5259,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         compute_miner_whitelist: Default::default(),
         mining_api_key: Default::default(),
         peer_limit: 1000,
+        address_aggregation_limit: Some(5),
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::wallet::LockedCoinbase;
 use naom::primitives::asset::{Asset, AssetValues};
 use naom::primitives::transaction::OutPoint;
 use serde::{Deserialize, Serialize};
@@ -50,32 +51,22 @@ impl FundStore {
     ///
     /// # Arguments
     /// * `locked_coinbase` - A vector of tuples containing the transaction hash and the block height at which it is locked
-    pub fn filter_locked_coinbase(
-        &mut self,
-        locked_coinbase: Option<&Vec<(String, u64)>>,
-    ) -> Option<u64> {
-        let mut out_points_locked = Vec::new();
+    pub fn filter_locked_coinbase(&mut self, locked_coinbase: &LockedCoinbase) -> Option<u64> {
+        let mut out_points_locked_count: Option<u64> = Default::default();
         if let Some(locked_coinbase) = locked_coinbase {
-            for (t_hash, _) in locked_coinbase {
-                out_points_locked = self
-                    .transactions
-                    .keys()
-                    .cloned()
-                    .filter(|out_p| out_p.t_hash == t_hash.clone())
-                    .collect::<Vec<OutPoint>>();
-
-                out_points_locked.iter().for_each(|out_p| {
+            let all_transactions = self.transactions.clone();
+            for out_p in all_transactions.keys() {
+                if locked_coinbase.contains_key(&out_p.t_hash) {
                     if let Some(asset_locked) = self.transactions.remove(out_p) {
-                        self.running_total.update_sub(&asset_locked)
+                        self.running_total.update_sub(&asset_locked);
+                        let current_outpoints_locked_count =
+                            out_points_locked_count.unwrap_or_default();
+                        out_points_locked_count = Some(current_outpoints_locked_count + 1);
                     }
-                });
+                }
             }
         }
-        if out_points_locked.is_empty() {
-            None
-        } else {
-            Some(out_points_locked.len() as u64)
-        }
+        out_points_locked_count
     }
 
     /// Returns a page (or nearest page) with tranasactions

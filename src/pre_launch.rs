@@ -144,6 +144,7 @@ impl PreLaunchNode {
             config.peer_limit,
             NodeType::PreLaunch,
             false,
+            false,
         )
         .await?;
         let db = {
