@@ -153,6 +153,7 @@ pub struct ComputeNode {
     current_random_num: Vec<u8>,
     current_trigger_messages_count: usize,
     enable_trigger_messages_pipeline_reset: bool,
+    miners_changed: bool,
     partition_full_size: usize,
     request_list: BTreeSet<SocketAddr>,
     request_list_first_flood: Option<usize>,
@@ -246,6 +247,7 @@ impl ComputeNode {
             previous_random_num: Default::default(),
             current_random_num: Default::default(),
             miner_removal_list: Default::default(),
+            miners_changed: false,
             request_list: Default::default(),
             sanction_list: config.sanction_list,
             jurisdiction: config.jurisdiction,
@@ -728,10 +730,6 @@ impl ComputeNode {
                 debug!(
                     "Block and participants ready to mine: {:?}",
                     self.get_mining_block()
-                );
-                info!(
-                    "No. of connected miners: {:?}",
-                    self.get_connected_miners().await.len()
                 );
                 self.flood_rand_and_block_to_partition().await.unwrap();
             }
@@ -1493,6 +1491,10 @@ impl ComputeNode {
         mining_api_key: Option<String>,
     ) -> Response {
         trace!("Received partition request from {peer:?}");
+
+        // We either kick it if it is unauthorized, or add it to the partition.
+        self.miners_changed = true;
+
         let white_listing_active = self.node_raft.get_compute_whitelisting_active();
         // Only check whitelist if activated
         if white_listing_active && !self.check_miner_whitelisted(peer, mining_api_key.clone()) {
@@ -1723,6 +1725,14 @@ impl ComputeNode {
                 .await;
         }
 
+        if self.miners_changed {
+            info!(
+                "Change in no. of connected miners: {:?}",
+                self.get_connected_miners().await.len()
+            );
+            self.miners_changed = false;
+        }
+
         Ok(())
     }
 
@@ -1777,6 +1787,7 @@ impl ComputeNode {
 
         // Cleanup miners from block pipeline
         self.node_raft.flush_stale_miners(&stale_miners);
+        self.miners_changed = true;
     }
 
     /// Floods the current block to participants for mining
