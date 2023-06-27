@@ -76,6 +76,7 @@ pub struct EncapsulatedPayment {
     pub address: String,
     pub amount: TokenAmount,
     pub passphrase: String,
+    pub locktime: Option<u64>,
 }
 
 /// Receipt asset creation structure received from client
@@ -492,6 +493,7 @@ pub async fn post_make_payment(
         address,
         amount,
         passphrase,
+        locktime,
     } = encapsulated_data;
 
     let r = CallResponse::new(route, &call_id);
@@ -500,6 +502,7 @@ pub async fn post_make_payment(
         Ok(_) => UserRequest::UserApi(UserApiRequest::MakePayment {
             address: address.clone(),
             amount,
+            locktime,
         }),
         Err(e) => {
             return wallet_db_error(e, r);
@@ -529,6 +532,7 @@ pub async fn post_make_ip_payment(
         address,
         amount,
         passphrase,
+        locktime,
     } = encapsulated_data;
 
     let r = CallResponse::new(route, &call_id);
@@ -544,6 +548,7 @@ pub async fn post_make_ip_payment(
         Ok(_) => UserRequest::UserApi(UserApiRequest::MakeIpPayment {
             payment_peer,
             amount,
+            locktime,
         }),
         Err(e) => {
             return wallet_db_error(e, r);
