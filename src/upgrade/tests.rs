@@ -864,7 +864,8 @@ async fn user_make_payment_transaction(
 ) {
     let mut user = network.user(user).unwrap().lock().await;
     let compute_addr = network.get_address(compute).await.unwrap();
-    user.make_payment_transactions(None, to_addr, amount).await;
+    user.make_payment_transactions(None, to_addr, amount, None)
+        .await;
     user.send_next_payment_to_destinations(compute_addr)
         .await
         .unwrap();

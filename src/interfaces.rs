@@ -735,12 +735,14 @@ pub enum UserApiRequest {
     MakeIpPayment {
         payment_peer: SocketAddr,
         amount: TokenAmount,
+        locktime: Option<u64>,
     },
 
     /// Request to make a payment to a public key address
     MakePayment {
         address: String,
         amount: TokenAmount,
+        locktime: Option<u64>,
     },
 
     /// Request to make a payment to a public key address with a given excess address
@@ -748,6 +750,7 @@ pub enum UserApiRequest {
         address: String,
         amount: TokenAmount,
         excess_address: String,
+        locktime: Option<u64>,
     },
 
     /// Request to generate a new address
