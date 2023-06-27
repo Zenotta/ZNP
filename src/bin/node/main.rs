@@ -18,6 +18,24 @@ async fn main() {
 async fn launch_node_with_args(matches: ArgMatches<'_>) {
     if let Some(sub_command) = matches.subcommand_name() {
         let sub_matches = matches.subcommand_matches(sub_command).unwrap();
+
+        println!(" ---------- BUILD DETAILS ---------- ");
+        println!("Build Timestamp:    {}", env!("VERGEN_BUILD_TIMESTAMP"));
+        println!("Build Date:    {}", env!("VERGEN_BUILD_DATE"));
+
+        println!(" ---------- GIT DETAILS ---------- ");
+        println!("Git Branch:    {}", env!("VERGEN_GIT_BRANCH"));
+        println!("Git Hash:    {}", env!("VERGEN_GIT_HASH"));
+        println!(
+            "Git commit message:    {}",
+            env!("VERGEN_GIT_COMMIT_MESSAGE")
+        );
+        println!("Git commit date:    {}", env!("VERGEN_GIT_COMMIT_DATE"));
+
+        println!(" ---------- RUSTC DETAILS ---------- ");
+        println!("Rustc Channel:    {}", env!("VERGEN_RUSTC_CHANNEL"));
+        println!("Rustc Version:    {}", env!("VERGEN_RUSTC_SEMVER"));
+
         match sub_command {
             "user" => user::run_node(sub_matches).await,
             "miner" => miner::run_node(sub_matches).await,
