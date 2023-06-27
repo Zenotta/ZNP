@@ -73,7 +73,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                     .run(bind_address)
                     .await;
             } else {
-                serve.run(bind_address).await;
+                panic!("TLS not configured. Please provide a valid TLS configuration for API access and restart.");
             }
         }
     });
