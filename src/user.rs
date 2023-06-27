@@ -1222,6 +1222,16 @@ impl UserNode {
         self.send_address_to_trading_peer().await
     }
 
+    /// Filter locked coinbase
+    ///
+    ///
+    /// ### Arguments
+    ///
+    /// * `b_num` - Block number to filter
+    pub async fn filter_locked_coinbase(&mut self, b_num: u64) {
+        self.wallet_db.filter_locked_coinbase(b_num).await;
+    }
+
     /// Received a mined block notification: allow to update pending transactions
     ///
     /// ### Arguments
