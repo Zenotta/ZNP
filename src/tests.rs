@@ -1713,7 +1713,7 @@ async fn receive_payment_tx_user() {
     let mut network = Network::create_from_config(&network_config).await;
     let user_nodes = &network_config.nodes[&NodeType::User];
     let amount = TokenAmount(5);
-    let locktime = Some(100);
+    let locktime = Some(5);
 
     create_first_block_act(&mut network).await;
 
@@ -1733,14 +1733,17 @@ async fn receive_payment_tx_user() {
 
     user_send_next_payment_to_destinations(&mut network, "user1", "compute1").await;
     compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
+    compute_handle_event(&mut network, "compute1", &["Transactions committed"]).await;
     user_handle_event(&mut network, "user2", "Payment transaction received").await;
 
     // Ignore donations:
     user_send_donation_address_to_peer(&mut network, "user2", "user1").await;
     user_handle_error(&mut network, "user1", "Ignore unexpected transaction").await;
 
+    let after_payment_user1_user2 = node_all_get_wallet_info(&mut network, user_nodes).await;
+
     // Handle trying to spend locked funds:
-    create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
+    create_block_act_with(&mut network, Cfg::IgnoreStorage, CfgNum::All, 0).await; // Create next block
     user_send_address_request(&mut network, "user2", "user1", amount, None).await;
     user_handle_event(&mut network, "user1", "New address ready to be sent").await;
 
@@ -1748,7 +1751,26 @@ async fn receive_payment_tx_user() {
     // Insufficient funds due to locked funds:
     user_handle_event_failure(&mut network, "user2", "Insufficient funds for payment").await;
 
-    let after = node_all_get_wallet_info(&mut network, user_nodes).await;
+    // Handle trying to spend unlocked funds:
+    for b_num in 1..10 {
+        // Create next block
+        create_block_act_with(&mut network, Cfg::IgnoreStorage, CfgNum::All, b_num).await;
+        // Update locked coinbase
+        users_filter_locked_coinbase(&mut network, &["user1", "user2"], b_num).await;
+    }
+
+    user_send_address_request(&mut network, "user2", "user1", amount, None).await;
+    user_handle_event(&mut network, "user1", "New address ready to be sent").await;
+
+    user_send_address_to_trading_peer(&mut network, "user1").await;
+    user_handle_event(&mut network, "user2", "Next payment transaction ready").await;
+
+    user_send_next_payment_to_destinations(&mut network, "user2", "compute1").await;
+    compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
+    compute_handle_event(&mut network, "compute1", &["Transactions committed"]).await;
+    user_handle_event(&mut network, "user1", "Payment transaction received").await;
+
+    let after_payment_user2_user1 = node_all_get_wallet_info(&mut network, user_nodes).await;
 
     //
     // Assert
@@ -1761,11 +1783,18 @@ async fn receive_payment_tx_user() {
         vec![AssetValues::token_u64(11), AssetValues::token_u64(0),]
     );
     assert_eq!(
-        after
+        after_payment_user1_user2
             .iter()
             .map(|(total, _, _)| total.clone())
             .collect::<Vec<_>>(),
         vec![AssetValues::token_u64(6), AssetValues::token_u64(5)]
+    );
+    assert_eq!(
+        after_payment_user2_user1
+            .iter()
+            .map(|(total, _, _)| total.clone())
+            .collect::<Vec<_>>(),
+        vec![AssetValues::token_u64(11), AssetValues::token_u64(0),]
     );
 
     test_step_complete(network).await;
@@ -4665,6 +4694,17 @@ async fn user_send_next_payment_to_destinations(
     u.send_next_payment_to_destinations(compute_node_addr)
         .await
         .unwrap();
+}
+
+async fn users_filter_locked_coinbase(network: &mut Network, users: &[&str], b_num: u64) {
+    for user in users {
+        user_filter_locked_coinbase(network, &user, b_num).await;
+    }
+}
+
+async fn user_filter_locked_coinbase(network: &mut Network, user: &str, b_num: u64) {
+    let mut u = network.user(user).unwrap().lock().await;
+    u.filter_locked_coinbase(b_num).await;
 }
 
 async fn user_send_address_request(
