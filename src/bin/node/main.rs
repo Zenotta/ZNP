@@ -25,7 +25,7 @@ async fn launch_node_with_args(matches: ArgMatches<'_>) {
 
         println!(" ---------- GIT DETAILS ---------- ");
         println!("Git Branch:    {}", env!("VERGEN_GIT_BRANCH"));
-        println!("Git Hash:    {}", env!("VERGEN_GIT_HASH"));
+        println!("Git Hash:    {}", env!("VERGEN_GIT_SHA"));
         println!(
             "Git commit message:    {}",
             env!("VERGEN_GIT_COMMIT_MESSAGE")
@@ -33,8 +33,8 @@ async fn launch_node_with_args(matches: ArgMatches<'_>) {
         println!("Git commit date:    {}", env!("VERGEN_GIT_COMMIT_DATE"));
 
         println!(" ---------- RUSTC DETAILS ---------- ");
-        println!("Rustc Channel:    {}", env!("VERGEN_RUSTC_CHANNEL"));
         println!("Rustc Version:    {}", env!("VERGEN_RUSTC_SEMVER"));
+        println!("Rustc Channel:    {}", env!("VERGEN_RUSTC_CHANNEL"));
 
         match sub_command {
             "user" => user::run_node(sub_matches).await,

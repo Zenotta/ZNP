@@ -10,7 +10,7 @@ use crate::configurations::ComputeNodeSharedConfig;
 use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
-    node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
+    node_type_as_str, AddressesWithOutPoints, BinaryDetails, BlockchainItem, BlockchainItemMeta,
     BlockchainItemType, ComputeApi, DebugData, DruidPool, MineApiRequest, MineRequest, NodeType,
     OutPointData, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
@@ -290,6 +290,14 @@ pub async fn get_debug_data(
 
     let node_type = node_type_as_str(node.get_node_type());
     let node_peers = node.get_peer_list().await;
+    let binary_details = BinaryDetails {
+        build_timestamp: env!("VERGEN_BUILD_TIMESTAMP").to_string(),
+        git_branch: env!("VERGEN_GIT_BRANCH").to_string(),
+        git_commit_hash: env!("VERGEN_GIT_SHA").to_string(),
+        git_commit_date: env!("VERGEN_GIT_COMMIT_DATE").to_string(),
+        rustc_version: env!("VERGEN_RUSTC_SEMVER").to_string(),
+        rustc_channel: env!("VERGEN_RUSTC_CHANNEL").to_string(),
+    };
 
     let data = match aux_node {
         Some(aux) => {
@@ -300,6 +308,7 @@ pub async fn get_debug_data(
                 node_api: debug_paths,
                 node_peers: [node_peers, aux_peers].concat(),
                 routes_pow,
+                binary_details,
             }
         }
         None => DebugData {
@@ -307,6 +316,7 @@ pub async fn get_debug_data(
             node_api: debug_paths,
             node_peers,
             routes_pow,
+            binary_details,
         },
     };
     r.into_ok(
