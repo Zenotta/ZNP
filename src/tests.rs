@@ -1713,6 +1713,7 @@ async fn receive_payment_tx_user() {
     let mut network = Network::create_from_config(&network_config).await;
     let user_nodes = &network_config.nodes[&NodeType::User];
     let amount = TokenAmount(5);
+    let locktime = Some(100);
 
     create_first_block_act(&mut network).await;
 
@@ -1724,7 +1725,7 @@ async fn receive_payment_tx_user() {
     node_connect_to(&mut network, "user1", "user2").await;
 
     // Process requested transactions:
-    user_send_address_request(&mut network, "user1", "user2", amount).await;
+    user_send_address_request(&mut network, "user1", "user2", amount, locktime).await;
     user_handle_event(&mut network, "user2", "New address ready to be sent").await;
 
     user_send_address_to_trading_peer(&mut network, "user2").await;
@@ -1737,6 +1738,15 @@ async fn receive_payment_tx_user() {
     // Ignore donations:
     user_send_donation_address_to_peer(&mut network, "user2", "user1").await;
     user_handle_error(&mut network, "user1", "Ignore unexpected transaction").await;
+
+    // Handle trying to spend locked funds:
+    create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
+    user_send_address_request(&mut network, "user2", "user1", amount, None).await;
+    user_handle_event(&mut network, "user1", "New address ready to be sent").await;
+
+    user_send_address_to_trading_peer(&mut network, "user1").await;
+    // Insufficient funds due to locked funds:
+    user_handle_event_failure(&mut network, "user2", "Insufficient funds for payment").await;
 
     let after = node_all_get_wallet_info(&mut network, user_nodes).await;
 
@@ -4571,6 +4581,11 @@ async fn storage_one_handle_event(
 // UserNode helpers
 //
 
+async fn user_handle_event_failure(network: &mut Network, user: &str, reason_val: &str) {
+    let mut u = network.user(user).unwrap().lock().await;
+    user_handle_event_for_node(&mut u, false, reason_val, &mut test_timeout()).await;
+}
+
 async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) {
     let mut u = network.user(user).unwrap().lock().await;
     user_handle_event_for_node(&mut u, true, reason_val, &mut test_timeout()).await;
@@ -4657,10 +4672,11 @@ async fn user_send_address_request(
     from_user: &str,
     to_user: &str,
     amount: TokenAmount,
+    locktime: Option<u64>,
 ) {
     let user_node_addr = network.get_address(to_user).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
-    u.send_address_request(user_node_addr, amount)
+    u.send_address_request(user_node_addr, amount, locktime)
         .await
         .unwrap();
 }

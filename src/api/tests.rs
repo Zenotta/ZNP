@@ -1354,6 +1354,7 @@ async fn test_post_make_payment() {
         address: COMMON_PUB_ADDR.to_string(),
         amount: TokenAmount(25),
         passphrase: String::new(),
+        locktime: None,
     };
 
     let db = get_wallet_db(&encapsulated_data.passphrase).await;
@@ -1388,8 +1389,16 @@ async fn test_post_make_payment() {
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Payment processing\",\"route\":\"make_payment\",\"content\":{\"13bd3351b78beb2d0dadf2058dcc926c\":{\"asset\":{\"Token\":25},\"extra_info\":null}}}");
 
     // Frame expected
-    let (address, amount) = (encapsulated_data.address, encapsulated_data.amount);
-    let expected_frame = user_api_request_as_frame(UserApiRequest::MakePayment { address, amount });
+    let (address, amount, locktime) = (
+        encapsulated_data.address,
+        encapsulated_data.amount,
+        encapsulated_data.locktime,
+    );
+    let expected_frame = user_api_request_as_frame(UserApiRequest::MakePayment {
+        address,
+        amount,
+        locktime,
+    });
     let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
 }
@@ -1408,6 +1417,7 @@ async fn test_post_make_ip_payment() {
         address: "127.0.0.1:12345".to_owned(),
         amount: TokenAmount(25),
         passphrase: String::new(),
+        locktime: None,
     };
     let db = get_wallet_db(&encapsulated_data.passphrase).await;
     let request = warp::test::request()
@@ -1441,13 +1451,15 @@ async fn test_post_make_ip_payment() {
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"IP payment processing\",\"route\":\"make_ip_payment\",\"content\":{\"127.0.0.1:12345\":{\"asset\":{\"Token\":25},\"extra_info\":null}}}");
 
     // Frame expected
-    let (payment_peer, amount) = (
+    let (payment_peer, amount, locktime) = (
         encapsulated_data.address.parse::<SocketAddr>().unwrap(),
         encapsulated_data.amount,
+        encapsulated_data.locktime,
     );
     let expected_frame = user_api_request_as_frame(UserApiRequest::MakeIpPayment {
         payment_peer,
         amount,
+        locktime,
     });
     let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
