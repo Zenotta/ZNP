@@ -15,19 +15,32 @@ async fn main() {
 
     let matches = clap_app().get_matches();
 
-    match update_binary("node") {
-        Ok(updated) => {
-            if updated {
-                println!("Press Ctrl+C to exit...");
-            } else {
-                launch_node_with_args(matches).await;
+    if let Some(sub_command) = matches.subcommand_name() {
+        let sub_matches = matches.subcommand_matches(sub_command).unwrap();
+
+        if sub_matches.is_present("self_update") {
+            match update_binary("node") {
+                Ok(updated) => {
+                    if updated {
+                        println!("Press Ctrl+C to exit...");
+                    } else {
+                        println!("Proceeding to run the current version...");
+                        launch_node_with_args(matches).await;
+                    }
+                }
+                Err(e) => {
+                    println!("Error updating binary {e:?}");
+                    println!("Proceeding to run the current version...");
+                    launch_node_with_args(matches).await;
+                }
             }
-        }
-        Err(e) => {
-            println!("Error updating binary {e:?}");
-            println!("Proceeding to run current version...");
+        } else {
+            println!("Not performing self_update...");
+            println!("Proceeding to run the current version...");
             launch_node_with_args(matches).await;
         }
+    } else {
+        println!("Node type and arguments needs to be specified.")
     }
 }
 

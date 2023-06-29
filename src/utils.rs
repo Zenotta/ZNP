@@ -1194,8 +1194,8 @@ pub fn update_binary(bin_name: &str) -> Result<bool, Box<dyn (::std::error::Erro
         .repo_owner("zenotta")
         .repo_name("znp")
         .bin_name(bin_name)
-        .no_confirm(false)
         .show_download_progress(true)
+        .no_confirm(true)
         .current_version(cargo_crate_version!())
         .build()?;
 
@@ -1210,6 +1210,8 @@ pub fn update_binary(bin_name: &str) -> Result<bool, Box<dyn (::std::error::Erro
 
     if bump_is_compatible(&current_version, &latest_version)? {
         println!("A compatible update is available!");
+        println!("Do you want to perform self_update");
+
         println!("Performing self_update...");
         let status = updater.update()?;
 
@@ -1221,7 +1223,6 @@ pub fn update_binary(bin_name: &str) -> Result<bool, Box<dyn (::std::error::Erro
     } else {
         println!("Non-compatible update is available!");
         println!("Please update the binary manually!");
-        println!("Proceeding to run the current version...");
         Ok(false)
     }
 }

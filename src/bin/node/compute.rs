@@ -122,6 +122,12 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
     App::new("compute")
         .about("Runs a basic compute node.")
         .arg(
+            Arg::with_name("self_update")
+                .long("self_update")
+                .help("Whether to check for new releases and perform self_update")
+                .takes_value(false),
+        )
+        .arg(
             Arg::with_name("config")
                 .long("config")
                 .short("c")
