@@ -26,6 +26,8 @@ use naom::utils::transaction_utils::{
     get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
+use self_update::cargo_crate_version;
+use self_update::version::bump_is_compatible;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -1185,4 +1187,64 @@ pub mod rug_integer {
         let value: String = Deserialize::deserialize(d)?;
         Integer::from_str_radix(&value, 16).map_err(serde::de::Error::custom)
     }
+}
+
+pub fn update_binary(bin_name: &str) -> Result<bool, Box<dyn (::std::error::Error)>> {
+    let updater = self_update::backends::github::Update::configure()
+        .repo_owner("zenotta")
+        .repo_name("znp")
+        .bin_name(bin_name)
+        .show_download_progress(true)
+        .no_confirm(true)
+        .current_version(cargo_crate_version!())
+        .build()?;
+
+    let current_version = updater.current_version();
+    let path = updater.bin_install_path();
+    let latest_release = updater.get_latest_release()?;
+    let latest_version = latest_release.version;
+
+    println!("Update path {:?}", path);
+    println!("Current version: `{:?}`!", &current_version);
+    println!("Latest version: `{:?}`!", &latest_version);
+
+    if bump_is_compatible(&current_version, &latest_version)? {
+        println!("A compatible update is available!");
+        println!("Do you want to perform self_update");
+
+        println!("Performing self_update...");
+        let status = updater.update()?;
+
+        if status.updated() {
+            println!("Finished updating!");
+            println!("Please re-run the binary");
+        }
+        Ok(true)
+    } else {
+        println!("Non-compatible update is available!");
+        println!("Please update the binary manually!");
+        Ok(false)
+    }
+}
+
+pub fn print_binary_info() {
+    // The following env variables will be embedded into the binary
+    // during compile time by `vergen`.
+    println!(" ---------- BUILD DETAILS ---------- ");
+    println!("Build Timestamp:    {}", env!("VERGEN_BUILD_TIMESTAMP"));
+    println!("Build Date:    {}", env!("VERGEN_BUILD_DATE"));
+    println!("ZNP Crate Version:    {}", cargo_crate_version!());
+
+    println!(" ---------- GIT DETAILS ---------- ");
+    println!("Git Branch:    {}", env!("VERGEN_GIT_BRANCH"));
+    println!("Git Hash:    {}", env!("VERGEN_GIT_SHA"));
+    println!(
+        "Git commit message:    {}",
+        env!("VERGEN_GIT_COMMIT_MESSAGE")
+    );
+    println!("Git commit date:    {}", env!("VERGEN_GIT_COMMIT_DATE"));
+
+    println!(" ---------- RUSTC DETAILS ---------- ");
+    println!("Rustc Version:    {}", env!("VERGEN_RUSTC_SEMVER"));
+    println!("Rustc Channel:    {}", env!("VERGEN_RUSTC_CHANNEL"));
 }

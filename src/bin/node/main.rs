@@ -1,6 +1,7 @@
 //! App to run a Zenotta node.
 
 use clap::{App, ArgMatches};
+use znp::utils::{print_binary_info, update_binary};
 
 mod compute;
 mod miner;
@@ -11,13 +12,43 @@ mod user;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
+
     let matches = clap_app().get_matches();
-    launch_node_with_args(matches).await;
+
+    if let Some(sub_command) = matches.subcommand_name() {
+        let sub_matches = matches.subcommand_matches(sub_command).unwrap();
+
+        if sub_matches.is_present("self_update") {
+            match update_binary("node") {
+                Ok(updated) => {
+                    if updated {
+                        println!("Press Ctrl+C to exit...");
+                    } else {
+                        println!("Proceeding to run the current version...");
+                        launch_node_with_args(matches).await;
+                    }
+                }
+                Err(e) => {
+                    println!("Error updating binary {e:?}");
+                    println!("Proceeding to run the current version...");
+                    launch_node_with_args(matches).await;
+                }
+            }
+        } else {
+            println!("Not performing self_update...");
+            println!("Proceeding to run the current version...");
+            launch_node_with_args(matches).await;
+        }
+    } else {
+        println!("Node type and arguments needs to be specified.")
+    }
 }
 
 async fn launch_node_with_args(matches: ArgMatches<'_>) {
+    print_binary_info();
     if let Some(sub_command) = matches.subcommand_name() {
         let sub_matches = matches.subcommand_matches(sub_command).unwrap();
+
         match sub_command {
             "user" => user::run_node(sub_matches).await,
             "miner" => miner::run_node(sub_matches).await,
