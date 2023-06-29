@@ -27,6 +27,7 @@ use naom::primitives::druid::DdeValues;
 use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
 use naom::utils::transaction_utils::{construct_address_for, construct_tx_hash};
+use self_update::cargo_crate_version;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -292,6 +293,7 @@ pub async fn get_debug_data(
     let node_peers = node.get_peer_list().await;
     let binary_details = BinaryDetails {
         build_timestamp: env!("VERGEN_BUILD_TIMESTAMP").to_string(),
+        znp_version: cargo_crate_version!().to_string(),
         git_branch: env!("VERGEN_GIT_BRANCH").to_string(),
         git_commit_hash: env!("VERGEN_GIT_SHA").to_string(),
         git_commit_date: env!("VERGEN_GIT_COMMIT_DATE").to_string(),

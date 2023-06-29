@@ -8,6 +8,7 @@ use znp::upgrade::{
     get_upgrade_wallet_db, upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, DbSpecInfo,
     UpgradeCfg, UpgradeError, DB_SPEC_INFOS,
 };
+use znp::utils::print_binary_info;
 
 const NODE_TYPES: &[&str] = &["compute", "storage", "user", "miner"];
 
@@ -20,6 +21,8 @@ enum Processing {
 #[tokio::main]
 async fn main() -> Result<(), UpgradeError> {
     tracing_subscriber::fmt::init();
+
+    print_binary_info();
 
     let matches = clap_app().get_matches();
     let (processing, db_modes, upgrade_cfg) = configuration(load_settings(&matches), &matches);

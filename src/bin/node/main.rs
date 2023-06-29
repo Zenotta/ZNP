@@ -1,6 +1,7 @@
 //! App to run a Zenotta node.
 
 use clap::{App, ArgMatches};
+use znp::utils::{print_binary_info, update_binary};
 
 mod compute;
 mod miner;
@@ -11,30 +12,19 @@ mod user;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
-    let matches = clap_app().get_matches();
-    launch_node_with_args(matches).await;
+
+    if !update_binary("node").unwrap() {
+        let matches = clap_app().get_matches();
+        launch_node_with_args(matches).await;
+    } else {
+        println!("Press Ctrl+C to exit...");
+    }
 }
 
 async fn launch_node_with_args(matches: ArgMatches<'_>) {
+    print_binary_info();
     if let Some(sub_command) = matches.subcommand_name() {
         let sub_matches = matches.subcommand_matches(sub_command).unwrap();
-
-        println!(" ---------- BUILD DETAILS ---------- ");
-        println!("Build Timestamp:    {}", env!("VERGEN_BUILD_TIMESTAMP"));
-        println!("Build Date:    {}", env!("VERGEN_BUILD_DATE"));
-
-        println!(" ---------- GIT DETAILS ---------- ");
-        println!("Git Branch:    {}", env!("VERGEN_GIT_BRANCH"));
-        println!("Git Hash:    {}", env!("VERGEN_GIT_SHA"));
-        println!(
-            "Git commit message:    {}",
-            env!("VERGEN_GIT_COMMIT_MESSAGE")
-        );
-        println!("Git commit date:    {}", env!("VERGEN_GIT_COMMIT_DATE"));
-
-        println!(" ---------- RUSTC DETAILS ---------- ");
-        println!("Rustc Version:    {}", env!("VERGEN_RUSTC_SEMVER"));
-        println!("Rustc Channel:    {}", env!("VERGEN_RUSTC_CHANNEL"));
 
         match sub_command {
             "user" => user::run_node(sub_matches).await,
