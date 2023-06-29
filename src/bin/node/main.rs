@@ -13,11 +13,21 @@ mod user;
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    if !update_binary("node").unwrap() {
-        let matches = clap_app().get_matches();
-        launch_node_with_args(matches).await;
-    } else {
-        println!("Press Ctrl+C to exit...");
+    let matches = clap_app().get_matches();
+
+    match update_binary("node") {
+        Ok(updated) => {
+            if updated {
+                println!("Press Ctrl+C to exit...");
+            } else {
+                launch_node_with_args(matches).await;
+            }
+        }
+        Err(e) => {
+            println!("Error updating binary {e:?}");
+            println!("Proceeding to run current version...");
+            launch_node_with_args(matches).await;
+        }
     }
 }
 

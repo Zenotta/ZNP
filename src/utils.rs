@@ -1194,6 +1194,7 @@ pub fn update_binary(bin_name: &str) -> Result<bool, Box<dyn (::std::error::Erro
         .repo_owner("zenotta")
         .repo_name("znp")
         .bin_name(bin_name)
+        .no_confirm(false)
         .show_download_progress(true)
         .current_version(cargo_crate_version!())
         .build()?;
