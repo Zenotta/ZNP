@@ -4698,7 +4698,7 @@ async fn user_send_next_payment_to_destinations(
 
 async fn users_filter_locked_coinbase(network: &mut Network, users: &[&str], b_num: u64) {
     for user in users {
-        user_filter_locked_coinbase(network, &user, b_num).await;
+        user_filter_locked_coinbase(network, user, b_num).await;
     }
 }
 

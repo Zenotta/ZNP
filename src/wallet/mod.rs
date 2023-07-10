@@ -3,7 +3,7 @@ use crate::constants::{FUND_KEY, KNOWN_ADDRESS_KEY, WALLET_PATH};
 use crate::db_utils::{
     self, CustomDbSpec, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch, DB_COL_DEFAULT,
 };
-use crate::utils::{get_paiments_for_wallet, make_wallet_tx_info};
+use crate::utils::{get_paiments_for_wallet, make_wallet_tx_info, StringError};
 use crate::Rs2JsMsg;
 use bincode::{deserialize, serialize};
 use hex::FromHexError;
@@ -57,7 +57,7 @@ pub enum WalletDbError {
     IO(io::Error),
     AsyncTask(task::JoinError),
     Serialization(bincode::Error),
-    Database(String),
+    Database(StringError),
     HexError(FromHexError),
     PassphraseError,
     InsufficientFundsError,
@@ -115,15 +115,15 @@ impl From<bincode::Error> for WalletDbError {
     }
 }
 
-impl From<SimpleDbError> for String {
+impl From<SimpleDbError> for WalletDbError {
     fn from(other: SimpleDbError) -> Self {
-        format!("{:?}", other)
+        WalletDbError::Database(StringError(format!("{}", other)))
     }
 }
 
-impl From<sled::Error> for String {
+impl From<sled::Error> for WalletDbError {
     fn from(other: sled::Error) -> Self {
-        format!("{:?}", other)
+        WalletDbError::Database(StringError(format!("{}", other)))
     }
 }
 
