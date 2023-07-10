@@ -44,6 +44,9 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 /// TODO: Determine the remaining functions that require the `Result` wrapper for error handling
 pub type Result<T> = std::result::Result<T, WalletDbError>;
 
+/// Database error wrapper
+// pub type DbError = if cfg!(target_os = "windows") { sled::Error } else { SimpleDbError };
+
 /// Wrapper for a locked coinbase (tx_hash, locktime)
 pub type LockedCoinbase = Option<BTreeMap<String, u64>>;
 pub type LockedCoinbaseWithMutex = Arc<TokioMutex<LockedCoinbase>>;
@@ -54,7 +57,7 @@ pub enum WalletDbError {
     IO(io::Error),
     AsyncTask(task::JoinError),
     Serialization(bincode::Error),
-    Database(SimpleDbError),
+    Database(String),
     HexError(FromHexError),
     PassphraseError,
     InsufficientFundsError,
@@ -112,9 +115,15 @@ impl From<bincode::Error> for WalletDbError {
     }
 }
 
-impl From<SimpleDbError> for WalletDbError {
+impl From<SimpleDbError> for String {
     fn from(other: SimpleDbError) -> Self {
-        Self::Database(other)
+        format!("{:?}", other)
+    }
+}
+
+impl From<sled::Error> for String {
+    fn from(other: sled::Error) -> Self {
+        format!("{:?}", other)
     }
 }
 
