@@ -3,9 +3,10 @@ use crate::constants::{
     DB_PATH_LIVE, DB_PATH_TEST, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, OLD_BACKUP_COUNT,
 };
 use rocksdb::backup::{BackupEngine, BackupEngineOptions};
-use rocksdb::{DBCompressionType, IteratorMode, Options, WriteBatch, DB};
+use rocksdb::{DBCompressionType, Env, IteratorMode, Options, WriteBatch, DB};
 pub use rocksdb::{Error as DBError, DEFAULT_COLUMN_FAMILY_NAME as DB_COL_DEFAULT};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::path::Path;
 use std::{error::Error, fmt};
 use tracing::{debug, warn};
 
@@ -25,7 +26,7 @@ pub struct SimpleDbSpec {
     pub columns: &'static [&'static str],
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CustomDbSpec {
     pub db_path: String,
     pub suffix: String,
@@ -52,6 +53,12 @@ impl From<DBError> for SimpleDbError {
     }
 }
 
+impl From<sled::Error> for SimpleDbError {
+    fn from(other: sled::Error) -> Self {
+        Self(other.to_string())
+    }
+}
+
 impl SimpleDbError {
     pub fn into_string(self) -> String {
         self.0
@@ -70,6 +77,11 @@ pub enum SimpleDb {
         columns: InMemoryColumns,
         key_values: InMemoryDb,
     },
+    Sled {
+        path: String,
+        columns: BTreeSet<String>,
+        db: sled::Db,
+    },
 }
 
 impl fmt::Debug for SimpleDb {
@@ -77,6 +89,7 @@ impl fmt::Debug for SimpleDb {
         match self {
             Self::File { .. } => write!(f, "SimpleDb::File"),
             Self::InMemory { .. } => write!(f, "SimpleDb::InMemory"),
+            Self::Sled { .. } => write!(f, "SimpleDb::Sled"),
         }
     }
 }
@@ -91,13 +104,27 @@ impl Drop for SimpleDb {
                 }
             }
             Self::InMemory { .. } => (),
+            Self::Sled { db, .. } => {
+                drop(db.to_owned());
+            }
         }
     }
 }
 
 impl SimpleDb {
     /// Create rocksDB
-    pub fn new_file(path: String, columns: &[&str]) -> Result<Self> {
+    pub fn new_file(path: String, columns: &[&str], use_sled: bool) -> Result<Self> {
+        if cfg!(target_os = "windows") && !use_sled {
+            panic!("RocksDB cannot be used with Windows");
+        }
+        if use_sled {
+            Self::new_file_sled(path, columns)
+        } else {
+            Self::new_file_rocksdb(path, columns)
+        }
+    }
+
+    fn new_file_rocksdb(path: String, columns: &[&str]) -> Result<Self> {
         debug!("Open/Create Db at {}", path);
         let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
         let mut options = get_db_options();
@@ -108,6 +135,7 @@ impl SimpleDb {
 
             check_old_includes_new(c_old, c_new)?;
             let db = DB::open_cf(&options, path.clone(), &old_columns)?;
+
             Ok(Self::File {
                 columns: old_columns.into_iter().collect(),
                 options,
@@ -125,6 +153,35 @@ impl SimpleDb {
             with_initial_data(Self::File {
                 columns: columns.map(|k| k.to_string()).collect(),
                 options,
+                path,
+                db,
+            })
+        }
+    }
+
+    fn new_file_sled(path: String, columns: &[&str]) -> Result<Self> {
+        debug!("Open/Create Db at {}", path);
+        let db = sled::open(Path::new(&path))?;
+        let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
+
+        if db.was_recovered() {
+            debug!("Create Db at {}", path);
+            with_initial_data(Self::Sled {
+                columns: columns.map(|k| k.to_string()).collect(),
+                path,
+                db,
+            })
+        } else {
+            let old_columns = db.tree_names();
+            let c_old = old_columns.iter().map(|k| std::str::from_utf8(k).unwrap());
+            let old_columns = old_columns
+                .iter()
+                .map(|k| std::str::from_utf8(k).unwrap().to_string())
+                .collect();
+            let c_new = columns.copied();
+            check_old_includes_new(c_old, c_new)?;
+            Ok(Self::Sled {
+                columns: old_columns,
                 path,
                 db,
             })
@@ -209,8 +266,8 @@ impl SimpleDb {
     pub fn file_backup(&self) -> Result<()> {
         if let Self::File { path, db, .. } = &self {
             let backup_path = path.clone() + "_backup";
-            let backup_opts = BackupEngineOptions::default();
-            let mut backup_engine = BackupEngine::open(&backup_opts, &backup_path).unwrap();
+            let backup_opts = BackupEngineOptions::new(&backup_path).unwrap();
+            let mut backup_engine = BackupEngine::open(&backup_opts, &Env::new().unwrap()).unwrap();
             let flush_before_backup = true;
 
             warn!("Backup db {} to {}", path, backup_path);
@@ -246,6 +303,17 @@ impl SimpleDb {
                     key_values.push(Default::default());
                 }
             }
+            Self::Sled { db, columns, .. } => {
+                let all_columns: Vec<String> = db
+                    .tree_names()
+                    .iter()
+                    .map(|k| std::str::from_utf8(k).unwrap().to_owned())
+                    .collect();
+                if !all_columns.contains(&name.to_string()) {
+                    db.open_tree(name)?;
+                    columns.insert(name.to_owned());
+                }
+            }
         };
         Ok(())
     }
@@ -260,6 +328,10 @@ impl SimpleDb {
             Self::InMemory { columns, .. } => SimpleDbWriteBatch::InMemory {
                 write: Default::default(),
                 columns,
+            },
+            Self::Sled { db, .. } => SimpleDbWriteBatch::Sled {
+                write: Default::default(),
+                db,
             },
         }
     }
@@ -284,8 +356,10 @@ impl SimpleDb {
                     }
                 }
             }
-            (Self::File { .. }, Batch::InMemory { .. })
-            | (Self::InMemory { .. }, Batch::File { .. }) => panic!("Incompatible db and batch"),
+            (Self::Sled { db, .. }, Batch::Sled { write }) => {
+                db.apply_batch(write)?;
+            }
+            _ => panic!("Incompatible db and batch"),
         }
         Ok(())
     }
@@ -332,6 +406,10 @@ impl SimpleDb {
                 let cf = columns.get(cf).unwrap();
                 key_values[*cf].insert(key.as_ref().to_vec(), value.as_ref().to_vec());
             }
+            Self::Sled { db, .. } => {
+                let cf = db.open_tree(cf).unwrap();
+                cf.insert(key, value.as_ref()).unwrap();
+            }
         }
         Ok(())
     }
@@ -354,6 +432,10 @@ impl SimpleDb {
             } => {
                 let cf = columns.get(cf).unwrap();
                 key_values[*cf].remove(key.as_ref());
+            }
+            Self::Sled { db, .. } => {
+                let cf = db.open_tree(cf).unwrap();
+                cf.remove(key)?;
             }
         }
         Ok(())
@@ -378,6 +460,10 @@ impl SimpleDb {
                 let cf = columns.get(cf).unwrap();
                 Ok(key_values[*cf].get(key.as_ref()).cloned())
             }
+            Self::Sled { db, .. } => {
+                let cf = db.open_tree(cf).unwrap();
+                Ok(cf.get(key)?.map(|v| v.to_vec()))
+            }
         }
     }
 
@@ -394,6 +480,10 @@ impl SimpleDb {
             } => {
                 let cf = columns.get(cf).unwrap();
                 key_values[*cf].len()
+            }
+            Self::Sled { db, .. } => {
+                let cf = db.open_tree(cf).unwrap();
+                cf.len()
             }
         }
     }
@@ -420,6 +510,7 @@ impl SimpleDb {
                 let cf = db.cf_handle(cf).unwrap();
                 let iter = db
                     .iterator_cf(cf, IteratorMode::Start)
+                    .map(|v| v.unwrap())
                     .map(|(k, v)| (k.to_vec(), v.to_vec()));
                 Box::new(iter)
             }
@@ -431,6 +522,14 @@ impl SimpleDb {
                 let iter = key_values[*cf].iter().map(|(k, v)| (k.clone(), v.clone()));
                 Box::new(iter)
             }
+            Self::Sled { db, .. } => {
+                let cf = db.open_tree(cf).unwrap();
+                Box::new(
+                    cf.iter()
+                        .map(|v| v.unwrap())
+                        .map(|(k, v)| (k.to_vec(), v.to_vec())),
+                )
+            }
         }
     }
 
@@ -439,6 +538,7 @@ impl SimpleDb {
         match self {
             Self::InMemory { columns, .. } => columns.keys().cloned().collect(),
             Self::File { columns, .. } => columns.iter().cloned().collect(),
+            Self::Sled { columns, .. } => columns.iter().cloned().collect(),
         }
     }
 }
@@ -447,6 +547,7 @@ impl SimpleDb {
 pub enum SimpleDbWriteBatchDone {
     File { write: WriteBatch },
     InMemory { write: InMemoryWriteBatch },
+    Sled { write: sled::Batch },
 }
 
 /// Database Atomic update accross column with performance benefit.
@@ -459,6 +560,10 @@ pub enum SimpleDbWriteBatch<'a> {
         write: InMemoryWriteBatch,
         columns: &'a InMemoryColumns,
     },
+    Sled {
+        write: sled::Batch,
+        db: &'a sled::Db,
+    },
 }
 
 impl SimpleDbWriteBatch<'_> {
@@ -467,6 +572,7 @@ impl SimpleDbWriteBatch<'_> {
         match self {
             Self::File { write, .. } => SimpleDbWriteBatchDone::File { write },
             Self::InMemory { write, .. } => SimpleDbWriteBatchDone::InMemory { write },
+            Self::Sled { write, .. } => SimpleDbWriteBatchDone::Sled { write },
         }
     }
 
@@ -507,6 +613,13 @@ impl SimpleDbWriteBatch<'_> {
                     .ok_or_else(|| SimpleDbError(format!("Missing column {cf}")))?;
                 write.push((*cf, key.as_ref().to_vec(), Some(value.as_ref().to_vec())));
             }
+            Self::Sled { write, db } => {
+                // TODO: Improve batch writes
+                let _ = db
+                    .open_tree(cf)
+                    .map_err(|_| SimpleDbError(format!("Missing column {cf}")))?;
+                write.insert(key.as_ref(), value.as_ref());
+            }
         }
         Ok(())
     }
@@ -526,6 +639,10 @@ impl SimpleDbWriteBatch<'_> {
             Self::InMemory { write, columns } => {
                 let cf = columns.get(cf).unwrap();
                 write.push((*cf, key.as_ref().to_vec(), None));
+            }
+            Self::Sled { write, db } => {
+                let _ = db.open_tree(cf).unwrap();
+                write.remove(key.as_ref());
             }
         }
     }
@@ -632,11 +749,13 @@ pub fn new_db_no_check_version(
     old_db: Option<SimpleDb>,
     custom_db_spec: Option<CustomDbSpec>,
 ) -> Result<SimpleDb> {
+    // We opt to use Sled instead of RocksDb for Windows
+    let use_sled = cfg!(target_os = "windows");
     if let Some(save_path) = new_db_save_path(db_mode, db_spec, custom_db_spec) {
         if old_db.is_some() {
             panic!("new_db: Do not provide database, read it from disk");
         }
-        SimpleDb::new_file(save_path, db_spec.columns)
+        SimpleDb::new_file(save_path, db_spec.columns, use_sled)
     } else {
         SimpleDb::new_in_memory(db_spec.columns, old_db)
     }
@@ -676,8 +795,8 @@ pub fn restore_file_backup(
 ) -> Result<()> {
     if let Some(path) = new_db_save_path(db_mode, db_spec, custom_db_spec) {
         let backup_path = path.clone() + "_backup";
-        let backup_opts = BackupEngineOptions::default();
-        let mut backup_engine = BackupEngine::open(&backup_opts, &backup_path).unwrap();
+        let backup_opts = BackupEngineOptions::new(&backup_path).unwrap();
+        let mut backup_engine = BackupEngine::open(&backup_opts, &Env::new().unwrap()).unwrap();
 
         let mut restore_option = rocksdb::backup::RestoreOptions::default();
         restore_option.set_keep_log_files(true);

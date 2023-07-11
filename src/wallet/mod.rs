@@ -3,7 +3,7 @@ use crate::constants::{FUND_KEY, KNOWN_ADDRESS_KEY, WALLET_PATH};
 use crate::db_utils::{
     self, CustomDbSpec, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch, DB_COL_DEFAULT,
 };
-use crate::utils::{get_paiments_for_wallet, make_wallet_tx_info};
+use crate::utils::{get_paiments_for_wallet, make_wallet_tx_info, StringError};
 use crate::Rs2JsMsg;
 use bincode::{deserialize, serialize};
 use hex::FromHexError;
@@ -44,6 +44,9 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 /// TODO: Determine the remaining functions that require the `Result` wrapper for error handling
 pub type Result<T> = std::result::Result<T, WalletDbError>;
 
+/// Database error wrapper
+// pub type DbError = if cfg!(target_os = "windows") { sled::Error } else { SimpleDbError };
+
 /// Wrapper for a locked coinbase (tx_hash, locktime)
 pub type LockedCoinbase = Option<BTreeMap<String, u64>>;
 pub type LockedCoinbaseWithMutex = Arc<TokioMutex<LockedCoinbase>>;
@@ -54,7 +57,7 @@ pub enum WalletDbError {
     IO(io::Error),
     AsyncTask(task::JoinError),
     Serialization(bincode::Error),
-    Database(SimpleDbError),
+    Database(StringError),
     HexError(FromHexError),
     PassphraseError,
     InsufficientFundsError,
@@ -114,7 +117,13 @@ impl From<bincode::Error> for WalletDbError {
 
 impl From<SimpleDbError> for WalletDbError {
     fn from(other: SimpleDbError) -> Self {
-        Self::Database(other)
+        WalletDbError::Database(StringError(format!("{}", other)))
+    }
+}
+
+impl From<sled::Error> for WalletDbError {
+    fn from(other: sled::Error) -> Self {
+        WalletDbError::Database(StringError(format!("{}", other)))
     }
 }
 
